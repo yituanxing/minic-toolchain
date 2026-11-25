@@ -15,10 +15,6 @@ static bool loong_register_clobber(const char *name, size_t length) {
             (name[0] == 's' && name[1] == '0'));
 }
 
-static bool loong_immediate(const char *constraint, size_t length, int64_t value) {
-    return length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
-}
-
 /* GCC LoongArch <larchintrin.h> machine-builtin semantic signatures belong
  * to this target source policy. The native CALL emitter rechecks the same
  * internal name, mnemonic, privilege and immediate effects; this is not an
@@ -230,7 +226,7 @@ const MinicTargetAsmSourcePolicy minic_loongarch64_asm_source_policy = {
     .fixed_register_write = minic_loongarch64_machine_fixed_register_write,
     .local_fixed_register = minic_loongarch64_machine_local_fixed_register,
     .register_clobber = loong_register_clobber,
-    .immediate_constraint = loong_immediate,
+    .immediate_constraint = minic_source_asm_signed_imm12,
     .immediate_may_defer = true,
     .immediate_diagnostic = "GNU asm 'I' input requires a signed 12-bit integer constant",
 };

@@ -26,13 +26,6 @@ static bool direct_core_bool(const MinicCoreFunction *fn, MinicCoreTypeId id) {
            type->value.integer.is_bool;
 }
 
-static bool direct_core_int_width(const MinicCoreFunction *fn,
-                                  MinicCoreTypeId id, size_t *width,
-                                  bool *sign) {
-    return fn != NULL && fn->type_context != NULL &&
-           minic_lp64_core_integer_width(fn->type_context, id, width, sign);
-}
-
 static bool direct_core_pointer_pointee(const MinicCoreFunction *fn,
                                         MinicCoreTypeId pointer,
                                         MinicCoreTypeId *pointee) {
@@ -61,7 +54,7 @@ static bool direct_core_register64(const MinicCoreFunction *fn,
     size_t width;
     bool sign;
     return direct_core_kind(fn, id, MINIC_CORE_TYPE_POINTER) ||
-           (direct_core_int_width(fn, id, &width, &sign) && width == 8U);
+           (minic_lp64_function_integer_width(fn, id, &width, &sign) && width == 8U);
 }
 
 static bool direct_core_i32(const MinicCoreFunction *fn,
@@ -480,7 +473,7 @@ bool minic_multi_direct_integer_unary_shape(
     return operand < fn->value_count &&
            direct_core_equal_exact(fn, fn->values[operand].core_type_id,
                                    ins->core_type_id) &&
-           direct_core_int_width(fn, ins->core_type_id, width, is_signed) &&
+           minic_lp64_function_integer_width(fn, ins->core_type_id, width, is_signed) &&
            !direct_core_bool(fn, ins->core_type_id);
 }
 
@@ -497,8 +490,8 @@ static bool core_direct_integer_pair(
     lhs = ins->value.binary.left;
     rhs = ins->value.binary.right;
     return lhs < fn->value_count && rhs < fn->value_count &&
-           direct_core_int_width(fn, fn->values[lhs].core_type_id, lw, ls) &&
-           direct_core_int_width(fn, fn->values[rhs].core_type_id, rw, rs);
+           minic_lp64_function_integer_width(fn, fn->values[lhs].core_type_id, lw, ls) &&
+           minic_lp64_function_integer_width(fn, fn->values[rhs].core_type_id, rw, rs);
 }
 
 /* This remains a relaxed-only atomic preflight, not a C11 memory model.
@@ -579,7 +572,7 @@ bool minic_multi_direct_scalar_zero_shape(
     *width = 0U;
     *is_signed = false;
     return *is_pointer || direct_core_bool(fn, type_id) ||
-           direct_core_int_width(fn, type_id, width, is_signed);
+           minic_lp64_function_integer_width(fn, type_id, width, is_signed);
 }
 
 /* AArch64's current direct emitter admits a 16-bit element-stride literal;
@@ -600,7 +593,7 @@ bool minic_multi_direct_pointer_offset_shape(
         !direct_core_kind(fn, fn->values[base].core_type_id,
                           MINIC_CORE_TYPE_POINTER) ||
         ins->value.pointer_offset.element_size > maximum_stride) return false;
-    if (direct_core_int_width(fn, fn->values[index].core_type_id,
+    if (minic_lp64_function_integer_width(fn, fn->values[index].core_type_id,
                               index_width, index_signed)) return true;
     /* The pointer-width low limb alone determines a scaled LP64 address
      * modulo 2^64, including signed negative 128-bit indices. Do not
@@ -680,7 +673,7 @@ bool minic_multi_direct_scalar_load_shape(
         (!core_direct_relaxed_atomic_pointee_width(
              fn, address, ins->value.atomic_load.memory_order, &pointee_width) ||
          (*is_pointer ? pointee_width != 8U :
-            !direct_core_int_width(fn, ins->core_type_id, width, is_signed) ||
+            !minic_lp64_function_integer_width(fn, ins->core_type_id, width, is_signed) ||
             (*width != 1U && *width != 2U && *width != 4U &&
              *width != 8U) ||
             pointee_width != *width)))
@@ -691,7 +684,7 @@ bool minic_multi_direct_scalar_load_shape(
         (!*is_pointer &&
          !direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) &&
          !direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) &&
-         !direct_core_int_width(fn, ins->core_type_id, width, is_signed)))
+         !minic_lp64_function_integer_width(fn, ins->core_type_id, width, is_signed)))
         return false;
     return true;
 }
@@ -752,7 +745,7 @@ bool minic_multi_direct_scalar_store_shape(
                            MINIC_CORE_FLOAT_BINARY64) &&
         !direct_core_float(fn, fn->values[value].core_type_id,
                            MINIC_CORE_FLOAT_BINARY32) &&
-        !direct_core_int_width(fn, fn->values[value].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[value].core_type_id,
                                width, is_signed))
         return false;
     if (direct_core_float(fn, fn->values[value].core_type_id,

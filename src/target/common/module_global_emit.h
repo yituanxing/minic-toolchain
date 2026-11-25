@@ -9,6 +9,7 @@
 /* Backend-owned GNU scalar directive selection, never stored in ModuleIR.
  * Null means a width this target does not encode for a data fragment. */
 typedef const char *(*MinicModuleDataDirectiveFn)(size_t width);
+const char *minic_multi_module_gnu_data_directive(size_t width);
 
 /* Shared GNU RV32/RV64 scalar-object shape query. This walks only imported
  * Core types; target-specific record/zero-extent acceptance stays private. */

@@ -4,13 +4,6 @@
 /* Every bound Core function has already passed source-to-Core type admission.
  * These checks consume ONLY its immutable execution types. No target layout
  * or frontend enum/rank table is reopened on the production path. */
-static bool core_numeric_integer(const MinicCoreFunction *fn,
-                                 MinicCoreTypeId id, size_t *width,
-                                 bool *sign) {
-    return fn != NULL && fn->type_context != NULL &&
-           minic_lp64_core_integer_width(fn->type_context, id, width, sign);
-}
-
 static bool core_numeric_overflow_result(const MinicCoreFunction *fn,
                                          const MinicCoreInstruction *ins,
                                          MinicCoreTypeId *pointee) {
@@ -55,7 +48,7 @@ bool minic_core_integer_overflow_shape(
     return core_numeric_overflow_result(fn, ins, &result_id) &&
            result_id == fn->values[left].core_type_id &&
            result_id == fn->values[right].core_type_id &&
-           core_numeric_integer(fn, result_id, width, is_signed) &&
+           minic_lp64_function_integer_width(fn, result_id, width, is_signed) &&
            (*width == 4U || *width == 8U);
 }
 
@@ -74,10 +67,10 @@ bool minic_core_integer_overflow_mixed_add_i32_shape(
     left = ins->value.integer_overflow.left;
     right = ins->value.integer_overflow.right;
     if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !core_numeric_integer(fn, result_id, &result_width, &result_sign) ||
-        !core_numeric_integer(fn, fn->values[left].core_type_id,
+        !minic_lp64_function_integer_width(fn, result_id, &result_width, &result_sign) ||
+        !minic_lp64_function_integer_width(fn, fn->values[left].core_type_id,
                               &left_width, &left_sign) ||
-        !core_numeric_integer(fn, fn->values[right].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[right].core_type_id,
                               &right_width, &right_sign) ||
         result_width != 4U || !result_sign)
         return false;
@@ -148,10 +141,10 @@ bool minic_core_integer_overflow_u64_u32_to_i32_shape(
     left = ins->value.integer_overflow.left;
     right = ins->value.integer_overflow.right;
     if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !core_numeric_integer(fn, result_id, &result_width, &result_sign) ||
-        !core_numeric_integer(fn, fn->values[left].core_type_id,
+        !minic_lp64_function_integer_width(fn, result_id, &result_width, &result_sign) ||
+        !minic_lp64_function_integer_width(fn, fn->values[left].core_type_id,
                               &left_width, &left_sign) ||
-        !core_numeric_integer(fn, fn->values[right].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[right].core_type_id,
                               &right_width, &right_sign) ||
         result_width != 4U || !result_sign || left_sign || right_sign)
         return false;
@@ -181,10 +174,10 @@ bool minic_core_integer_overflow_mixed_multiply_i32_shape(
     lhs = ins->value.integer_overflow.left;
     rhs = ins->value.integer_overflow.right;
     if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !core_numeric_integer(fn, result_id, &result_width, signed_result) ||
-        !core_numeric_integer(fn, fn->values[lhs].core_type_id,
+        !minic_lp64_function_integer_width(fn, result_id, &result_width, signed_result) ||
+        !minic_lp64_function_integer_width(fn, fn->values[lhs].core_type_id,
                               &left_width, signed_left) ||
-        !core_numeric_integer(fn, fn->values[rhs].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[rhs].core_type_id,
                               &right_width, signed_right) ||
         left_width != 4U || right_width != 4U || result_width != 4U)
         return false;
@@ -206,11 +199,11 @@ bool minic_core_integer_overflow_narrow_result_shape(
     /* The shared Core overflow contract already excludes source-only
      * ineligible destinations, including enum representation aliases. */
     if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !core_numeric_integer(fn, result_id, &shape->result_width,
+        !minic_lp64_function_integer_width(fn, result_id, &shape->result_width,
                               &shape->result_signed) ||
-        !core_numeric_integer(fn, fn->values[lhs].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[lhs].core_type_id,
                               &shape->left_width, &shape->left_signed) ||
-        !core_numeric_integer(fn, fn->values[rhs].core_type_id,
+        !minic_lp64_function_integer_width(fn, fn->values[rhs].core_type_id,
                               &shape->right_width, &shape->right_signed))
         return false;
     return (shape->result_width == 1U || shape->result_width == 2U) &&

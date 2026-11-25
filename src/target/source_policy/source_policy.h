@@ -12,6 +12,12 @@ bool minic_target_source_integer_type_with_rank(MinicIntegerSign sign,
 /* These callbacks answer C/GNU source grammar questions only. An accepted
  * spelling never reserves a register or authorizes a physical ASM template.
  * Each target owns its own policy object; missing callbacks fail closed. */
+/* Shared signed 12-bit GNU 'I' constraint: targets opt in explicitly. */
+static inline bool minic_source_asm_signed_imm12(
+    const char *constraint, size_t length, int64_t value) {
+    return length == 1U && constraint[0] == 'I' && value >= -2048 && value <= 2047;
+}
+
 typedef struct MinicTargetAsmSourcePolicy {
     bool (*fixed_register_read)(const char *, size_t);
     bool (*fixed_register_write)(const char *, size_t);

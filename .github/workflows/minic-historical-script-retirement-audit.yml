@@ -522,6 +522,21 @@ jobs:
           assert historical_pinned_replays <= set(git("ls-tree", "-r", "--name-only", "7a8cdf0e1835db81eeeed822f602a1a722cdcbd7").decode().splitlines())
           expected |= historical_pinned_replays
           metadata.add("docs/ci/README.md")
+          # Exact source-only cleanup allowlist; no broad src/ exemption.
+          metadata |= {
+              "src/frontend/parser_function.c",
+              "src/target/source_policy/riscv32.c",
+              "src/target/source_policy/riscv64.c",
+              "src/target/source_policy/loongarch64.c",
+              "src/target/source_policy/source_policy.h",
+              "src/target/common/core_numeric_shape.c",
+              "src/target/common/direct_instruction_semantics.c",
+              "src/target/common/lp64_scalar.h",
+              "src/target/common/direct_program_emit.c",
+              "src/target/riscv32/rv32_global_emit.c",
+              "src/target/common/module_global_emit.c",
+              "src/target/common/module_global_emit.h",
+          }
           if len(expected) != 1065 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful

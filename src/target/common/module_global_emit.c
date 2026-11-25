@@ -7,6 +7,11 @@
 #include <stdint.h>
 #include <string.h>
 
+const char *minic_multi_module_gnu_data_directive(size_t width) {
+    return width == 1U ? ".byte" : width == 2U ? ".2byte" :
+           width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
+}
+
 const MinicCoreType *minic_multi_module_global_core_base(
     const MinicCoreTypeContext *types, MinicCoreTypeId id) {
     return minic_core_type_get(types, minic_core_type_unqualified(types, id));

@@ -4,6 +4,7 @@
 #include "frontend/parser_internal.h"
 #include "frontend/gnu_neon_inline_filter.h"
 #include "frontend/parser_external_object.h"
+#include "frontend/parser_gnu_inline_asm.h"
 
 #include <limits.h>
 #include <stdio.h>
@@ -2267,17 +2268,12 @@ static bool parse_function(MinicParser *parser, bool is_internal) {
     return success;
 }
 
-static bool top_level_is_gnu_asm(const MinicParser *parser) {
-    return minic_parser_current_identifier_lexeme_equals_cstr(parser, "asm") || minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm") ||
-           minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__");
-}
-
 static bool parse_top_level_gnu_basic_asm(MinicParser *parser) {
     char *assembly_text;
     size_t assembly_length;
     MinicSourceSpan assembly_span;
 
-    if (parser == NULL || !top_level_is_gnu_asm(parser)) {
+    if (parser == NULL || !minic_parser_gnu_inline_asm_starts(parser)) {
         return false;
     }
     assembly_text = NULL;
@@ -2532,7 +2528,7 @@ bool minic_parse_c0_program_for_target(const char *path,
         }
         if (parser.current.kind == MINIC_TOKEN_PREPROCESSOR_DIRECTIVE) {
             success = minic_parser_parse_preprocessor_directive(&parser);
-        } else if (top_level_is_gnu_asm(&parser)) {
+        } else if (minic_parser_gnu_inline_asm_starts(&parser)) {
             success = parse_top_level_gnu_basic_asm(&parser);
         } else if (parser.current.kind == MINIC_TOKEN_SEMICOLON) {
             success = minic_parser_advance(&parser);

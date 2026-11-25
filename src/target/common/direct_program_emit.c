@@ -51,11 +51,6 @@ typedef struct MinicDirectVisitContext {
     bool census;
 } MinicDirectVisitContext;
 
-static const char *direct_module_data_directive(size_t width) {
-    return width == 1U ? ".byte" : width == 2U ? ".2byte" :
-           width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
-}
-
 static bool direct_emit_module_global(FILE *out,
                                       const MinicCoreModuleGlobal *obj) {
     MinicModuleElfGlobalPlan plan;
@@ -64,7 +59,7 @@ static bool direct_emit_module_global(FILE *out,
         obj->definition_kind == MINIC_CORE_MODULE_DEFINITION_DECLARATION ||
         obj->alias_target_index != SIZE_MAX || obj->is_thread_local ||
         !minic_multi_module_elf_global_plan_build(
-            obj, NULL, true, direct_module_data_directive, false, 8U, &plan))
+            obj, NULL, true, minic_multi_module_gnu_data_directive, false, 8U, &plan))
         return false;
     return (obj->is_internal ||
             minic_multi_module_elf_global_emit_visibility(out, &plan)) &&

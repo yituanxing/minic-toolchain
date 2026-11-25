@@ -7,6 +7,11 @@
  * consumers use sealed CoreType, never frontend DataLayout. */
 bool minic_lp64_core_integer_width(const MinicCoreTypeContext *, MinicCoreTypeId,
                                    size_t *, bool *);
+static inline bool minic_lp64_function_integer_width(
+    const MinicCoreFunction *fn, MinicCoreTypeId id, size_t *width, bool *sign) {
+    return fn != NULL && fn->type_context != NULL &&
+           minic_lp64_core_integer_width(fn->type_context, id, width, sign);
+}
 bool minic_lp64_core_kind(const MinicCoreTypeContext *, MinicCoreTypeId,
                           MinicCoreTypeKind);
 bool minic_lp64_core_pointer_pointee(const MinicCoreTypeContext *, MinicCoreTypeId,

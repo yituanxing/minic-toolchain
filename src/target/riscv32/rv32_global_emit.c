@@ -24,11 +24,6 @@ static const char *rv32_module_directive(size_t width) {
            width == 4U ? ".word" : width == 8U ? ".8byte" : NULL;
 }
 
-static const char *rv32_module_common_directive(size_t width) {
-    return width == 1U ? ".byte" : width == 2U ? ".2byte" :
-           width == 4U ? ".4byte" : width == 8U ? ".8byte" : NULL;
-}
-
 /* A sealed uninitialized or zero-numeric payload has no scalar slots.
  * Core fragments prove that its entire materialized payload is zero. An explicitly listed
  * {0} record is byte-identical but must NOT acquire this weak-zero policy. */
@@ -95,7 +90,7 @@ bool minic_riscv32_emit_module_global(FILE *out, const MinicTargetInfo *target,
         weak_zero ? ".bss" : ".data";
     data_directive = (shared_style || special_aggregate ||
                       global->reference_count != 0U)
-                         ? rv32_module_common_directive
+                         ? minic_multi_module_gnu_data_directive
                          : rv32_module_directive;
     if (!minic_multi_module_elf_global_plan_build(
             global, fallback_override, shared_style,
