@@ -1,0 +1,34 @@
+name: MiniC 25-driver actual caller audit temporary
+on:
+  push:
+    branches: [cleanup/minic-native-matrix-batch-20261125]
+permissions:
+  contents: read
+jobs:
+  owners:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find all real caller sites and optional manual references
+        run: |
+          python3 - <<'PY'
+          import subprocess,pathlib,re,json
+          root=pathlib.Path.cwd()
+          names=["run-gnu-weak-function-symbol","run-function-pointer-field-array","run-gnu-void-return-expression","run-gnu-static-local-interleaved-attribute","run-gnu-pointer-sign-call-conversion","run-record-value-initialize","run-string-octal-escape","run-gnu-builtin-unreachable","run-zero-slot-aggregate-relocation","run-block-scope-record-tags","run-array-parameter-adjustment","run-gnu-enum-entity","probe-flat-global-payload","run-gnu-extern-void-symbol","run-static-local-self-reference","run-gnu-signed-left-shift-ice","run-enum-tag-type-references","run-gnu-inline-asm-fence","probe-x86-linux-callee-clobber","run-relocatable-const-section","run-null-member-offset-constant","run-arithmetic-fixed-call-dead-long-double","run-float-to-double-fixed-call","run-gnu-static-local-implicit-zero","probe-x86-linux-zero-barrier-memory-clobber"]
+          paths=[p for p in subprocess.check_output(['git','ls-files','-z']).decode().split('\x00') if p]
+          allowed=('.sh','.py','.mk','.yml','.yaml','.json','.txt','.md','.ini','.toml')
+          for n in names:
+              refs=[]
+              for path in paths:
+                  if path=='tests/compiler/c0/'+n+'.sh':continue
+                  if path in ('tests/compiler/c0/native-matrix.json','.github/workflows/minic-28-inline-parity-temp.yml','.github/workflows/minic-c0-25-owner-audit-temp.yml'):continue
+                  if not (path.endswith(allowed) or path in ('Makefile','GNUmakefile')):continue
+                  try:
+                      content=(root/path).read_text(errors='replace')
+                  except:continue
+                  for i,line in enumerate(content.splitlines(),1):
+                      if re.search(r'(?<![\w-])'+re.escape(n)+r'(?:\.sh)?(?![\w-])',line):
+                          refs.append([path,i,line.strip()[:250]])
+              print('OWNER25',n,json.dumps(refs,ensure_ascii=False),flush=True)
+          PY
