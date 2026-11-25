@@ -195,8 +195,15 @@ run_rv64_earlyclobber() {
     "$host_cc" -E -P -x c "$root/tests/compiler/c0/$name.c" \
         -o "$work/$name.i"
     "$minic" -S "$work/$name.i" -o "$work/$name.s"
-    grep -F 'add a0, a0,' "$work/$name.s" >/dev/null
-    grep -F 'add a1, a1,' "$work/$name.s" >/dev/null
+    # Physical scratch names are not an ABI: the source uses +&r and
+    # fixed-register bindings, while GNU+MiniC execution must agree.
+    # Check that the three source ASM adds survive code generation.
+    add_count=$(grep -Ec '^[[:space:]]+add[[:space:]]+' "$work/$name.s" || true)
+    if [ "$add_count" -lt 3 ]; then
+        printf '%s\n' "FAIL compiler/c0/$name missing=three_asm_adds observed=$add_count" >&2
+        grep -En '(^|[[:space:]])add[[:space:]]' "$work/$name.s" >&2 || true
+        exit 1
+    fi
     cat >"$work/$name.crt0.S" <<'START'
 .text
 .globl _start

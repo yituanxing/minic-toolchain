@@ -1736,3 +1736,5 @@ C50–C58 的候选提交依次为 bf1894af、91a9fb85、c7ba04db、b4d2bf56、b
 C61 动态验证绑定：四架构已有 RV64 job 复用安装好的 GNU cross/qemu-user，`REQUIRE_RISCV_RUNTIME=1` 强制执行当前 `run-runtime.sh`，将 runner 及其原始 C fixture 加入现役推送/PR 触发路径；不新建 workflow。CI 状态应按该提交的 exact HEAD 判断。
 
 C61 动态验收补记：新增四架构强制 RV64 runtime 于提交 `69962285` 首次运行，历史 `double_return_abi` 用旧寄存器文字和已常量折叠的算式硬编码 exact opcode，测试在 50+ 原有样本后提前失败，未执行新增 6 组。将其算式改为由另一 GNU 翻译单元提供动态 binary64 参数，保留真实 GNU caller ↔ MiniC callee QEMU ABI/NaN 算术断言，机器校验仅验证 op 种类而不依赖特定物理暂存寄存器；是否成功以当前提交 CI 为准。
+
+C61 运行补记：提交 `a6d8e5a9` 真实 RV64 QEMU 通过旧 double-return 与新增 GNU inline asm operands、named operands、clzll 三组，后续提前终止于未被调用过的独立 `+&r` earlyclobber 旧寄存器字符串检查（grep 没有诊断）。把特定寄存器拼写更换为三个实际 ADD 指令的发射证明；独立 freestanding GNU 对照/QEMU 双 ELF 完全保留，待该提交的原生运行日志验证。
