@@ -1,0 +1,477 @@
+@@@ {"id": "1583a01f9b87bf94", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+mini=${1:-${MINIC_CC:-"$root/build/release/bin/minic-cc"}}
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-cache-maintenance.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# Exact AArch64 Linux privileged D/I-cache ISA: prove target-owned emission,
+# independent GNU assembler acceptance, and fail-closed negative templates.
+cc=${AARCH64_CC:-aarch64-linux-gnu-gcc}
+objdump=${AARCH64_OBJDUMP:-aarch64-linux-gnu-objdump}
+source="$root/tests/compiler/c0/aarch64_linux_cache_maintenance.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'AARCH64_CACHE=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$mini" || fail 'MiniC compiler not executable'
+test -s "$source" || fail 'cache-maintenance fixture absent'
+gcc -E -P -std=gnu11 -x c "$source" -o "$work/cache.i"
+"$mini" --target=aarch64-linux -S "$work/cache.i" -o "$work/cache.s" \
+    || fail 'Linux cache-maintenance source rejected'
+test -s "$work/cache.s" || fail 'MiniC emitted no target assembly'
+
+# Count original hardware instructions, not mere Core admissions. AArch64
+# DC/IC cache instructions are not user-mode QEMU smoke-test candidates.
+for family in 'dc ivac' 'dc cvac' 'dc cvau' 'dc civac' 'ic ivau'; do
+    # MachineIR emits the original GNU template without the old FILE* path's
+    # two-space prefix; keep opcode/register/line exact across either layout.
+    count=$(grep -Ec "^[[:space:]]*${family// /[[:space:]]+},[[:space:]]*x9[[:space:]]*$" \
+        "$work/cache.s" || true)
+    case "$family" in
+        'dc civac') (( count >= 2 )) ||
+            fail "required repeated target hardware instruction $family" ;;
+        *) (( count >= 1 )) || fail "missing hardware instruction $family" ;;
+    esac
+done
+grep -Eq '^[[:space:]]*ic[[:space:]]+ialluis[[:space:]]*$' "$work/cache.s" ||
+    fail 'implicit-volatile I-cache-wide invalidation missing'
+
+# The exact template and constraints are the hardware security boundary.
+# Mutations below may be valid GNU assembler inputs, but are intentionally
+# outside the frozen-original target contract. None may leave partial .s.
+sed 's/dc civac, %0/dc madeup, %0/g' "$source" >"$work/unknown.c"
+sed 's/dc civac, %0/dc civac, %1/g' "$source" >"$work/other-operand.c"
+sed 's/"r" (address) : "memory"/"r" (address) : "cc"/g' \
+    "$source" >"$work/no-memory.c"
+sed 's/asm("ic\\tialluis")/asm("ic\\tialluis\\nret")/' \
+    "$source" >"$work/hidden-instruction.c"
+sed 's/dc civac, %0/dc civac, %0 ; nop/g' \
+    "$source" >"$work/second-instruction.c"
+sed 's/"r" (address)/"m" (address)/g' \
+    "$source" >"$work/memory-constraint.c"
+
+for variant in unknown other-operand no-memory hidden-instruction \
+               second-instruction memory-constraint; do
+    cmp -s "$source" "$work/$variant.c" &&
+        fail "mutation absent: $variant"
+    gcc -E -P -std=gnu11 -x c "$work/$variant.c" \
+        -o "$work/$variant.i"
+    if "$mini" --target=aarch64-linux -S "$work/$variant.i" \
+         -o "$work/$variant.s" >"$work/$variant.out" \
+         2>"$work/$variant.err"; then
+        fail "unsafe/unknown ISA accepted: $variant"
+    fi
+    test ! -e "$work/$variant.s" ||
+        fail "partial assembly emitted for $variant"
+done
+
+if "$mini" --target=x86_64-linux -S "$work/cache.i" \
+    -o "$work/foreign.s" >"$work/foreign.out" \
+    2>"$work/foreign.err"; then
+    fail 'privileged AArch64 ISA accepted as generic x86 ASM'
+fi
+test ! -e "$work/foreign.s" ||
+    fail 'foreign backend left a partial assembly file'
+printf '%s\n' 'AARCH64_CACHE_SOURCE=PASS exact_hardware=6 operands=typed negative=7 foreign_target=closed'
+
+if ! command -v "$cc" >/dev/null 2>&1 ||
+   ! command -v "$objdump" >/dev/null 2>&1; then
+    if [[ ${MINIC_REQUIRE_AARCH64_CACHE:-0} == 1 ]]; then
+        fail 'required independent GNU AArch64 assembler/objdump missing'
+    fi
+    printf '%s\n' 'AARCH64_CACHE_GNU_AS=SKIP GNU AArch64 tools unavailable'
+    exit 0
+fi
+
+"$cc" -c -O0 -x c "$source" -o "$work/gnu.o" \
+    || fail 'original GCC code rejected'
+"$cc" -c -x assembler "$work/cache.s" -o "$work/mini.o" \
+    || fail 'MiniC generated hardware code rejected by GNU GAS'
+"$objdump" -dr "$work/gnu.o" >"$work/gnu.dump"
+"$objdump" -dr "$work/mini.o" >"$work/mini.dump"
+for family in 'dc ivac' 'dc cvac' 'dc cvau' 'dc civac' 'ic ivau' 'ic ialluis'; do
+    # GNU disassemblers may print tabs/spaces between operands; normalize
+    # those only. The opcode and instruction family must be present in BOTH.
+    for producer in gnu mini; do
+        grep -Eq "[[:space:]]${family// /[[:space:]]+}" \
+            "$work/$producer.dump" ||
+            fail "$producer missing real disassembled ISA family: $family"
+    done
+done
+printf '%s\n' 'AARCH64_CACHE_GNU_AS=PASS original_GNU=1 MiniC_GNU_GAS=1 objdump_ISA=6 no_unprivileged_execution=1'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-gic-sre-sysreg.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# GNU/Linux ICC_SRE_EL1 original encoded read+write ISA; prove actual MSR/MRS
+# instruction encodings with GNU GAS/objdump, but never execute at EL0.
+cc=${AARCH64_CC:-aarch64-linux-gnu-gcc}
+objdump=${AARCH64_OBJDUMP:-aarch64-linux-gnu-objdump}
+fixture="$root/tests/compiler/c0/aarch64_linux_gic_sre_sysreg.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'AARCH64_GIC_SRE=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$mini" || fail 'MiniC compiler absent'
+test -s "$fixture" || fail 'original sysreg macro source absent'
+gcc -E -P -std=gnu11 -x c "$fixture" -o "$work/gnu.i"
+"$mini" --target=aarch64-linux -S "$work/gnu.i" -o "$work/mini.s" \
+    || fail 'exact original MRS/MSR GNU macro not admitted'
+test -s "$work/mini.s" || fail 'no generated assembly'
+
+# Keep the original GNU .macro/.inst expression intact in source ASM.
+# GNU GAS, not MiniC, resolves the .L__gpr_num_x* macros into encoded bits.
+# Check both fixed opcode bases, exact register binding x9 and macro roles.
+# Independent GNU disassembly below proves actual MRS/MSR machine opcodes.
+if ! grep -Fq '.inst (0xd5200000|(\sreg)|(.L__gpr_num_\rt))' "$work/mini.s" ||
+   ! grep -Fq '.inst (0xd5000000|(\sreg)|(.L__gpr_num_\rt))' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*\.macro[[:space:]]+mrs_s,[[:space:]]*rt,[[:space:]]*sreg$' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*\.macro[[:space:]]+msr_s,[[:space:]]*sreg,[[:space:]]*rt$' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*mrs_s[[:space:]]+x9,[[:space:]]*' "$work/mini.s" ||
+   ! grep -Eq '^[[:space:]]*msr_s[[:space:]]+.*,[[:space:]]*x9[[:space:]]*$' "$work/mini.s"; then
+    echo 'AARCH64_GIC_SRE=DIAG sealed GNU macro/physical operand candidates:' >&2
+    grep -En '\.inst|\.macro|mrs_s|msr_s' "$work/mini.s" >&2 || true
+    fail 'GNU encoded MRS/MSR source macro/physical binding missing'
+fi
+grep -Eq '^  ldr x9, \[sp, #[0-9]+\]$' "$work/mini.s" ||
+    fail 'MSR incoming typed value not loaded into x9'
+
+# Three independent dangerous edits plus foreign target must fail closed.
+# ICC_CTLR_EL1 (op2=4) is a real GICv3 write register admitted by the
+# full Linux GIC ISA catalog. Use reserved/non-catalog op2=6 instead.
+sed 's/((5) << 5)/((6) << 5)/g' "$fixture" >"$work/wrong-reg.c"
+sed 's/"rZ" (value)/"r" (value)/' "$fixture" >"$work/wrong-constraint.c"
+sed 's/\.purgem\\tmsr_s/.purgem\\tmsr_y/' \
+    "$fixture" >"$work/wrong-macro.c"
+sed 's/0xd5000000/0xd5200000/g' "$fixture" >"$work/wrong-opcode.c"
+for variant in wrong-reg wrong-constraint wrong-macro wrong-opcode; do
+    cmp -s "$fixture" "$work/$variant.c" &&
+        fail "negative mutation ineffective: $variant"
+    gcc -E -P -std=gnu11 -x c "$work/$variant.c" -o "$work/$variant.i"
+    if "$mini" --target=aarch64-linux -S "$work/$variant.i" \
+        -o "$work/$variant.s" >"$work/$variant.out" \
+        2>"$work/$variant.err"; then
+        fail "unsafe GNU MSR macro accepted: $variant"
+    fi
+    test ! -e "$work/$variant.s" || fail "partial output: $variant"
+done
+if "$mini" --target=loongarch64-linux -S "$work/gnu.i" \
+    -o "$work/foreign.s" >"$work/foreign.out" 2>"$work/foreign.err"; then
+    fail 'AArch64 privileged SYSREG accepted in LoongArch ISA'
+fi
+test ! -e "$work/foreign.s" || fail 'partial foreign-ISA output'
+printf '%s\n' 'AARCH64_GIC_SRE_SOURCE=PASS kernel_macro=2 hardware=2 typed_value=1 negative=5'
+
+if ! command -v "$cc" >/dev/null 2>&1 ||
+   ! command -v "$objdump" >/dev/null 2>&1; then
+    if [[ ${MINIC_REQUIRE_AARCH64_GIC_SRE:-0} == 1 ]]; then
+        fail 'required GNU AArch64 GCC/objdump absent'
+    fi
+    printf '%s\n' 'AARCH64_GIC_SRE_GNU_AS=SKIP independent AArch64 tools absent'
+    exit 0
+fi
+"$cc" -O0 -c -x c "$fixture" -o "$work/gnu.o"
+"$cc" -c -x assembler "$work/mini.s" -o "$work/mini.o"
+"$objdump" -dr "$work/gnu.o" >"$work/gnu.dump"
+"$objdump" -dr "$work/mini.o" >"$work/mini.dump"
+for producer in gnu mini; do
+    grep -Eq '[[:space:]]mrs[[:space:]]+x[0-9]+,' "$work/$producer.dump" ||
+        fail "$producer does not contain encoded MRS"
+    grep -Eq '[[:space:]]msr[[:space:]]+' "$work/$producer.dump" ||
+        fail "$producer does not contain encoded MSR"
+done
+printf '%s\n' 'AARCH64_GIC_SRE_GNU_AS=PASS original_GAS=1 MiniC_GAS=1 ISA_MRS=1 ISA_MSR=1 privileged_EL0_execution=0'
+@@@ end
+@@@ {"head_lines": 6, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-zeropad-extable.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# Prove actual AArch64 GNU Linux __ex_table fault-recovery metadata survives
+# source qualification -> neutral Core roles -> real target .s -> GNU GAS.
+# QEMU validates non-faulting loads against independent GNU-produced code.
+# User-mode QEMU cannot exercise a kernel page-fault fixup: the relocatable
+# 12-byte __ex_table records are separately checked by the target assembler.
+cross=${AARCH64_CC:-aarch64-linux-gnu-gcc}
+qemu=${QEMU_AARCH64:-qemu-aarch64}
+objcopy=${AARCH64_OBJCOPY:-aarch64-linux-gnu-objcopy}
+ref="$root/tests/compiler/c0/aarch64_linux_zeropad_extable.c"
+caller="$root/tests/compiler/c0/aarch64_linux_zeropad_extable_caller.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'AARCH64_ZEROPAD=FAIL %s\n' "$*" >&2; exit 1; }
+
+test -x "$mini" || fail 'MiniC compiler absent'
+test -s "$ref" || fail 'GNU kernel template absent'
+test -s "$caller" || fail 'GNU caller absent'
+cc -E -P -std=gnu11 -x c "$ref" -o "$work/original.i"
+"$mini" --target=aarch64-linux -S "$work/original.i" \
+    -o "$work/minic.s" || fail 'original source contract refused'
+test -s "$work/minic.s" || fail 'empty machine program'
+
+# The originally source-defined GNU .irp is specialized to registers x9/x10.
+# Literal register indices are valid because the emitter itself chose those
+# machine registers. The target-side relocation operands must not disappear.
+grep -Eq '^1: ldr x9, \[x11\]$' "$work/minic.s" ||
+    fail 'hardware faulting LDR missing'
+grep -Eq '^  \.pushsection __ex_table, "a"$' "$work/minic.s" ||
+    fail '__ex_table section missing'
+grep -Eq '^  \.long \(1b - \.\)$' "$work/minic.s" ||
+    fail 'fault PC-relative relocation missing'
+grep -Eq '^  \.long \(2b - \.\)$' "$work/minic.s" ||
+    fail 'fixup PC-relative relocation missing'
+grep -Eq '^  \.short 4$' "$work/minic.s" ||
+    fail 'kernel fixup discriminator missing'
+grep -Eq '^  \.short \(\(9 << 0\) \| \(10 << 5\)\)$' "$work/minic.s" ||
+    fail 'result/address register indices differ from actual GPRs'
+if ! grep -Eq '^  str x9, \[x12(, #0)?\]$' "$work/minic.s"; then
+    echo 'AARCH64_ZEROPAD=DIAG hardware load emitted; output candidate:' >&2
+    grep -En '^[[:space:]]*str[[:space:]]+x9,' "$work/minic.s" >&2 || true
+    fail 'GNU ASM output result lost'
+fi
+
+# Mutating ANY of the dangerous contracts must fail, without leaving
+# misleading partial assembly. The template and constraints are both typed.
+sed 's/\.short\\t\\t(4)/.short\\t\\t(5)/' "$ref" >"$work/wrong-fixup.c"
+sed 's/"=&r" (ret)/"=r" (ret)/' "$ref" >"$work/wrong-output.c"
+sed 's/"Q" (\*(unsigned long \*)addr)/"m" (*(unsigned long *)addr)/' \
+    "$ref" >"$work/wrong-address.c"
+sed 's/\.pushsection\\t__ex_table/.pushsection\\t__other_table/' \
+    "$ref" >"$work/wrong-section.c"
+for variant in wrong-fixup wrong-output wrong-address wrong-section; do
+    cmp -s "$ref" "$work/$variant.c" && fail "test mutation ineffective: $variant"
+    cc -E -P -std=gnu11 -x c "$work/$variant.c" -o "$work/$variant.i"
+    if "$mini" --target=aarch64-linux -S "$work/$variant.i" \
+        -o "$work/$variant.s" >"$work/$variant.out" 2>"$work/$variant.err"; then
+        fail "unqualified $variant incorrectly accepted"
+    fi
+    test ! -e "$work/$variant.s" || fail "partial output for $variant"
+done
+if "$mini" --target=x86_64-linux -S "$work/original.i" \
+    -o "$work/foreign.s" >"$work/foreign.out" 2>"$work/foreign.err"; then
+    fail 'AArch64 template accepted by x86-64 ISA'
+fi
+test ! -e "$work/foreign.s" || fail 'foreign backend left partial output'
+printf '%s\n' 'AARCH64_ZEROPAD_SOURCE=PASS kernel_template=1 extable_relocations=2 typed_roles=3 negative=5'
+
+if ! command -v "$cross" >/dev/null 2>&1 ||
+   ! command -v "$qemu" >/dev/null 2>&1 ||
+   ! command -v "$objcopy" >/dev/null 2>&1; then
+    if [[ ${MINIC_REQUIRE_AARCH64_ZEROPAD:-0} == 1 ]]; then
+        fail 'required GNU AArch64 GAS/QEMU not available'
+    fi
+    printf '%s\n' 'AARCH64_ZEROPAD_RUNTIME=SKIP GNU AArch64/QEMU not installed'
+    exit 0
+fi
+
+# The original GNU and generated MiniC programs must both be valid GNU GAS
+# inputs. The resulting .o must retain a complete ELF section + relocations,
+# not merely contain textual .pushsection that never reaches a binary.
+"$cross" -O0 -c -x c "$ref" -o "$work/gnu.o"
+"$cross" -c -x assembler "$work/minic.s" -o "$work/minic.o"
+"$cross" -O0 -c "$caller" -o "$work/caller.o"
+for product in gnu minic; do
+    readelf -SW "$work/$product.o" | grep -q '__ex_table' ||
+        fail "$product assembly lost ELF __ex_table"
+    readelf -rW "$work/$product.o" | grep -q 'rela__ex_table' ||
+        fail "$product assembly lost fault/fixup relocations"
+    # The arm64 exception handler walks exactly 12-byte records. Section
+    # existence alone would not catch a bogus/truncated or padded entry.
+    "$objcopy" --dump-section "__ex_table=$work/$product.extable" \
+        "$work/$product.o" || fail "$product cannot extract GNU ELF fixups"
+    extable_bytes=$(wc -c <"$work/$product.extable")
+    (( extable_bytes == 12 )) ||
+        fail "$product emitted $extable_bytes bytes instead of one 12-byte entry"
+    prel_count=$(readelf -rW "$work/$product.o" | \
+        grep -c 'R_AARCH64_PREL32' || true)
+    (( prel_count >= 2 )) ||
+        fail "$product lost one of two PREL32 fault/fixup relocations"
+    "$cross" -static "$work/caller.o" "$work/$product.o" \
+        -o "$work/$product.elf" || fail "$product GNU static link failed"
+    set +e
+    timeout 45s "$qemu" "$work/$product.elf" \
+        >"$work/$product.out" 2>"$work/$product.err"
+    status=$?
+    set -e
+    (( status == 42 )) || fail "$product GNU/QEMU exit=$status"
+done
+cmp "$work/gnu.out" "$work/minic.out" || fail 'GNU/MiniC stdout differs'
+cmp "$work/gnu.err" "$work/minic.err" || fail 'GNU/MiniC stderr differs'
+printf '%s\n' 'AARCH64_ZEROPAD_RUNTIME=PASS GNU_GAS=2 GNU_static=2 QEMU=2 extable_ELF=2'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-function-aligned-native.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# Compare GNU and MiniC function entry alignment at the actual ELF symbol.
+# Other ISAs receive exact `.balign` source checks until QEMU/GNU is available.
+target=${2:-x86_64}
+fixture="$root/tests/compiler/c0/gnu_function_aligned.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'GNU_FUNCTION_ALIGNED=FAIL target=%s reason=%s\n' "$target" "$*" >&2; exit 1; }
+
+test -x "$mini" || fail 'MiniC compiler absent'
+cc -std=gnu11 -E -P -x c "$fixture" -o "$work/gnu.i"
+"$mini" --target="$target-linux" -S "$work/gnu.i" -o "$work/minic.s" \
+    || fail 'valid prefix/suffix/redeclaration attribute rejected'
+test -s "$work/minic.s" || fail 'no MiniC assembly'
+
+for alignment in 32 64 128; do
+    grep -Fq ".balign $alignment" "$work/minic.s" ||
+        fail "required explicit $alignment-byte entry directive absent"
+done
+grep -Eq '^\.weak linux_weak_aligned$' "$work/minic.s" ||
+    fail 'GNU weak symbol linkage lost'
+
+# All backends must reject dangerous non-power-of-two and out-of-budget
+# alignment requests, without a partial assembler output.
+sed 's/aligned(64)/aligned(3)/' "$fixture" >"$work/bad-three.c"
+sed 's/aligned(64)/aligned(2097152)/' "$fixture" >"$work/bad-huge.c"
+for variant in bad-three bad-huge; do
+    cc -E -P -x c "$work/$variant.c" -o "$work/$variant.i"
+    if "$mini" --target="$target-linux" -S "$work/$variant.i" \
+            -o "$work/$variant.s" >"$work/$variant.stdout" \
+            2>"$work/$variant.stderr"; then
+        fail "invalid GNU entry alignment accepted: $variant"
+    fi
+    test ! -e "$work/$variant.s" || fail "partial output for $variant"
+done
+
+if [[ $target == x86_64 ]]; then
+    cc -std=gnu11 -O0 -c -x c "$fixture" -o "$work/gnu.o"
+    cc -c -x assembler "$work/minic.s" -o "$work/minic.o"
+    for producer in gnu minic; do
+        for mapping in 'aligned_prefix:64' 'aligned_suffix:32' \
+                       'aligned_declaration:128' 'linux_weak_aligned:32'; do
+            symbol=${mapping%%:*}
+            alignment=${mapping##*:}
+            address=$(nm -n "$work/$producer.o" | awk -v s="$symbol" '$3==s {print $1}')
+            test -n "$address" || fail "$producer missing symbol $symbol"
+            test $((16#$address % alignment)) -eq 0 ||
+                fail "$producer misaligned symbol $symbol address=$address"
+        done
+    done
+    cc "$work/minic.o" -o "$work/minic-runtime"
+    cc -std=gnu11 -O0 "$fixture" -o "$work/gnu-runtime"
+    "$work/minic-runtime" || fail 'MiniC native execution differs'
+    "$work/gnu-runtime" || fail 'GNU native execution differs'
+    printf '%s\n' 'GNU_FUNCTION_ALIGNED_NATIVE=PASS GNU_ELF=4 MiniC_ELF=4 runtime=2'
+fi
+printf 'GNU_FUNCTION_ALIGNED_SOURCE=PASS target=%s prefix=1 suffix=1 declaration=1 weak=1 negative=2\n' "$target"
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-record-rvalue-nested-member-native.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# One temporary, one evaluation, actual GNU ELF/host execution for nested
+# record-rvalue projection, plus four-ISA Core -> machine source admission.
+target=${2:-x86_64}
+fixture="$root/tests/compiler/c0/record_rvalue_nested_member.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'RECORD_RVALUE_NESTED=FAIL target=%s reason=%s\n' "$target" "$*" >&2; exit 1; }
+
+test -x "$mini" || fail 'MiniC compiler absent'
+cc -std=gnu11 -E -P -x c "$fixture" -o "$work/original.i"
+"$mini" --target="$target-linux" -S "$work/original.i" -o "$work/mini.s" \
+    || fail 'nested materialized record member rejected'
+test -s "$work/mini.s" || fail 'MiniC returned success without assembly'
+
+if [[ $target == x86_64 ]]; then
+    cc -std=gnu11 -O0 "$fixture" -o "$work/gnu"
+    cc -c -x assembler "$work/mini.s" -o "$work/mini.o"
+    cc "$work/mini.o" -o "$work/mini"
+    "$work/gnu" || fail 'GNU native baseline failed'
+    "$work/mini" || fail 'MiniC native evaluation/copy/return differs from GNU'
+    printf '%s\n' 'RECORD_RVALUE_NESTED_NATIVE=PASS GNU_runtime=1 MiniC_runtime=1 call_once=6'
+fi
+printf 'RECORD_RVALUE_NESTED_SOURCE=PASS target=%s chained_scalar=1 record_copy=2 record_return=2 conditional=1\n' "$target"
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-cmpxchg16b-native.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# True hardware CMPXCHG16B native differential + Linux GS alternative ELF ABI.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'X86_CMPXCHG16B=FAIL reason=%s\n' "$*" >&2; exit 1; }
+test -x "$mini" || fail 'compiler missing'
+
+for kind in atomic alt; do
+    source="$root/tests/compiler/c0/x86_linux_cmpxchg16b_$kind.c"
+    cc -std=gnu11 -E -P -x c "$source" -o "$work/$kind.i"
+    "$mini" --target=x86_64-linux -S "$work/$kind.i" -o "$work/$kind.s" \
+        || fail "$kind MiniC frontend/Core/M1"
+    cc -std=gnu11 -O0 -fno-pie -c -x c "$work/$kind.i" -o "$work/gnu-$kind.o" \
+        || fail "$kind GNU C oracle"
+    cc -c -x assembler "$work/$kind.s" -o "$work/mini-$kind.o" \
+        || fail "$kind GNU GAS"
+done
+
+# Only the locked memory CAS is safe and meaningful in native user space.
+cc -no-pie "$work/gnu-atomic.o" -o "$work/gnu-atomic"
+cc -no-pie "$work/mini-atomic.o" -o "$work/mini-atomic"
+set +e
+"$work/gnu-atomic"; gnu_status=$?
+"$work/mini-atomic"; mini_status=$?
+set -e
+test "$gnu_status" -eq 42 || fail "GNU real hardware returned $gnu_status"
+test "$mini_status" -eq 42 || fail "MiniC real hardware returned $mini_status"
+grep -Eq 'lock; cmpxchg16b \(%r11\)' "$work/atomic.s" \
+    || fail 'locked CAS machine instruction absent'
+grep -Eq 'sete %r10b' "$work/atomic.s" \
+    || fail 'ZF boolean must be captured immediately'
+
+# ALT record is exactly 14 bytes: two PC-relative offsets, feature 141,
+# and the real old-branch/new-branch lengths 8/5. Both GNU and MiniC GAS
+# must produce the same Linux metadata. The replacement itself is not run.
+for compiler in gnu mini; do
+    obj="$work/$compiler-alt.o"
+    readelf -SW "$obj" > "$work/$compiler-sections"
+    grep -Eq '\.altinstructions' "$work/$compiler-sections" || fail "$compiler ALT section"
+    objcopy --dump-section .altinstructions="$work/$compiler-alt.bin" "$obj"
+    test "$(wc -c < "$work/$compiler-alt.bin")" -eq 14 \
+        || fail "$compiler ALT record must be 14 bytes"
+    bytes=$(od -An -tx1 "$work/$compiler-alt.bin" | tr -d ' \n')
+    case "$bytes" in
+        *8d0000000805) ;;
+        *) fail "$compiler ALT patch must encode feature141 lengths8/5" ;;
+    esac
+    readelf -Wr "$obj" > "$work/$compiler-relocations"
+    relocs=$(awk '/^Relocation section/ { in_alt = index($0, ".rela.altinstructions") != 0; next }
+        in_alt && /R_X86_64_PC32/ { count++ } END { print count + 0 }' \
+        "$work/$compiler-relocations")
+    test "$relocs" -eq 2 || fail "$compiler ALT expected two PC32 relocations, got $relocs"
+done
+grep -Eq 'call this_cpu_cmpxchg16b_emu' "$work/alt.s" \
+    || fail 'old ALT private kernel emulation call absent'
+grep -Eq 'cmpxchg16b %gs:\(%r11\)' "$work/alt.s" \
+    || fail 'GS replacement exact memory operand absent'
+printf '%s\n' 'X86_CMPXCHG16B=PASS GNU_status=42 MiniC_status=42 locked=real_128bit_atomic ALT_feature=141 ALT_old=8 ALT_new=5 ALT_relocs=2*PC32 ALT_execute=never'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-put-user-pointer-gcc-native.sh", "shared": "1583a01f9b87bf94"}
+#!/usr/bin/env bash
+# Compare GNU and MiniC's real x86 __put_user_N private register ABI with
+# pointer (not just integer) RAX payloads, including the nocheck spelling.
+fixture="$root/tests/compiler/c0/x86_linux_put_user_pointer.c"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+fail() { printf 'X86_PUT_PTR_NATIVE=FAIL reason=%s\n' "$*" >&2; exit 1; }
+test -x "$mini" || fail 'compiler missing'
+
+cc -std=gnu11 -E -P -x c "$fixture" -o "$work/source.i"
+"$mini" --target=x86_64-linux -S "$work/source.i" -o "$work/mini.s" \
+    || fail 'MiniC frontend/Core/M1 rejected C source'
+cc -std=gnu11 -O0 -no-pie -x c "$work/source.i" -o "$work/gnu"
+cc -no-pie -x assembler "$work/mini.s" -o "$work/mini"
+
+set +e
+"$work/gnu"
+gnu_status=$?
+"$work/mini"
+mini_status=$?
+set -e
+test "$gnu_status" -eq 42 || fail "GNU ABI returned $gnu_status"
+test "$mini_status" -eq 42 || fail "MiniC ABI returned $mini_status"
+test "$(grep -c 'call __put_user_' "$work/mini.s")" -eq 2 \
+    || fail 'MiniC omitted or invented private x86 helper calls'
+grep -q 'call __put_user_nocheck_8' "$work/mini.s" \
+    || fail 'nocheck helper must retain its exact symbol'
+test "$(grep -Fc 'movq %rbx, (%rsp)' "$work/mini.s")" -eq 2 \
+    || fail 'RBX save missing around one of the helper calls'
+test "$(grep -Fc 'movq (%rsp), %rbx' "$work/mini.s")" -eq 2 \
+    || fail 'RBX restore missing around one of the helper calls'
+printf '%s\n' 'X86_PUT_PTR_NATIVE=PASS GNU_status=42 MiniC_status=42 private_calls=2 pointer_rax=8B rbX_preserved=1'
+@@@ end

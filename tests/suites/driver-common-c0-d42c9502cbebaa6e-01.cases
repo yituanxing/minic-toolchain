@@ -1,0 +1,261 @@
+@@@ {"id": "d42c9502cbebaa6e", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+mini=${1:?MiniC compiler}
+test -x "$mini"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-loong-linux-cache-ops.sh", "shared": "d42c9502cbebaa6e"}
+#!/usr/bin/env bash
+# Preserve the actual Linux LoongArch cache-maintenance instruction family.
+# CACOP is a privileged hardware cache operation, so user QEMU execution is
+# not a meaningful oracle; GNU GAS validates the emitted ISA when installed.
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+cat > "$work/cache.i" <<'SOURCE'
+void flush_cache_line(unsigned long addr) {
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x00 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x01 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x02 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x03 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x04 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    __asm__ __volatile__("\tcacop %0, %1\n" : : "i" ((0x05 | 0x08)), "ZC" (*(unsigned char *)(addr)));
+    asm volatile("\tibar 0\n"::);
+}
+SOURCE
+"$mini" --target=loongarch64-linux -S "$work/cache.i" -o "$work/cache.s"
+for op in 8 9 10 11 12 13; do
+    test "$(grep -Fc "cacop $op, \$t0, 0" "$work/cache.s")" -eq 1
+done
+test "$(grep -Fc 'ibar 0' "$work/cache.s")" -eq 1
+test "$(grep -c 'cacop ' "$work/cache.s")" -eq 6
+
+for bad in range runtime constraint type injected ibar; do
+    case "$bad" in
+        range) cat > "$work/bad.i" <<'SOURCE'
+void f(unsigned long addr) { asm volatile("cacop %0, %1"::"i" (7), "ZC" (*(unsigned char*)addr)); }
+SOURCE
+            ;;
+        runtime) cat > "$work/bad.i" <<'SOURCE'
+void f(unsigned long addr, int op) { asm volatile("cacop %0, %1"::"i" (op), "ZC" (*(unsigned char*)addr)); }
+SOURCE
+            ;;
+        constraint) cat > "$work/bad.i" <<'SOURCE'
+void f(unsigned long addr) { asm volatile("cacop %0, %1"::"i" (8), "r" (addr)); }
+SOURCE
+            ;;
+        type) cat > "$work/bad.i" <<'SOURCE'
+void f(unsigned long addr) { asm volatile("cacop %0, %1"::"i" (8), "ZC" (*(unsigned short*)addr)); }
+SOURCE
+            ;;
+        injected) cat > "$work/bad.i" <<'SOURCE'
+void f(unsigned long addr) { asm volatile("cacop %0, %1; nop"::"i" (8), "ZC" (*(unsigned char*)addr)); }
+SOURCE
+            ;;
+        ibar) cat > "$work/bad.i" <<'SOURCE'
+void f(void) { asm volatile("ibar 0\nnop"::); }
+SOURCE
+            ;;
+    esac
+    if "$mini" --target=loongarch64-linux -S "$work/bad.i" \
+            -o "$work/bad.s" >"$work/bad.out" 2>&1; then
+        printf 'LoongArch unsafe hardware CACOP/IBAR accepted: %s\n' "$bad" >&2
+        exit 1
+    fi
+    test ! -e "$work/bad.s"
+done
+
+if [[ "${MINIC_LOONG_CACOP_SOURCE_ONLY:-0}" != 1 ]]; then
+    as=${LOONGARCH64_GAS:-loongarch64-linux-gnu-as}
+    command -v "$as" >/dev/null
+    "$as" -o "$work/cache.o" "$work/cache.s"
+fi
+printf 'MINIC_LOONGARCH_CACHE=PASS hardware_cacop=6 hardware_ibar=1 negatives=6 source_only=%s\n' \
+    "${MINIC_LOONG_CACOP_SOURCE_ONLY:-0}"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-loongarch-linux-csr-constants.sh", "shared": "d42c9502cbebaa6e"}
+#!/usr/bin/env bash
+# Original GNU 6.6.143 arch/loongarch uses __builtin_loongarch_csrrd_{w,d}
+# inside genuine source after the generic Core scalar argument snapshot.
+# Kernel CSR accesses are privileged; test target *assembly*, not user QEMU.
+d=$(mktemp -d);trap 'rm -rf "$d"' EXIT
+cat > "$d/csr.i" <<'SRC'
+unsigned int linux_read_csr0(void) { return __builtin_loongarch_csrrd_w(0x20); }
+unsigned long linux_read_csr1(void) { return __builtin_loongarch_csrrd_d(0x10); }
+unsigned long linux_write_csr(unsigned long x) {
+    return __builtin_loongarch_csrwr_d(x, 0x10);
+}
+unsigned long linux_exchange_csr(unsigned long value, unsigned long mask) {
+    return __builtin_loongarch_csrxchg_d(value, mask, 0x10);
+}
+unsigned int linux_csr_compound(void) {
+    return __builtin_loongarch_csrrd_w((unsigned int)(0x10 + 0x10));
+}
+unsigned int linux_csr_narrowed(void) {
+    return __builtin_loongarch_csrrd_w((unsigned short)0x10020);
+}
+static volatile unsigned long linux_csr_volatile_value;
+unsigned long linux_csr_volatile_write(void) {
+    return __builtin_loongarch_csrwr_d(linux_csr_volatile_value,
+                                      (unsigned short)0x10020);
+}
+SRC
+"$mini" --target=loongarch64-linux -S "$d/csr.i" -o "$d/csr.s"
+grep -Fq 'csrrd $a0, 32' "$d/csr.s"
+grep -Fq 'csrrd $a0, 16' "$d/csr.s"
+grep -Fq 'csrwr $a0, 16' "$d/csr.s"
+grep -Fq 'csrxchg $a0, $a1, 16' "$d/csr.s"
+test "$(grep -Fc 'csrrd $a0, 32' "$d/csr.s")" -eq 3
+sed -n '/^linux_csr_volatile_write:/,/^\.size linux_csr_volatile_write/p' \
+    "$d/csr.s" > "$d/volatile_write.s"
+grep -Fq 'ld.d ' "$d/volatile_write.s"
+grep -Fq 'csrwr $a0, 32' "$d/volatile_write.s"
+for bad in dynamic forged_shadow overrange unknown;do
+  case "$bad" in
+    dynamic) cat > "$d/bad.i" <<'SRC'
+unsigned int f(unsigned int csr){return __builtin_loongarch_csrrd_w(csr);}
+SRC
+      ;;
+    forged_shadow) cat > "$d/bad.i" <<'SRC'
+unsigned int f(unsigned int csr) {
+    unsigned int unrelated_literal = 32U;
+    return __builtin_loongarch_csrrd_w(csr + (unrelated_literal - 32U));
+}
+SRC
+      ;;
+    overrange) cat > "$d/bad.i" <<'SRC'
+unsigned int f(void){return __builtin_loongarch_csrrd_w(16384);}
+SRC
+      ;;
+    unknown) cat > "$d/bad.i" <<'SRC'
+unsigned int f(void){return __builtin_loongarch_unknown_csr(32);}
+SRC
+      ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/err" 2>&1;then
+    echo "INVALID_LOONGARCH_CSR_ACCEPTED=$bad" >&2;exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+if [[ "${MINIC_LOONG_CSR_SOURCE_ONLY:-0}" != 1 ]]; then
+  command -v loongarch64-linux-gnu-gcc-13 >/dev/null
+  loongarch64-linux-gnu-gcc-13 -c -x assembler "$d/csr.s" -o "$d/csr.o"
+  loongarch64-linux-gnu-readelf -h "$d/csr.o" | grep -Fq 'LoongArch'
+fi
+echo "MINIC_LOONGARCH_CSR_CONST=PASS genuine_linux=1 forms=4 typed_constant_narrowing=1 volatile_preserved=1 negatives=4 GAS_mode=${MINIC_LOONG_CSR_SOURCE_ONLY:-0}"
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-loongarch-linux-percpu-fpu.sh", "shared": "d42c9502cbebaa6e"}
+#!/usr/bin/env bash
+# Genuine LoongArch Linux 6.6.143 per-CPU __percpu_read/write/add/or/and
+# plus kernel_fpu_begin FCSR0 write. All ISA semantics target-owned.
+dir=$(mktemp -d);trap 'rm -rf "$dir"' EXIT
+cat > "$dir/percpu.i" <<'SRC'
+unsigned long native_read1(void *p) {
+ unsigned long ret;
+ __asm__ __volatile__("ldx.b %[ret], $r21, %[ptr]\n"
+  : [ret] "=&r"(ret) : [ptr] "r"(p) : "memory");
+ return ret;
+}
+unsigned long native_read2(void *p) {
+ unsigned long ret; __asm__ __volatile__("ldx.h %[ret], $r21, %[ptr]"
+  : [ret] "=&r"(ret) : [ptr] "r"(p) : "memory"); return ret;
+}
+unsigned long native_read4(void *p) {
+ unsigned long ret; __asm__ __volatile__("ldx.w %[ret], $r21, %[ptr]"
+  : [ret] "=&r"(ret) : [ptr] "r"(p) : "memory"); return ret;
+}
+unsigned long native_read8(void *p) {
+ unsigned long ret; __asm__ __volatile__("ldx.d %[ret], $r21, %[ptr]"
+  : [ret] "=&r"(ret) : [ptr] "r"(p) : "memory"); return ret;
+}
+void native_write1(void *p, unsigned long x) {
+ __asm__ __volatile__("stx.b %[val], $r21, %[ptr]" : :
+  [val] "r"(x), [ptr] "r"(p) : "memory");
+}
+void native_write2(void *p, unsigned long x) {
+ __asm__ __volatile__("stx.h %[val], $r21, %[ptr]" : :
+  [val] "r"(x), [ptr] "r"(p) : "memory");
+}
+void native_write4(void *p, unsigned long x) {
+ __asm__ __volatile__("stx.w %[val], $r21, %[ptr]" : :
+  [val] "r"(x), [ptr] "r"(p) : "memory");
+}
+void native_write8(void *p, unsigned long x) {
+ __asm__ __volatile__("stx.d %[val], $r21, %[ptr]" : :
+  [val] "r"(x), [ptr] "r"(p) : "memory");
+}
+unsigned long native_amo_add4(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amadd.w %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned int *)p)
+  : [val] "r"(x)); return ret+x;
+}
+unsigned long native_amo_add8(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amadd.d %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned long long *)p)
+  : [val] "r"(x)); return ret+x;
+}
+unsigned long native_amo_and4(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amand.w %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned int *)p)
+  : [val] "r"(x)); return ret;
+}
+unsigned long native_amo_and8(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amand.d %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned long long *)p)
+  : [val] "r"(x)); return ret;
+}
+unsigned long native_amo_or4(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amor.w %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned int *)p)
+  : [val] "r"(x)); return ret;
+}
+unsigned long native_amo_or8(void *p, unsigned long x) {
+ unsigned long ret;
+ __asm__ __volatile__("amor.d %[ret], %[val], %[ptr]"
+  : [ret] "=&r"(ret), [ptr] "+ZB"(*(unsigned long long *)p)
+  : [val] "r"(x)); return ret;
+}
+void native_kernel_fpu_reset(void) {
+ __asm__ __volatile__("movgr2fcsr $fcsr0, %0" : : "r"(0));
+}
+SRC
+if ! MINIC_CORE_FAILURE_CENSUS=1 MINIC_M1_TRACE=1 MINIC_BACKEND_CENSUS=1 \
+    "$mini" --target=loongarch64-linux -S "$dir/percpu.i" -o "$dir/mini.s" > "$dir/output" 2>&1; then
+    echo "LOONG_PERCPU_FULL_FIXTURE_BACKEND_FRONTIER=FAIL" >&2
+    grep -E 'MINIC_BACKEND_REJECT|MINIC_M8_OPCODE_REJECT|MINIC_CORE_FUNCTION_FAILURE|MINIC_BACKEND_ASM_FORM|error:' "$dir/output" | tail -35 >&2 || :
+    exit 1
+fi
+for op in ldx.b ldx.h ldx.w ldx.d stx.b stx.h stx.w stx.d \
+          amadd.w amadd.d amand.w amand.d amor.w amor.d movgr2fcsr; do
+  grep -Fq "$op " "$dir/mini.s"
+done
+if [[ "${MINIC_LOONG_PERCPU_SOURCE_ONLY:-0}" != 1 ]]; then
+  loongarch64-linux-gnu-gcc-13 -c -x assembler "$dir/mini.s" -o "$dir/mini.o"
+  loongarch64-linux-gnu-gcc-13 -c -x c "$dir/percpu.i" -o "$dir/gnu.o"
+  loongarch64-linux-gnu-objdump -d "$dir/mini.o" > "$dir/mini.dis"
+  loongarch64-linux-gnu-objdump -d "$dir/gnu.o" > "$dir/gnu.dis"
+  for op in ldx.b ldx.h ldx.w ldx.d stx.b stx.h stx.w stx.d \
+            amadd.w amadd.d amand.w amand.d amor.w amor.d movgr2fcsr; do
+    grep -Fq "$op" "$dir/mini.dis"
+    grep -Fq "$op" "$dir/gnu.dis"
+  done
+fi
+for bad in injected wrong-base wrong-clobber wrong-output;do
+  case "$bad" in
+    injected) sed 's/amadd.w %\[ret\]/amadd.w %[ret]; nop/' "$dir/percpu.i" > "$dir/bad.i" ;;
+    wrong-base) sed 's/\$r21, %\[ptr\]/$r20, %[ptr]/' "$dir/percpu.i" > "$dir/bad.i" ;;
+    wrong-clobber) sed 's/movgr2fcsr \$fcsr0, %0/movgr2fcsr $fcsr0, %0; nop/' "$dir/percpu.i" > "$dir/bad.i" ;;
+    wrong-output) sed 's/\[ret\] "=&r"(ret)/[ret] "=m"(ret)/' "$dir/percpu.i" > "$dir/bad.i" ;;
+  esac
+  if "$mini" --target=loongarch64-linux -S "$dir/bad.i" -o "$dir/bad.s" >/dev/null 2>&1;then
+    echo "UNQUALIFIED_ORIGINAL_LINUX_PERCPU=$bad" >&2
+    exit 1
+  fi
+  test ! -e "$dir/bad.s"
+done
+echo "MINIC_LOONGARCH_PERCPU=PASS original_linux_forms=15 ISA_indexed=8 ISA_AMO=6 FCSR0=1 negatives=4 GAS_mode=${MINIC_LOONG_PERCPU_SOURCE_ONLY:-0}"
+@@@ end

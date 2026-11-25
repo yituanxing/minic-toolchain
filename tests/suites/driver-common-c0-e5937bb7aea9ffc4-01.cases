@@ -1,0 +1,234 @@
+@@@ {"id": "e5937bb7aea9ffc4", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+cc=${1:?MiniC compiler}
+test -x "$cc"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-local-rmw.sh", "shared": "e5937bb7aea9ffc4"}
+#!/usr/bin/env bash
+# Original Linux 6.6.143 atomic_long_t=atomic64_t uses s64 LONG LONG
+# counter, but local_add(long i) passes a LONG 64-bit machine operand.
+# Both C integer ranks must round-trip identically under x86-64 SysV.
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+cat > "$d/local.i" <<'SRC'
+typedef struct { long long counter; } local_t;
+void mini_inc(local_t *l) { asm volatile(" incq %0" : "+m"(l->counter)); }
+void mini_dec(local_t *l) { asm volatile(" decq %0" : "+m"(l->counter)); }
+void mini_add(long v, local_t *l) { asm volatile(" addq %1,%0" : "+m"(l->counter) : "ir"(v)); }
+void mini_sub(long v, local_t *l) { asm volatile(" subq %1,%0" : "+m"(l->counter) : "ir"(v)); }
+void mini_inc32(int *v) { asm volatile(" incl %0" : "+m"(*v)); }
+void mini_dec32(int *v) { asm volatile(" decl %0" : "+m"(*v)); }
+SRC
+"$cc" --target=x86_64-linux -S "$d/local.i" -o "$d/mini.s"
+for ins in incq decq addq subq incl decl; do
+    if ! grep -Eq "^  $ins .*\\(%r10\\)" "$d/mini.s"; then
+        echo "FAIL: $ins missing original x86 MachineIR R10-relative memory RMW" >&2
+        sed -n '1,160p' "$d/mini.s" >&2
+        exit 1
+    fi
+done
+if grep -Eq '^  lock; (incq|decq|addq|subq|incl|decl) ' "$d/mini.s"; then
+  echo 'FAIL: local non-atomic RMW acquired SMP LOCK' >&2; exit 1
+fi
+sed 's/mini_/gnu_/g' "$d/local.i" > "$d/gnu.c"
+gcc -c -O0 "$d/gnu.c" -o "$d/gnu.o"
+gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
+cat > "$d/main.c" <<'SRC'
+typedef struct { long long counter; } local_t;
+extern void mini_inc(local_t*),mini_dec(local_t*);
+extern void mini_add(long,local_t*),mini_sub(long,local_t*);
+extern void gnu_inc(local_t*),gnu_dec(local_t*);
+extern void gnu_add(long,local_t*),gnu_sub(long,local_t*);
+extern void mini_inc32(int*),mini_dec32(int*);
+extern void gnu_inc32(int*),gnu_dec32(int*);
+int main(void) {
+  long seeds[]={0,1,-1,0x123456789L,-0x123456789L};
+  for(unsigned i=0;i<sizeof(seeds)/sizeof(seeds[0]);++i) {
+    local_t a={seeds[i]},b={seeds[i]};
+    mini_inc(&a); gnu_inc(&b); if(a.counter!=b.counter)return 1;
+    mini_dec(&a); gnu_dec(&b); if(a.counter!=b.counter)return 2;
+    mini_add(17,&a); gnu_add(17,&b); if(a.counter!=b.counter)return 3;
+    mini_sub(-11,&a); gnu_sub(-11,&b); if(a.counter!=b.counter)return 4;
+    int c=(int)seeds[i],d=(int)seeds[i];
+    mini_inc32(&c);gnu_inc32(&d);if(c!=d)return 5;
+    mini_dec32(&c);gnu_dec32(&d);if(c!=d)return 6;
+  }
+  return 0;
+}
+SRC
+gcc -O0 -no-pie "$d/main.c" "$d/gnu.o" "$d/mini.o" -o "$d/run"
+"$d/run"
+for bad in not-volatile wrong-type extra-instruction; do
+  case "$bad" in
+    not-volatile) sed 's/asm volatile/asm/g' "$d/local.i" > "$d/bad.i" ;;
+    wrong-type) sed 's/long counter;/double counter;/' "$d/local.i" > "$d/bad.i" ;;
+    extra-instruction) sed 's/incq %0/incq %0; nop/' "$d/local.i" > "$d/bad.i" ;;
+  esac
+  if "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1;then
+    echo "FAIL: unsafe local RMW $bad accepted" >&2; exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+echo 'MINIC_X86_LINUX_LOCAL_RMW=PASS genuine_linux=1 six_native_forms=1 GNU_runtime=1 negatives=3'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-local-xadd.sh", "shared": "e5937bb7aea9ffc4"}
+#!/usr/bin/env bash
+# Genuine Linux 6.6.143 local_add_return uses xaddq +r/+m, memory clobber.
+# Verify register old-value and memory updated sum against independent GCC.
+d=$(mktemp -d);trap 'rm -rf "$d"' EXIT
+cat >"$d/xadd.i" <<'SRC'
+long mini_xadd64(long delta, long *p) {
+ asm volatile(" xaddq %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
+int mini_xadd32(int delta, int *p) {
+ asm volatile(" xaddl %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
+long mini_xadd64_long_ll(long delta, long long *p) {
+ asm volatile(" xaddq %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
+long long mini_xadd64_ll_long(long long delta, long *p) {
+ asm volatile(" xaddq %0, %1;" : "+r"(delta), "+m"(*p) : : "memory");
+ return delta;
+}
+SRC
+"$cc" --target=x86_64-linux -S "$d/xadd.i" -o "$d/xadd.s"
+for form in '  xaddq %rax, (%r10)' '  xaddl %eax, (%r10)'; do
+  if ! grep -Fq "$form" "$d/xadd.s"; then
+    echo "FAIL: original Linux local XADD MachineIR physical form missing: $form" >&2
+    sed -n '1,160p' "$d/xadd.s" >&2
+    exit 1
+  fi
+done
+sed 's/mini_/gnu_/g' "$d/xadd.i" > "$d/gnu.c"
+gcc -c -O0 "$d/gnu.c" -o "$d/gnu.o"
+gcc -c -x assembler "$d/xadd.s" -o "$d/mini.o"
+cat > "$d/main.c" <<'SRC'
+extern long mini_xadd64(long,long*),gnu_xadd64(long,long*);
+extern int mini_xadd32(int,int*),gnu_xadd32(int,int*);
+extern long mini_xadd64_long_ll(long,long long*),gnu_xadd64_long_ll(long,long long*);
+extern long long mini_xadd64_ll_long(long long,long*),gnu_xadd64_ll_long(long long,long*);
+int main(void) {
+ for(int i=-42;i<=42;++i) for(int d=-7;d<=7;++d) {
+  long a=i,b=i;
+  long olda=mini_xadd64(d,&a),oldb=gnu_xadd64(d,&b);
+  if(olda!=oldb||a!=b)return 1;
+  int c=i,e=i;
+  int oldc=mini_xadd32(d,&c),olde=gnu_xadd32(d,&e);
+  if(oldc!=olde||c!=e)return 2;
+  long long f=i,g=i;
+  long oldf=mini_xadd64_long_ll(d,&f),oldg=gnu_xadd64_long_ll(d,&g);
+  if(oldf!=oldg||f!=g)return 3;
+  long h=i,j=i;
+  long long oldh=mini_xadd64_ll_long(d,&h),oldj=gnu_xadd64_ll_long(d,&j);
+  if(oldh!=oldj||h!=j)return 4;
+ }
+ return 0;
+}
+SRC
+gcc -O0 -no-pie "$d/main.c" "$d/mini.o" "$d/gnu.o" -o "$d/run"
+"$d/run"
+for bad in extra wrong-constraint wrong-width wrong-memory-width;do
+ case "$bad" in
+  extra) sed 's/xaddq %0, %1;/xaddq %0, %1; nop/' "$d/xadd.i" >"$d/bad.i";;
+  wrong-constraint) sed 's/"+r"(delta)/"=r"(delta)/' "$d/xadd.i" >"$d/bad.i";;
+  wrong-width) sed 's/xaddq %0, %1;/xaddl %0, %1;/' "$d/xadd.i" >"$d/bad.i";;
+  wrong-memory-width) sed 's/long long \*p)/int *p)/' "$d/xadd.i" >"$d/bad.i";;
+ esac
+ if MINIC_ASM_FRONTIER_TRACE=1 "$cc" --target=x86_64-linux -S "$d/bad.i" -o "$d/bad.s" >"$d/bad.stdout" 2>"$d/bad.stderr";then
+   echo "FAIL unsafe xadd $bad accepted" >&2;exit 1
+ fi
+ # C operand size belongs to source Target admission, not Core IR. Verify
+ # this wrong-width GNU ISA form is rejected at the qualified target gate
+ # instead of mistaking an unrelated parser or missing-tool failure for PASS.
+ if [ "$bad" = wrong-memory-width ] &&
+    { ! grep -Fq 'CORE_ASM_FRONTIER function=mini_xadd64_long_ll reason=target_required' "$d/bad.stderr" ||
+      ! grep -Fq "Core IR does not yet support function 'mini_xadd64_long_ll'" "$d/bad.stderr"; };then
+    echo 'FAIL wrong-width local XADD did not fail its source Target qualification gate' >&2
+    sed -n '1,80p' "$d/bad.stderr" >&2
+    exit 1
+ fi
+ test ! -e "$d/bad.s"
+done
+echo 'MINIC_X86_LOCAL_XADD=PASS original_linux=1 two_native_widths=1 mixed_64bit_ranks=2 GNU_differential_pairs=5100 negatives=4'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-percpu-xadd-enum.sh", "shared": "e5937bb7aea9ffc4"}
+#!/usr/bin/env bash
+# A genuine 4-byte Linux enum is a legal GS/percpu XADD memory operand.
+# Keep the source admission strict about complete enum storage width.
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+
+cat >"$d/good.i" <<'SRC'
+enum nmi_states { NMI_IDLE = 0, NMI_HANDLING = 1 };
+unsigned int mini_xadd(volatile enum nmi_states *p, unsigned int value) {
+    asm volatile("xaddl %0, %%gs:%1"
+                 : "+r"(value), "+m"(*p) : : "memory");
+    return value;
+}
+SRC
+sed 's/mini_xadd/gnu_xadd/' "$d/good.i" >"$d/oracle.i"
+
+"$cc" --target=x86_64-linux -S "$d/good.i" -o "$d/good.s"
+gcc -c -x assembler "$d/good.s" -o "$d/good.o"
+gcc -O0 -c -x c "$d/oracle.i" -o "$d/oracle.o"
+# Physical register allocation is not an ABI: the semantic contract is a
+# 32-bit XADDL with a GS-segment memory reference and a GP operand. GNU AS
+# plus the differential native execution below prove the exact effects.
+grep -Eq '^[[:space:]]+xaddl %[a-z0-9]+, %gs:\(%[a-z0-9]+\)$' "$d/good.s"
+readelf -h "$d/good.o" | grep -Fq 'Advanced Micro Devices X86-64'
+
+cat >"$d/driver.c" <<'SRC'
+#include <sys/syscall.h>
+#include <unistd.h>
+#define ARCH_SET_GS 0x1001
+enum nmi_states { NMI_IDLE = 0, NMI_HANDLING = 1 };
+extern unsigned int mini_xadd(volatile enum nmi_states *, unsigned int);
+extern unsigned int gnu_xadd(volatile enum nmi_states *, unsigned int);
+int main(void) {
+    volatile enum nmi_states state = NMI_HANDLING;
+    if (syscall(SYS_arch_prctl, ARCH_SET_GS, (unsigned long)&state)) return 2;
+    state = NMI_HANDLING;
+    unsigned int mini_old = mini_xadd((volatile enum nmi_states *)0, 17U);
+    unsigned int mini_sum = (unsigned int)state;
+    state = NMI_HANDLING;
+    unsigned int gnu_old = gnu_xadd((volatile enum nmi_states *)0, 17U);
+    return mini_old == gnu_old && mini_old == 1U &&
+           mini_sum == (unsigned int)state && mini_sum == 18U ? 0 : 3;
+}
+SRC
+gcc -O0 -no-pie "$d/driver.c" "$d/good.o" "$d/oracle.o" -o "$d/compare"
+"$d/compare"
+
+# The same enum object cannot be used by a 64-bit XADD just because the
+# register is a valid 64-bit integer. The machine width must match +m.
+cat >"$d/bad-width.i" <<'SRC'
+enum nmi_states { NMI_IDLE = 0, NMI_HANDLING = 1 };
+unsigned long bad_width(volatile enum nmi_states *p, unsigned long value) {
+    asm volatile("xaddq %0, %%gs:%1"
+                 : "+r"(value), "+m"(*p) : : "memory");
+    return value;
+}
+SRC
+
+# GNU permits a forward enum declaration, but not an incomplete 4-byte
+# memory object. Frontend or target source qualification must fail closed.
+cat >"$d/bad-incomplete.i" <<'SRC'
+enum nmi_states;
+unsigned int bad_incomplete(volatile enum nmi_states *p, unsigned int value) {
+    asm volatile("xaddl %0, %%gs:%1"
+                 : "+r"(value), "+m"(*p) : : "memory");
+    return value;
+}
+SRC
+for bad in bad-width bad-incomplete; do
+    if "$cc" --target=x86_64-linux -S "$d/$bad.i" -o "$d/$bad.s" \
+            >"$d/$bad.log" 2>&1; then
+        echo "FAIL invalid GS enum XADD accepted: $bad" >&2
+        exit 1
+    fi
+    test ! -e "$d/$bad.s"
+done
+echo 'MINIC_X86_GS_XADD_ENUM=PASS GNU_native=1 negative=2'
+@@@ end

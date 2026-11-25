@@ -1,0 +1,642 @@
+@@@ {"id": "9ec69bd135e58c21", "kind": "shared", "newline": true}
+set -eu
+: "${MINIC_CC:?set MINIC_CC to the current minic-cc}"
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-compound-record-byte-layout.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-compound-record-byte-layout
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_compound_record_byte_layout.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -O2 -S -x c "$work/source.i" -o "$work/gnu.s"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+    if grep -Fq 'invalid_compound_layout' "$work/$target.s"; then
+        echo "CORE_COMPOUND_RECORD_BYTES=FAIL $target retained valid layout guard" >&2
+        exit 1
+    fi
+done
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/gnu.o" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'CORE_COMPOUND_RECORD_BYTES=PASS five_targets=5 GNU_AS=2 GNU_LD=2 native_runtime=2 dynamic_field=2\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-core-field-get-contiguous-mask-guard.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-field-get-contiguous-mask-guard
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_field_get_contiguous_mask_guard.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/positive.i"
+cc -DMINIC_BAD_MASK_NEGATIVE -E -P -std=gnu11 -x c "$source" -o "$work/negative.i"
+cc -O2 -Werror -S -x c "$work/positive.i" -o "$work/gnu.s"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/positive.i" -o "$work/$target.s"
+    if grep -q 'impossible_noncontiguous_bitfield_mask' "$work/$target.s"; then
+        echo "CORE_FIELD_GET_MASK=FAIL $target emitted impossible valid guard" >&2
+        exit 1
+    fi
+    "$MINIC_CC" --target="$target" -S "$work/negative.i" -o "$work/$target-negative.s"
+    if ! grep -q 'impossible_noncontiguous_bitfield_mask' "$work/$target-negative.s"; then
+        echo "CORE_FIELD_GET_MASK=FAIL $target erased genuine invalid guard" >&2
+        exit 1
+    fi
+done
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/gnu.o" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'CORE_FIELD_GET_MASK=PASS targets=5 GNU_O2=1 native_runtime=2 negative=noncontiguous\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-core-inline-statement-constant-guard.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-inline-statement-constant-guard
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_inline_statement_constant_guard.c"
+
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -O2 -Werror -S -x c "$work/source.i" -o "$work/gnu.s"
+
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+    if grep -Eq 'impossible_(request_index|dynamic_request)' "$work/$target.s"; then
+        echo "CORE_INLINE_STATEMENT_CONSTANT_GUARD=FAIL $target retained an impossible pure guard" >&2
+        exit 1
+    fi
+done
+
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/gnu.o" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+
+printf 'CORE_INLINE_STATEMENT_CONSTANT_GUARD=PASS targets=5 GNU_O2=1 GNU_AS=2 GNU_LD=2 native_runtime=2 negative=volatile,call,asm,side_effecting_constant_false\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-literal-rhs-snapshot.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-literal-rhs-snapshot
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_literal_rhs_snapshot_elision.c"
+cc -E -P -std=gnu11 "$source" -o "$work/source.i"
+cc -O2 -Wall -Wextra -Werror -std=gnu11 "$source" -o "$work/gnu"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+done
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'CORE_LITERAL_RHS_SNAPSHOT=PASS targets=5 GNU_O2=1 MiniC_GNU_AS_LD=1 native_runtime=2 dynamic_rhs_kept=1\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-rhs-no-cfg-snapshot.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-rhs-no-cfg-snapshot
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_rhs_no_cfg_snapshot.c"
+cc -E -P -std=gnu11 "$source" -o "$work/source.i"
+cc -O2 -Wall -Wextra -Werror -std=gnu11 "$source" -o "$work/gnu"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+done
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'CORE_RHS_NO_CFG_SNAPSHOT=PASS targets=5 GNU_O2=1 MiniC_GNU_AS_LD=1 native_runtime=2 volatile_read=1 nested_rhs=1 conditional_rhs=1 shortcircuit_rhs=1 statement_rhs=1 call_rhs=1\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-same-global-address-order.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/core-same-global-address-order
+mkdir -p "$work"
+source="$root/tests/compiler/c0/core_same_global_address_order.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -O2 -S -x c "$work/source.i" -o "$work/gnu.s"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+    if grep -Eq 'impossible_(early|late)_sentinel' "$work/$target.s"; then
+        echo "CORE_GLOBAL_ADDRESS_ORDER=FAIL $target retained same-object impossible branch" >&2
+        exit 1
+    fi
+done
+if ! sed -n '/^unrelated_global_order:$/,/^\.size unrelated_global_order,/p' \
+        "$work/x86_64-linux.s" | grep -Fq 'cmpq '; then
+    echo 'CORE_GLOBAL_ADDRESS_ORDER=FAIL compared unrelated globals were constant-folded' >&2
+    exit 1
+fi
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/gnu.o" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'CORE_GLOBAL_ADDRESS_ORDER=PASS five_targets=5 GNU_AS=2 GNU_LD=2 native_runtime=2 unrelated_objects_not_folded=1\n'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-direct-lp64-reachable-source-labels.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+# Source-label roots must survive direct LP64 dead-block omission.
+# Real GNU/QEMU GNU-AS semantic checks remain in the target jump-label suites.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/direct-lp64-reachable-source-labels
+mkdir -p "$work"
+source="$root/tests/compiler/c0/direct_lp64_reachable_source_labels.c"
+host="$root/tests/compiler/c0/direct_lp64_reachable_host.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -E -P -std=gnu11 -x c "$host" -o "$work/host.i"
+
+for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+    "$MINIC_CC" --target="$target-linux" -S "$work/host.i" -o "$work/$target.host.s"
+    test -s "$work/$target.host.s"
+done
+for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+    "$MINIC_CC" --target="$target-linux" -S "$work/source.i" -o "$work/$target.s"
+    test -s "$work/$target.s"
+done
+for target in x86_64 aarch64 loongarch64; do
+    # LLVM/GNU-style source label aliases plus target-native block addresses
+    # are both observable here, including labels reached by static relocation.
+    test "$(grep -Ec '^\.Luser_[0-9]+:' "$work/$target.s")" -ge 5
+    # Check *every* source relocation and every native block label target.
+    # A Linux __jump_table site may be the only executable reference to its
+    # patched destination; a missing definition must never pass -S-only.
+    case "$target" in
+        x86_64) prefix=x86 ;;
+        aarch64) prefix=arm ;;
+        loongarch64) prefix=loong ;;
+    esac
+    references=$(grep -Eo "\\.L(user_[0-9]+|mini_${prefix}_f[0-9]+_b[0-9]+)" \
+        "$work/$target.s" | sort -u)
+    for label in $references; do
+        if ! grep -Fxq "$label:" "$work/$target.s"; then
+            echo "DIRECT_LP64_SOURCE_LABEL_DIFF=FAIL missing_label=$label target=$target" >&2
+            exit 1
+        fi
+    done
+done
+
+cc -O0 -fno-pie -no-pie -x c "$host" -o "$work/gnu"
+cc -fno-pie -no-pie -x assembler "$work/x86_64.host.s" -o "$work/minic"
+cc -O0 -fno-pie -no-pie -x c "$source" -o "$work/source.gnu"
+cc -fno-pie -no-pie -x assembler "$work/x86_64.s" -o "$work/source.minic"
+set +e
+"$work/gnu"
+gnu_rc=$?
+"$work/minic"
+minic_rc=$?
+"$work/source.gnu"
+gnu_source_rc=$?
+"$work/source.minic"
+minic_source_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ] ||
+   [ "$gnu_source_rc" -ne 42 ] || [ "$minic_source_rc" -ne 42 ]; then
+    echo "DIRECT_LP64_SOURCE_LABEL_DIFF=FAIL GNU=$gnu_rc MiniC=$minic_rc GNU_source=$gnu_source_rc MiniC_source=$minic_source_rc" >&2
+    exit 1
+fi
+printf 'DIRECT_LP64_SOURCE_LABEL_DIFF=PASS five_isa_S=5 GNU_x86_runtime=%s MiniC_x86_runtime=%s GNU_x86_labels=%s MiniC_x86_labels=%s AArch64_s_bytes=%s LoongArch64_s_bytes=%s\n' \
+  "$gnu_rc" "$minic_rc" "$gnu_source_rc" "$minic_source_rc" \
+  "$(wc -c <"$work/aarch64.s")" "$(wc -c <"$work/loongarch64.s")"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-const-global-record.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+# GNU -O2 oracle -> MiniC C-to-S -> GNU AS/LD + native execution.
+# Static immutable record field facts include a bounded no-op inline getter;
+# never turn mutable, volatile or potentially out-of-bounds reads into constants.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-const-global-record
+mkdir -p "$work"
+
+for name in scalar return; do
+    if [ "$name" = scalar ]; then
+        source="$root/tests/compiler/c0/gnu_const_global_record_scalar.c"
+        unresolved='minic_const_record_guard_failed'
+    else
+        source="$root/tests/compiler/c0/gnu_const_global_record_return.c"
+        unresolved='minic_bad_vic_field'
+    fi
+    cc -E -P -std=gnu11 "$source" -o "$work/$name.i"
+    cc -O2 -std=gnu11 "$source" -o "$work/$name.gnu"
+    "$MINIC_CC" -S "$work/$name.i" --target=x86_64-linux \
+        -o "$work/$name.minic.s"
+    if grep -Fq "$unresolved" "$work/$name.minic.s"; then
+        echo "GNU_CONST_GLOBAL_RECORD=FAIL $name emitted live constant guard" >&2
+        exit 1
+    fi
+    for target in riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
+        "$MINIC_CC" -S "$work/$name.i" --target="$target" \
+            -o "$work/$name.$target.s"
+        if grep -Fq "$unresolved" "$work/$name.$target.s"; then
+            echo "GNU_CONST_GLOBAL_RECORD=FAIL $name $target guard" >&2
+            exit 1
+        fi
+    done
+    cc -c -x assembler "$work/$name.minic.s" -o "$work/$name.minic.o" \
+        2>"$work/$name.as.log" || {
+        sed -n '1,15p' "$work/$name.as.log" >&2
+        exit 1
+    }
+    cc -no-pie -Wl,-z,noexecstack "$work/$name.minic.o" -o "$work/$name.minic"
+    "$work/$name.gnu"
+    "$work/$name.minic"
+done
+
+for variant in MUTABLE VOLATILE UNKNOWN_INDEX OUT_OF_RANGE; do
+    source="$root/tests/compiler/c0/gnu_const_global_record_negative.c"
+    cc -E -P -std=gnu11 -D"TEST_$variant" "$source" \
+        -o "$work/$variant.i"
+    if [ "$variant" != OUT_OF_RANGE ]; then
+        if cc -O2 -std=gnu11 -D"TEST_$variant" -c "$source" \
+            -o "$work/$variant.gnu.o" >"$work/$variant.gnu.log" 2>&1; then
+            echo "GNU_CONST_GLOBAL_RECORD=FAIL GNU accepted $variant" >&2
+            exit 1
+        fi
+        grep -Fq 'global record field is not immutable and fixed' \
+            "$work/$variant.gnu.log"
+    fi
+    "$MINIC_CC" -S "$work/$variant.i" --target=x86_64-linux \
+        -o "$work/$variant.minic.s"
+    cc -c -x assembler "$work/$variant.minic.s" \
+        -o "$work/$variant.minic.o" 2>"$work/$variant.as.log"
+    if ! nm -u "$work/$variant.minic.o" | \
+        grep -Fq minic_global_record_not_constant; then
+        echo "GNU_CONST_GLOBAL_RECORD=FAIL MiniC deleted $variant guard" >&2
+        exit 1
+    fi
+done
+
+if [ -n "${MINIC_X86_DRM_EDID_FROZEN_I:-}" ]; then
+    test -r "$MINIC_X86_DRM_EDID_FROZEN_I"
+    "$MINIC_CC" -S "$MINIC_X86_DRM_EDID_FROZEN_I" \
+        --target=x86_64-linux -fshort-wchar -funsigned-char \
+        -fcf-protection=branch -mindirect-branch=thunk-extern \
+        -mfunction-return=thunk-extern -mindirect-branch-register \
+        -fpatchable-function-entry=16,16 -o "$work/drm_edid.minic.s"
+    cc -c -x assembler "$work/drm_edid.minic.s" \
+        -o "$work/drm_edid.minic.o" 2>"$work/drm_edid.as.log" || {
+        sed -n '1,15p' "$work/drm_edid.as.log" >&2
+        exit 1
+    }
+    if nm -u "$work/drm_edid.minic.o" | grep -Fq '__compiletime_assert_428'; then
+        echo 'GNU_CONST_GLOBAL_RECORD=FAIL frozen drm_edid.o assert_428' >&2
+        exit 1
+    fi
+fi
+
+printf 'GNU_CONST_GLOBAL_RECORD=PASS GNU_O2=2 MiniC_targets=5 GNU_AS_LD=2 native_runtime=4 strict_negative=4 drm_edid=%s\n' \
+    "${MINIC_X86_DRM_EDID_FROZEN_I:+checked}"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-linux-kbuild-disjoint-bitmask-assert.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-linux-kbuild-disjoint-bitmask-assert
+mkdir -p "$work"
+source="$root/tests/compiler/c0/gnu_linux_kbuild_disjoint_bitmask_assert.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/gnu.i"
+cc -std=gnu11 -O2 -S -x c "$work/gnu.i" -o "$work/gnu.s"
+"$MINIC_CC" --target=x86_64-linux -S "$work/gnu.i" -o "$work/minic.s"
+for target in aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/gnu.i" -o "$work/$target.s"
+    if grep -Fq '__compiletime_assert_707' "$work/$target.s"; then
+        echo "KBUILD_DISJOINT_BITMASK_ASSERT=FAIL $target unresolved diagnostic" >&2
+        exit 1
+    fi
+done
+if grep -Fq '__compiletime_assert_707' "$work/gnu.s" ||
+   grep -Fq '__compiletime_assert_707' "$work/minic.s"; then
+    echo 'KBUILD_DISJOINT_BITMASK_ASSERT=FAIL unresolved diagnostic in assembly' >&2
+    exit 1
+fi
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/minic.s" -o "$work/minic.o"
+cc -no-pie "$work/gnu.o" -o "$work/gnu"
+cc -no-pie "$work/minic.o" -o "$work/minic"
+set +e
+"$work/gnu"
+gnu_rc=$?
+"$work/minic"
+minic_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne "$gnu_rc" ]; then
+    echo "KBUILD_DISJOINT_BITMASK_ASSERT=FAIL GNU=$gnu_rc MiniC=$minic_rc" >&2
+    exit 1
+fi
+if [ -n "${MINIC_X86_EXEC_FROZEN_I:-}" ]; then
+    test -r "$MINIC_X86_EXEC_FROZEN_I"
+    "$MINIC_CC" --target=x86_64-linux -S "$MINIC_X86_EXEC_FROZEN_I" \
+        -o "$work/frozen-exec.minic.s"
+    if grep -Fq '__compiletime_assert_707' "$work/frozen-exec.minic.s"; then
+        echo 'KBUILD_DISJOINT_BITMASK_ASSERT=FAIL full Linux fs/exec.i diagnostic' >&2
+        exit 1
+    fi
+    cc -c -x assembler "$work/frozen-exec.minic.s" -o "$work/frozen-exec.minic.o"
+    if nm -u "$work/frozen-exec.minic.o" | grep -Fq '__compiletime_assert_707'; then
+        echo 'KBUILD_DISJOINT_BITMASK_ASSERT=FAIL full Linux fs/exec.i ELF unresolved' >&2
+        exit 1
+    fi
+fi
+printf 'KBUILD_DISJOINT_BITMASK_ASSERT=PASS five_targets=5 GNU_AS=2 GNU_LD=2 GNU_runtime=%s MiniC_runtime=%s frozen_exec=%s\n' \
+    "$gnu_rc" "$minic_rc" "${MINIC_X86_EXEC_FROZEN_I:+checked}"
+@@@ end
+@@@ {"head_lines": 4, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-gnu-linux-kmalloc-index-bool-guard.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+# GNU Linux slab.h's two-argument inline helper: a runtime parameter passed
+# to __builtin_constant_p() must select a proven-zero candidate, never a
+# speculative forced-true/false rewrite of its shared C CALL expression.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-linux-kmalloc-index-bool-guard
+mkdir -p "$work"
+source="$root/tests/compiler/c0/gnu_linux_kmalloc_index_bool_guard.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -std=gnu11 -O2 -S -fno-pie -x c "$work/source.i" -o "$work/gnu.s"
+"$MINIC_CC" --target=x86_64-linux -S "$work/source.i" -o "$work/minic.s"
+if grep -Fq 'call __compiletime_assert_212' "$work/gnu.s" ||
+   grep -Fq 'call __compiletime_assert_212' "$work/minic.s"; then
+    echo 'GNU_LINUX_KMALLOC_INDEX_BOOL=FAIL unresolved guard after zero-fact clone' >&2
+    exit 1
+fi
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/minic.s" -o "$work/minic.o"
+if nm -u "$work/gnu.o" "$work/minic.o" | grep -Fq '__compiletime_assert_212'; then
+    echo 'GNU_LINUX_KMALLOC_INDEX_BOOL=FAIL unexpected external guard' >&2
+    exit 1
+fi
+cc -no-pie "$work/gnu.o" -o "$work/gnu"
+cc -no-pie "$work/minic.o" -o "$work/minic"
+set +e
+"$work/gnu"
+gnu_rc=$?
+"$work/minic"
+minic_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ]; then
+    echo "GNU_LINUX_KMALLOC_INDEX_BOOL=FAIL GNU=$gnu_rc MiniC=$minic_rc" >&2
+    exit 1
+fi
+
+# Negative: a possibly oversized source argument with explicit constant true
+# must not be silently routed through the zero-fact candidate. GNU rejects
+# this diagnostic at -O2; MiniC must retain the genuine unresolved guard if
+# it has not yet diagnosed it during C translation.
+cc -E -P -std=gnu11 -DMINIC_TEST_UNSAFE_TRUE -x c "$source" -o "$work/unsafe.i"
+if cc -O2 -S -x c "$work/unsafe.i" -o "$work/unsafe.gnu.s" \
+        >"$work/unsafe.gnu.stdout" 2>"$work/unsafe.gnu.stderr"; then
+    echo 'GNU_LINUX_KMALLOC_INDEX_BOOL=FAIL GNU accepted unsafe guard' >&2
+    exit 1
+fi
+if "$MINIC_CC" --target=x86_64-linux -S "$work/unsafe.i" \
+        -o "$work/unsafe.minic.s" >"$work/unsafe.minic.stdout" \
+        2>"$work/unsafe.minic.stderr"; then
+    if ! grep -Fq 'call __compiletime_assert_212' "$work/unsafe.minic.s"; then
+        echo 'GNU_LINUX_KMALLOC_INDEX_BOOL=FAIL MiniC silently erased unsafe guard' >&2
+        exit 1
+    fi
+fi
+printf 'GNU_LINUX_KMALLOC_INDEX_BOOL=PASS GNU_AS=2 GNU_LD=2 GNU_runtime=%s MiniC_runtime=%s negative_unsafe=true\n' \
+    "$gnu_rc" "$minic_rc"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-linux-empty-static-stub-cfi.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-empty-static-stub-cfi
+mkdir -p "$work"
+source="$root/tests/compiler/c0/linux-empty-static-stub-cfi.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -O2 -S -x c "$work/source.i" -o "$work/gnu.s"
+"$MINIC_CC" --target=x86_64-linux -S "$work/source.i" -o "$work/minic.s"
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+    if grep -Eq 'minic_missing_cfi_(start|end)' "$work/$target.s"; then
+        echo "LINUX_EMPTY_STATIC_STUB_CFI=FAIL $target retained unused CFI symbol" >&2
+        exit 1
+    fi
+done
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/minic.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/gnu.o" -o "$work/gnu"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'LINUX_EMPTY_STATIC_STUB_CFI=PASS five_targets=5 GNU_AS=2 GNU_LD=2 runtime=2 volatile_side_effect=1\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-linux-rv32-bounce-shortcircuit.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-rv32-bounce-shortcircuit
+mkdir -p "$work"
+source="$root/tests/compiler/c0/linux_rv32_bounce_constant_guard.c"
+
+cc -E -P -std=gnu11 -x c "$source" -o "$work/source.i"
+cc -E -P -std=gnu11 -DMINI_BOUNCE_TEST_DISABLED_ONLY -x c "$source" -o "$work/disabled.i"
+cc -O2 -Werror -c -x c -DMINI_BOUNCE_TEST_DISABLED_ONLY "$source" -o "$work/gnu-disabled.o"
+if nm -u "$work/gnu-disabled.o" | grep -E '(__blk_queue_bounce|bio_has_data|max_low_pfn|max_pfn)'; then
+    echo 'LINUX_RV32_BOUNCE=FAIL GNU -O2 disabled original has missing symbol' >&2
+    exit 1
+fi
+"$MINIC_CC" --target=x86_64-linux -S "$work/disabled.i" -o "$work/minic-disabled.s"
+cc -c -x assembler "$work/minic-disabled.s" -o "$work/minic-disabled.o"
+if nm -u "$work/minic-disabled.o" | grep -E '(__blk_queue_bounce|bio_has_data|max_low_pfn|max_pfn)'; then
+    echo 'LINUX_RV32_BOUNCE=FAIL MiniC disabled-only GNU AS object has missing symbol' >&2
+    exit 1
+fi
+
+function_asm() {
+    awk -v name="$2" '
+        $0 == name ":" { active=1 }
+        active { print }
+        index($0, ".size " name ",") == 1 { active=0 }
+    ' "$1"
+}
+
+for target in x86_64-linux aarch64-linux loongarch64-linux riscv64-linux riscv32-linux; do
+    assembly="$work/$target.s"
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$assembly"
+    function_asm "$assembly" mini_queue_bounce > "$work/disabled-$target.s"
+    function_asm "$assembly" linux_rv32_bounce_enabled > "$work/enabled-$target.s"
+    function_asm "$assembly" linux_rv32_bounce_effectful_left > "$work/effectful-$target.s"
+    function_asm "$assembly" linux_rv32_bounce_true_or > "$work/true-or-$target.s"
+    function_asm "$assembly" linux_rv32_bounce_false_or > "$work/false-or-$target.s"
+    function_asm "$assembly" linux_rv32_bounce_volatile_left > "$work/volatile-$target.s"
+
+    if ! grep -q '^mini_queue_bounce:' "$work/disabled-$target.s" ||
+       grep -Eq '__blk_queue_bounce|bio_has_data|max_low_pfn|max_pfn' "$work/disabled-$target.s"; then
+        echo "LINUX_RV32_BOUNCE=FAIL target=$target disabled branch retained dead call" >&2
+        exit 1
+    fi
+    if ! grep -q '__blk_queue_bounce' "$work/enabled-$target.s" ||
+       ! grep -q 'bio_has_data' "$work/enabled-$target.s" ||
+       ! grep -q 'bio_has_data' "$work/effectful-$target.s" ||
+       ! grep -q 'bio_has_data' "$work/false-or-$target.s" ||
+       grep -q 'bio_has_data' "$work/true-or-$target.s" ||
+       ! grep -q 'runtime_gate' "$work/volatile-$target.s" ||
+       grep -q 'bio_has_data' "$work/volatile-$target.s"; then
+        echo "LINUX_RV32_BOUNCE=FAIL target=$target lost an effect or kept an unreachable one" >&2
+        exit 1
+    fi
+done
+
+echo 'LINUX_RV32_BOUNCE=PASS targets=5 gnu_O2_nm=1 minic_GNU_AS_nm=1 disabled_missing_symbol=0 negatives=enabled,effectful_left,false_or,volatile_left true_or=folded'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-immediate-core-fold.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/loongarch64-immediate-core-fold
+mkdir -p "$work"
+source="$root/tests/compiler/c0/loongarch64_immediate_core_fold.c"
+cc -E -P -std=gnu11 "$source" -o "$work/source.i"
+cc -O2 -Wall -Wextra -Werror -std=gnu11 "$source" -o "$work/gnu"
+for target in loongarch64-linux x86_64-linux aarch64-linux riscv64-linux riscv32-linux; do
+    "$MINIC_CC" --target="$target" -S "$work/source.i" -o "$work/$target.s"
+done
+assembly="$work/loongarch64-linux.s"
+grep -Fq '  addi.d $t0, $t0, 7' "$assembly"
+grep -Fq '  addi.d $t0, $t0, -2048' "$assembly"
+grep -Fq '  andi $t0, $t0, 4095' "$assembly"
+grep -Fq '  xori $t0, $t0, 7' "$assembly"
+grep -Fq '  li.d $t0, 2048' "$assembly"
+if grep -Fq '  addi.d $t0, $t0, 2048' "$assembly"; then
+    echo 'LOONG_IMMEDIATE_CORE_FOLD=FAIL invalid +2048 encoding' >&2
+    exit 1
+fi
+# Both a retained volatile load and its immediate consumer must be present;
+# the intermediate SSA spill/reload and pure constant materialization vanish.
+sed -n '/^minic_immediate_load_chain:/,/^\.size minic_immediate_load_chain/p' \
+    "$assembly" > "$work/load_chain.s"
+grep -Fq '  ld.d $t0, $t1, 0' "$work/load_chain.s"
+grep -Fq '  addi.d $t0, $t0, 7' "$work/load_chain.s"
+if grep -Fq '  li.d $t0, 7' "$work/load_chain.s" ||
+   grep -Fq '  st.d $t0, $sp, 8' "$work/load_chain.s"; then
+    echo 'LOONG_IMMEDIATE_CORE_FOLD=FAIL redundant constant or load spill' >&2
+    exit 1
+fi
+cc -c -x assembler "$work/x86_64-linux.s" -o "$work/minic.o"
+cc -no-pie -Wl,-z,noexecstack "$work/minic.o" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'LOONG_IMMEDIATE_CORE_FOLD=PASS targets=5 immediates=4 out_of_range=1 volatile_load_chain=1 GNU_O2=1 GNU_AS_LD=1 runtime=2\n'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-riscv-adjacent-private-stack-forward.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/riscv-adjacent-private-stack-forward
+mkdir -p "$work"
+cc -E -P -std=gnu11 \
+    "$root/tests/compiler/c0/riscv_adjacent_private_stack_forward.c" \
+    -o "$work/input.i"
+
+for target in riscv64-linux riscv32-linux; do
+    output="$work/$target.s"
+    "$MINIC_CC" --target="$target" -S "$work/input.i" -o "$output"
+    python3 - "$output" "$target" <<'PY_VERIFY'
+import re
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_text().splitlines()
+target = sys.argv[2]
+word_store, word_load = ('sd', 'ld') if target == 'riscv64-linux' else ('sw', 'lw')
+
+def body(name):
+    start = lines.index(name + ':')
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i].startswith('.size ' + name + ',')), None)
+    if end is None:
+        raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL missing_function=' + name)
+    return [line.strip() for line in lines[start:end]]
+
+functions = {name: body('mini_stack_forward_' + name)
+             for name in ('chain', 'call', 'asm', 'branch', 'large')}
+# The sealed far-entry and its immediately following Core block are separate
+# addressable MachineIR blocks. They must now fall through without a fake j.
+for name, assembly in functions.items():
+    prefix = '.Lminic_mir_mini_stack_forward_' + name
+    if not any(before == prefix + '_1:' and after == prefix + '_2:'
+               for before, after in zip(assembly, assembly[1:])):
+        raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL far_entry_fallthrough=' +
+                         name)
+word = re.compile(r'^(s[dw]|l[dw]) x([0-9]+), ([0-9]+)\(x([0-9]+)\)$')
+stores = loads = 0
+for name, assembly in functions.items():
+    for before, after in zip(assembly, assembly[1:]):
+        lhs, rhs = word.fullmatch(before), word.fullmatch(after)
+        if lhs is not None and lhs.group(1) == word_store:
+            stores += 1
+            if (rhs is not None and rhs.group(1) == word_load and
+                    lhs.group(2, 3, 4) == rhs.group(2, 3, 4)):
+                raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL residual_adjacent_spill=' + name)
+        if rhs is not None and rhs.group(1) == word_load:
+            loads += 1
+if stores < 20 or loads < 20:
+    raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL lost_real_stack_accesses=' + target)
+
+# A call's physical clobbers, a source-ASM memory barrier and different
+# branch successors must still materialize actual memory operations.
+for name, pattern in [('call', r'^jalr ra,'), ('asm', r'^nop$'),
+                      ('branch', r'^beqz ')]:
+    code = functions[name]
+    matching = [i for i, line in enumerate(code) if re.search(pattern, line)]
+    if not matching or not any(re.match('^' + word_load + ' ', line)
+                               for line in code[matching[0] + 1:]):
+        raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL barrier=' + name)
+# Both widths must use the out-of-range private frame-transfer helper. The
+# scratch register address calculation is a real intervening instruction.
+large = functions['large']
+if not any((match := re.fullmatch(r'li x31, ([0-9]+)', line)) and
+           int(match.group(1)) > 2047 for line in large) or not any(
+               line == 'add x31, x2, x31' for line in large):
+    raise SystemExit('RV_ADJACENT_PRIVATE_STACK=FAIL large_frame=' + target)
+print('RV_ADJACENT_PRIVATE_STACK=PASS target=' + target +
+      ' exact_adjacent=elided far_entry=fallthrough' +
+      ' call_asm_branch=retained large_frame=retained' +
+      ' actual_stores=' + str(stores) + ' actual_loads=' + str(loads))
+PY_VERIFY
+done
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-reachable-vma-assert.sh", "shared": "9ec69bd135e58c21"}
+#!/bin/sh
+# Verify that x86-64 follows shared Core CFG reachability while keeping GNU
+# compilation and GNU AS/LD as independent strict-differential oracles.
+work=${BUILD_DIR:-"$root/build/debug"}/tests/x86-reachable-vma-assert
+mkdir -p "$work"
+source="$root/tests/compiler/c0/x86_reachable_vma_assert.c"
+cc -E -P -std=gnu11 -x c "$source" -o "$work/probe.i"
+cc -std=gnu11 -O2 -S -fno-pie -x c "$work/probe.i" -o "$work/gnu.s"
+"$MINIC_CC" --target=x86_64-linux -S "$work/probe.i" -o "$work/minic.s"
+
+# The original Linux source used a diagnostic attribute, not a runtime stub.
+# Neither compiler is permitted to leave a reference to the diagnostic call.
+if grep -Fq '__compiletime_assert_80' "$work/gnu.s" ||
+   grep -Fq '__compiletime_assert_80' "$work/minic.s"; then
+    echo 'X86_REACHABLE_VMA_ASSERT=FAIL unreachable diagnostic leaked' >&2
+    exit 1
+fi
+cc -c -x assembler "$work/gnu.s" -o "$work/gnu.o"
+cc -c -x assembler "$work/minic.s" -o "$work/minic.o"
+if nm -u "$work/gnu.o" "$work/minic.o" | grep -Fq '__compiletime_assert_80'; then
+    echo 'X86_REACHABLE_VMA_ASSERT=FAIL undefined diagnostic' >&2
+    exit 1
+fi
+cc -no-pie "$work/gnu.o" -o "$work/gnu"
+cc -no-pie "$work/minic.o" -o "$work/minic"
+set +e
+"$work/gnu"
+gnu_rc=$?
+"$work/minic"
+minic_rc=$?
+set -e
+if [ "$gnu_rc" -ne 42 ] || [ "$minic_rc" -ne 42 ]; then
+    echo "X86_REACHABLE_VMA_ASSERT=FAIL GNU=$gnu_rc MiniC=$minic_rc" >&2
+    exit 1
+fi
+
+# Optional full 2.4 MiB original GNU -E VDSO witness from the strict Linux
+# runtime artifact; the committed fixture above remains self-contained.
+if [ -n "${MINIC_X86_VMA_FROZEN_I:-}" ]; then
+    test -r "$MINIC_X86_VMA_FROZEN_I"
+    "$MINIC_CC" --target=x86_64-linux -S "$MINIC_X86_VMA_FROZEN_I" \
+        -o "$work/frozen-vma.minic.s"
+    if grep -Fq 'call __compiletime_assert_80' "$work/frozen-vma.minic.s"; then
+        echo 'X86_REACHABLE_VMA_ASSERT=FAIL frozen Linux VDSO unreachable diagnostic' >&2
+        exit 1
+    fi
+fi
+printf 'X86_REACHABLE_VMA_ASSERT=PASS GNU_AS=2 GNU_LD=2 GNU_runtime=%s MiniC_runtime=%s frozen_vma=%s\n' \
+    "$gnu_rc" "$minic_rc" "${MINIC_X86_VMA_FROZEN_I:+checked}"
+@@@ end

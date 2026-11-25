@@ -1,0 +1,243 @@
+@@@ {"id": "bc2d0d0676a551db", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+cc="$1"
+test -x "$cc"
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-encoded-sysreg.sh", "shared": "bc2d0d0676a551db"}
+#!/usr/bin/env bash
+# Exact Linux v6.6.143 original sysreg.h SYS_* whole GNU macro ISA.
+d=$(mktemp -d);trap 'rm -rf "$d"' EXIT
+python3 - "$d/orig.i" <<'PY'
+import sys,json
+s="\t.irp\tnum,"+",".join(map(str,range(31)))+"\n"
+s+="\t.equ\t.L__gpr_num_x\\num, \\num\n"
+s+="\t.equ\t.L__gpr_num_w\\num, \\num\n"
+s+="\t.endr\n\t.equ\t.L__gpr_num_xzr, 31\n"
+s+="\t.equ\t.L__gpr_num_wzr, 31\n"
+s+="\t.macro\tmrs_s, rt, sreg\n"
+s+=".inst (0xd5200000|(\\sreg)|(.L__gpr_num_\\rt))\n"
+s+="\t\t.endm\n"
+regs=[(3,0,0,0,0),(3,0,0,0,5),(3,0,0,4,0),(3,0,0,6,2),
+      (3,0,0,7,0),(3,0,0,7,1),(3,0,4,6,0),(3,3,0,0,1),
+      (3,3,14,0,5),(3,3,14,0,6),
+      # Original Linux KVM sys_regs.c DBGVCR32_EL2 uses op0=2,
+      # uniquely encoded S2_4_C0_C7_0, not a license for arbitrary op0=2.
+      (2,4,0,7,0)]
+with open(sys.argv[1],"w") as f:
+ for i,vals in enumerate(regs):
+  e="("+" | ".join("((%d) << %d)"%(v,shift) for v,shift
+                       in zip(vals,(19,16,12,8,5)))+")"
+  t=s+"\tmrs_s %0, "+e+"\n\t.purgem\tmrs_s\n"
+  f.write("unsigned long long linux_sysreg_%02d(void) {\n"%i)
+  f.write(" unsigned long long ret;\n")
+  f.write(" __asm__ __volatile__(%s : \"=r\"(ret));\n"%json.dumps(t))
+  f.write(" return ret;\n}\n")
+PY
+"$cc" --target=aarch64-linux -S "$d/orig.i" -o "$d/mini.s"
+# MachineIR emits all eleven exact Linux .irp/.macro definitions as GNU
+# source; only GNU GAS resolves the .inst(sreg|physical-register) expression.
+# The actual encoded ISA is asserted below with independent GNU objdump.
+test "$(grep -Fxc '.inst (0xd5200000|(\sreg)|(.L__gpr_num_\rt))' "$d/mini.s")" -eq 11
+test "$(grep -Ec '^[[:space:]]*mrs_s[[:space:]]+x9,' "$d/mini.s")" -eq 11
+gnu_cross=0
+if [[ "${MINIC_SYSREG_SOURCE_ONLY:-0}" != 1 ]];then
+ aarch64-linux-gnu-gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
+ aarch64-linux-gnu-gcc -c -O0 -x c "$d/orig.i" -o "$d/gnu.o"
+ aarch64-linux-gnu-objdump -d "$d/mini.o" > "$d/mini.dis"
+ aarch64-linux-gnu-objdump -d "$d/gnu.o" > "$d/gnu.dis"
+ test "$(grep -Ec '[[:space:]]mrs[[:space:]]+' "$d/mini.dis")" -eq 11
+ test "$(grep -Ec '[[:space:]]mrs[[:space:]]+' "$d/gnu.dis")" -eq 11
+ gnu_cross=1
+fi
+for bad in invalid-register invalid-dbgvcr injected wrong-output no-volatile;do
+ case "$bad" in
+ invalid-register) sed 's/((3) << 19)/((2) << 19)/g' "$d/orig.i" >"$d/bad.i" ;;
+ invalid-dbgvcr) sed '/linux_sysreg_10/,/^}/s/((0) << 5)/((1) << 5)/' "$d/orig.i" >"$d/bad.i" ;;
+ injected) sed 's/mrs_s %0/mrs_s %0; nop/g' "$d/orig.i" >"$d/bad.i" ;;
+ wrong-output) sed 's/"=r"(ret)/"=m"(ret)/g' "$d/orig.i" >"$d/bad.i" ;;
+ no-volatile) sed 's/__volatile__//g' "$d/orig.i" >"$d/bad.i" ;;
+ esac
+ if "$cc" --target=aarch64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1;then
+  echo "AARCH64_ILLEGAL_ENCODED_SYSREG=$bad" >&2;exit 1
+ fi
+ test ! -e "$d/bad.s"
+done
+echo "MINIC_AARCH64_SYSREG_S=PASS original_macro=1 encoded_registers=11 DBGVCR32_EL2=1 GNU_cross=$gnu_cross negative=5 privileged_exec=not_run"
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-kvm-isb-alternative.sh", "shared": "bc2d0d0676a551db"}
+#!/usr/bin/env bash
+# Linux 6.6 arm64 KVM feature-95 stage-2 barrier: both patch directions
+# retain original PREL32 relocation records and equal-length GNU guards.
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+cat >"$d/orig.i" <<'EOF'
+void kvm_isb_to_nop(void) {
+  asm(".if 1 == 1\n"
+      "661:\n\tisb\n"
+      "662:\n"
+      ".pushsection .altinstructions,\"a\"\n"
+      " .word 661b - .\n"
+      " .word 663f - .\n"
+      " .hword 95\n"
+      " .byte 662b-661b\n"
+      " .byte 664f-663f\n"
+      ".popsection\n"
+      ".subsection 1\n"
+      "663:\n\tnop\n"
+      "664:\n"
+      ".org\t. - (664b-663b) + (662b-661b)\n\t"
+      ".org\t. - (662b-661b) + (664b-663b)\n\t"
+      ".previous\n"
+      ".endif\n");
+}
+void kvm_nop_to_isb(void) {
+  asm(".if 1 == 1\n"
+      "661:\n\tnop\n"
+      "662:\n"
+      ".pushsection .altinstructions,\"a\"\n"
+      " .word 661b - .\n"
+      " .word 663f - .\n"
+      " .hword 95\n"
+      " .byte 662b-661b\n"
+      " .byte 664f-663f\n"
+      ".popsection\n"
+      ".subsection 1\n"
+      "663:\n\tisb\n"
+      "664:\n"
+      ".org\t. - (664b-663b) + (662b-661b)\n\t"
+      ".org\t. - (662b-661b) + (664b-663b)\n\t"
+      ".previous\n"
+      ".endif\n");
+}
+EOF
+"$cc" --target=aarch64-linux -S "$d/orig.i" -o "$d/mini.s"
+test "$(grep -Fc '  .hword 95' "$d/mini.s")" -eq 2
+test "$(grep -Fc '  .word 661b - .' "$d/mini.s")" -eq 2
+test "$(grep -Fc '  .word 663f - .' "$d/mini.s")" -eq 2
+test "$(grep -Fc '  .org . - (664b-663b) + (662b-661b)' "$d/mini.s")" -eq 2
+test "$(grep -Fc '  .org . - (662b-661b) + (664b-663b)' "$d/mini.s")" -eq 2
+for bad in wrong-cap drop-org injected-op clobber; do
+  case "$bad" in
+    wrong-cap)
+      sed '/void kvm_isb_to_nop/,/^}/s/\.hword 95/\.hword 96/' "$d/orig.i" >"$d/bad.i" ;;
+    drop-org)
+      sed '/void kvm_isb_to_nop/,/^}/s/\.org\\t\. - (662b-661b) + (664b-663b)/.byte 0/' "$d/orig.i" >"$d/bad.i" ;;
+    injected-op)
+      sed '/void kvm_isb_to_nop/,/^}/s/663:\\n\\tnop/663:\\n\\tnop\\n\\tnop/' "$d/orig.i" >"$d/bad.i" ;;
+    clobber)
+      sed '/void kvm_isb_to_nop/,/^}/s/".endif\\n");/".endif\\n" : : : "memory");/' "$d/orig.i" >"$d/bad.i" ;;
+  esac
+  if "$cc" --target=aarch64-linux -S "$d/bad.i" -o "$d/bad.s" >/dev/null 2>&1; then
+    echo "AARCH64_KVM_ISB_ALTERNATIVE_UNSAFE_ACCEPT=$bad" >&2
+    exit 1
+  fi
+  test ! -e "$d/bad.s"
+done
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+  aarch64-linux-gnu-gcc -c -x assembler "$d/mini.s" -o "$d/mini.o"
+  aarch64-linux-gnu-gcc -c -x c "$d/orig.i" -o "$d/gnu.o"
+  echo 'AARCH64_KVM_ISB_ALTERNATIVE_GAS=PASS'
+else
+  echo 'AARCH64_KVM_ISB_ALTERNATIVE_GAS=SKIP'
+fi
+echo 'AARCH64_KVM_ISB_ALTERNATIVE=PASS feature95=2 old_ISB_new_NOP=1 old_NOP_new_ISB=1 reloc_pairs=2 org_guards=4 negative=4'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-abi-carry-xadd.sh", "shared": "bc2d0d0676a551db"}
+#!/usr/bin/env bash
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+cat > "$d/carry.i" <<'SRC'
+typedef unsigned int u32;
+typedef unsigned short u16;
+static inline u16 csum(const void *iph,unsigned int ihl){
+ unsigned int sum;
+ asm("  movl (%1), %0\n" "  subl $4, %2\n" "  jbe 2f\n"
+     "  addl 4(%1), %0\n" "  adcl 8(%1), %0\n" "  adcl 12(%1), %0\n"
+     "1: adcl 16(%1), %0\n" "  lea 4(%1), %1\n" "  decl %2\n"
+     "  jne\t1b\n" "  adcl $0, %0\n" "  movl %0, %2\n"
+     "  shrl $16, %0\n" "  addw %w2, %w0\n" "  adcl $0, %0\n"
+     "  notl %0\n" "2:"
+     : "=r"(sum), "=r"(iph), "=r"(ihl) : "1"(iph), "2"(ihl) : "memory");
+ return (u16)sum;
+}
+int main(void) {u32 h[6]={0x45,0x10002,0x30004,0x50006,0x70008,0};return csum(h,5)==csum(h,5)?42:1;}
+SRC
+cat > "$d/smp.i" <<'SRC'
+unsigned char b=1; unsigned short w=2; unsigned int l=3; unsigned long q=4;
+unsigned char a=7;
+void f0(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddb %b0, %1\n" : "+q"(a),"+m"(b)::"memory","cc");}
+unsigned short c=8;
+void f1(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddw %w0, %1\n" : "+r"(c),"+m"(w)::"memory","cc");}
+unsigned int e=9;
+void f2(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddl %0, %1\n" : "+r"(e),"+m"(l)::"memory","cc");}
+unsigned long f=10;
+void f3(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(f),"+m"(q)::"memory","cc");}
+long long qll=40;
+long long addll=-3;
+void f4(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(addll),"+m"(qll)::"memory","cc");}
+unsigned long long qull=13;
+unsigned long long addull=3;
+void f5(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(addull),"+m"(qull)::"memory","cc");}
+unsigned long mixedmem=23;
+long long mixedreg=-2;
+void f6(void) {asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(mixedreg),"+m"(mixedmem)::"memory","cc");}
+typedef long long s64;
+typedef struct {s64 counter;} atomic64_t;
+static inline s64 kernel_atomic64_add_return(s64 i,atomic64_t *v) {
+ s64 prior=i;
+ asm volatile(".pushsection .smp_locks,\"a\"\n.balign 4\n.long 671f - .\n.popsection\n671:\n\tlock; xaddq %q0, %1\n" : "+r"(prior),"+m"(v->counter)::"memory","cc");
+ return i+prior;
+}
+int main(void) {
+ f0();if(a!=1||b!=8)return 1;
+ f1();if(c!=2||w!=10)return 2;
+ f2();if(e!=3||l!=12)return 3;
+ f3();if(f!=4||q!=14)return 4;
+ f4();if(addll!=40||qll!=37)return 5;
+ f5();if(addull!=13||qull!=16)return 6;
+ f6();if(mixedreg!=23||mixedmem!=21)return 7;
+ atomic64_t counter={17};
+ if(kernel_atomic64_add_return(5,&counter)!=22||counter.counter!=22)return 8;
+ return 42;
+}
+SRC
+cat > "$d/records.i" <<'SRC'
+typedef struct {unsigned int value;} Small;
+typedef struct {unsigned long value;} Medium;
+typedef struct {void* ptr;unsigned int value;} Pair;
+static Small a(unsigned int x){return (Small){x};}
+static Medium b(unsigned long x){return (Medium){x};}
+static Pair c(void*p,unsigned int x){return (Pair){p,x};}
+int main(void){
+ Small s=a(19);Medium m=b(20);Pair p=c((void*)1,2);
+ return s.value==19&&m.value==20&&p.ptr==(void*)1&&p.value==2?42:1;
+}
+SRC
+for kind in carry smp records;do
+ if [ "$kind" = carry ]; then
+  MINIC_X86_TYPED_SELECT_TRACE=1 MINIC_X86_TYPED_REJECT_TRACE=1 "$cc" --target=x86_64-linux -S "$d/$kind.i" -o "$d/$kind.s"
+ else
+  "$cc" --target=x86_64-linux -S "$d/$kind.i" -o "$d/$kind.s"
+ fi
+ test -s "$d/$kind.s"
+ gcc -static -x assembler "$d/$kind.s" -o "$d/$kind-minic"
+ gcc -static -x c "$d/$kind.i" -o "$d/$kind-gnu"
+ for compiler in minic gnu;do
+  code=0;"$d/$kind-$compiler" || code=$?
+  test "$code" -eq 42 || { echo "$kind/$compiler returned $code" >&2;exit 1; }
+ done
+ echo "ORIGINAL_X86_GNU_DIFF=$kind PASS"
+done
+readelf -SW "$d/smp-minic" | grep -Fq '.smp_locks'
+sed 's/lock; xaddb/lock; xorb/' "$d/smp.i" > "$d/unsafe.i"
+if "$cc" --target=x86_64-linux -S "$d/unsafe.i" -o "$d/unsafe.s" >/dev/null 2>&1;then
+ echo 'unqualified lock xadd accepted' >&2;exit 1
+fi
+test ! -e "$d/unsafe.s"
+sed 's/long long qll=40;/int qll=40;/' "$d/smp.i" > "$d/wrong-width.i"
+if "$cc" --target=x86_64-linux -S "$d/wrong-width.i" -o "$d/wrong-width.s" >/dev/null 2>&1;then
+ echo 'width-mismatched xaddq accepted' >&2;exit 1
+fi
+test ! -e "$d/wrong-width.s"
+echo 'ORIGINAL_X86_LINUX_CARRY_XADD_RECORD=PASS GNU_oracle=3/3 hardware_XADD=8/8 signed_long_long=1 unsigned_long_long=1 mixed_long_ll=1 kernel_atomic64_add_return=1 width_reject=1 no_unsafe_fallback=1'
+@@@ end

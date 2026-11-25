@@ -1,0 +1,179 @@
+@@@ {"id": "5e34ded361d9a539", "kind": "shared", "newline": true}
+set -eu
+: "${MINIC:?Set MINIC to the absolute path of minic-cc}"
+: "${CC:=cc}"
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-core-cfg-fold-effectful-conditions.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Compare observable CFG-condition effects against native GNU C semantics.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/core-cfg-fold-effectful-conditions"}
+mkdir -p "$work"
+
+for test in core_cfg_fold_effectful_conditions core_cfg_fold_effectful_boolean_range; do
+    source_file="$root/tests/compiler/c0/$test.c"
+    "$CC" -std=gnu11 -O2 "$source_file" -o "$work/$test.gnu"
+    "$CC" -std=gnu11 -E -P "$source_file" -o "$work/$test.i"
+    "$MINIC" --target=x86_64-linux -S "$work/$test.i" -o "$work/$test.s"
+    "$CC" -no-pie "$work/$test.s" -o "$work/$test.minic"
+    "$work/$test.gnu"
+    "$work/$test.minic"
+    printf 'PASS %s (GNU/MiniC)\n' "$test"
+done
+@@@ end
+@@@ {"head_lines": 5, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-core-if-snapshot-and-prune.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Core IF-fact snapshot ownership and pre-prune/post-prune status provenance.
+# A dead static helper may fail initial lowering (observable trace) without
+# being a final-emission failure. The same unsupported body called from a live
+# function must still cause a strict compilation error.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/core-if-snapshot-prune"}
+mkdir -p "$work"
+
+dead="$root/tests/compiler/c0/core_failed_unreachable_function_prune.c"
+live="$root/tests/compiler/c0/core_if_snapshot_cleanup_negative.c"
+"$CC" -std=gnu11 -O2 "$dead" -o "$work/gnu"
+"$CC" -E -P -x c "$dead" -o "$work/dead.i"
+"$CC" -E -P -x c "$live" -o "$work/live.i"
+
+for target in x86_64-linux riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
+    MINIC_CORE_FAILURE_CENSUS=1 "$MINIC" --target="$target" -S "$work/dead.i" \
+        -o "$work/$target.s" 2>"$work/$target.trace"
+    grep -F 'reason=lower-status function=unused_after_core_fold kind=5 status=1' \
+        "$work/$target.trace" >/dev/null
+    if grep -F 'MINIC_CORE_FUNCTION_FAILURE' "$work/$target.trace" >/dev/null; then
+        printf 'FAIL: dead Core function counted as live failure on %s\n' "$target" >&2
+        exit 1
+    fi
+    if MINIC_CORE_FAILURE_CENSUS=1 "$MINIC" --target="$target" -S "$work/live.i" \
+        -o "$work/live-$target.s" 2>"$work/live-$target.trace"; then
+        printf 'FAIL: live unsupported IF unexpectedly compiled on %s\n' "$target" >&2
+        exit 1
+    fi
+    grep -F 'reason=lower-status function=unsupported_if_body kind=5 status=1' \
+        "$work/live-$target.trace" >/dev/null
+    grep -F 'reason=lower-status function=unsupported_else_body kind=5 status=1' \
+        "$work/live-$target.trace" >/dev/null
+    grep -F 'stage=if reason=then-body function=unsupported_if_body status=1' \
+        "$work/live-$target.trace" >/dev/null
+    grep -F 'stage=if reason=else-body function=unsupported_else_body status=1' \
+        "$work/live-$target.trace" >/dev/null
+    grep -F 'MINIC_CORE_FUNCTION_FAILURE kind=UNSUPPORTED' \
+        "$work/live-$target.trace" >/dev/null
+done
+
+"$CC" -no-pie "$work/x86_64-linux.s" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'PASS Core IF cleanup and failed-dead-function post-prune provenance: 5 ISA -S, GCC/MiniC native\n'
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-core-local-effect-summary.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Source effect summary: white-box C0 AST contract, GNU native differential,
+# and the same accepted C source across all five registered target backends.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/core-local-effect-summary"}
+mkdir -p "$work"
+
+"$CC" -std=c11 -Wall -Wextra -Werror -pedantic \
+    -I"$root/include" -I"$root/src" \
+    "$root/tests/core/core_local_effect_summary_test.c" \
+    "$root/src/compiler/c_lower/core_lower_local_effects.c" \
+    -o "$work/effects-unit"
+"$work/effects-unit"
+
+source_file="$root/tests/compiler/c0/core_local_effect_summary.c"
+"$CC" -std=gnu11 -O0 "$source_file" -o "$work/gnu"
+"$CC" -std=gnu11 -E -P "$source_file" -o "$work/test.i"
+for target in x86_64-linux riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
+    "$MINIC" --target="$target" -S "$work/test.i" -o "$work/$target.s"
+done
+"$CC" -no-pie "$work/x86_64-linux.s" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'PASS Core source effects: AST unit, GNU native, five targets -S\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-core-rv32-va-record-cursor.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Host C oracle + RV32 compiler emission. Runtime requires an RV32 sysroot/QEMU.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/core-rv32-va-record-cursor"}
+source_file="$root/tests/compiler/c0/core_rv32_va_record_cursor.c"
+mkdir -p "$work"
+
+"$CC" -std=gnu11 -O2 "$source_file" -o "$work/reference-host"
+"$work/reference-host"
+"$CC" -std=gnu11 -E -P "$source_file" -o "$work/input.i"
+"$MINIC" --target=riscv32-linux -S "$work/input.i" -o "$work/record-rv32.s"
+test -s "$work/record-rv32.s"
+printf '%s\n' 'PASS host GNU oracle and MiniC RV32 compile-to-assembly'
+
+# Do not claim an RV32 ABI/runtime pass without both an actual ILP32 compiler
+# and QEMU. CI can opt into the stronger differential oracle explicitly.
+if [ "${RUN_RV32_RUNTIME:-0}" != 1 ]; then
+    printf '%s\n' 'SKIP RV32 execution (set RUN_RV32_RUNTIME=1 with RISCV32_CC/QEMU_RISCV32)'
+    exit 0
+fi
+: "${RISCV32_CC:?Set RISCV32_CC to an ILP32-capable cross-GCC}"
+: "${QEMU_RISCV32:?Set QEMU_RISCV32 to qemu-riscv32}"
+"$RISCV32_CC" -static -O2 -march=rv32i -mabi=ilp32 "$source_file" -o "$work/reference-rv32"
+"$RISCV32_CC" -static -march=rv32i -mabi=ilp32 "$work/record-rv32.s" -o "$work/minic-rv32"
+"$QEMU_RISCV32" "$work/reference-rv32"
+"$QEMU_RISCV32" "$work/minic-rv32"
+printf '%s\n' 'PASS RV32 GNU/MiniC runtime oracle'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-core-switch-case-fact-isolation.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Verify direct case-entry and real fallthrough local-fact semantics against GCC.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/core-switch-case-fact-isolation"}
+mkdir -p "$work"
+
+source_file="$root/tests/compiler/c0/core_switch_case_fact_isolation.c"
+"$CC" -std=gnu11 -O0 "$source_file" -o "$work/gnu"
+"$CC" -std=gnu11 -E -P "$source_file" -o "$work/test.i"
+"$MINIC" --target=x86_64-linux -S "$work/test.i" -o "$work/minic.s"
+"$CC" -no-pie "$work/minic.s" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+printf 'PASS core switch case facts (GNU/MiniC direct entry and fallthrough)\n'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-packed-bitfield-cross-word-window.sh", "shared": "5e34ded361d9a539"}
+#!/bin/sh
+# Packed 32-bit field at bit offset 1 needs five bytes/64-bit Core transport.
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+work=${BUILD_DIR:-"$root/build/packed-bitfield-cross-word"}
+mkdir -p "$work"
+source_file="$root/tests/compiler/c0/packed_bitfield_cross_word_window.c"
+
+"$CC" -std=gnu11 -O0 "$source_file" -o "$work/gnu"
+"$CC" -std=gnu11 -E -P "$source_file" -o "$work/input.i"
+for target in x86_64-linux riscv32-linux riscv64-linux aarch64-linux loongarch64-linux; do
+    "$MINIC" --target="$target" -S "$work/input.i" -o "$work/$target.s"
+    test -s "$work/$target.s"
+done
+"$CC" -no-pie "$work/x86_64-linux.s" -o "$work/minic"
+"$work/gnu"
+"$work/minic"
+
+# Existing 64-bit Core bit containers cannot transport a 65-bit span. Until
+# the high/low split model lands, GCC accepts the type but MiniC must reject
+# the function, never silently truncate or emit a nine-byte wide access.
+limit="$root/tests/compiler/c0/packed_bitfield_cross_word_64_limit.c"
+"$CC" -std=gnu11 -fsyntax-only "$limit"
+"$CC" -std=gnu11 -E -P "$limit" -o "$work/limit.i"
+if "$MINIC" --target=x86_64-linux -S "$work/limit.i" -o "$work/limit.s" \
+    >"$work/limit.stdout" 2>"$work/limit.stderr"; then
+    printf '%s\n' 'unsupported 65-bit packed span was silently admitted' >&2
+    exit 1
+fi
+grep -F "Core IR does not yet support function 'read_nine'" "$work/limit.stderr" >/dev/null
+printf '%s\n' 'PACKED_CROSS_WORD=PASS GNU_native=1 MiniC_native=1 five_ISA_S=5 65_bit_limit=fail_closed'
+@@@ end

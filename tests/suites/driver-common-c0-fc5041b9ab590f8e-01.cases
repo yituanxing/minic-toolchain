@@ -1,0 +1,74 @@
+@@@ {"id": "fc5041b9ab590f8e", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+cc=${1:?MiniC binary};test -x "$cc"
+d=$(mktemp -d);trap 'rm -rf "$d"' EXIT
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-aarch64-linux-cmpwait.sh", "shared": "fc5041b9ab590f8e"}
+#!/usr/bin/env bash
+cat > "$d/cmpwait.i" <<'SRC'
+typedef unsigned int u32;
+static inline void __cmpwait_case_32(volatile void *ptr,unsigned long val) {
+ unsigned long tmp;
+ asm volatile(" sevl\n" " wfe\n" " ldxr\t%w[tmp], %[v]\n"
+ " eor %w[tmp], %w[tmp], %w[val]\n"
+ " cbnz %w[tmp], 1f\n" " wfe\n" "1:"
+ : [tmp] "=&r" (tmp), [v] "+Q" (*(u32 *)ptr) : [val] "r" (val));
+}
+static volatile u32 value=1;
+int main(void) {__cmpwait_case_32((void *)&value,0);return value==1?42:1;}
+SRC
+"$cc" --target=aarch64-linux -S "$d/cmpwait.i" -o "$d/mini.s"
+grep -q 'ldxr w9' "$d/mini.s"
+grep -q 'sevl' "$d/mini.s"
+if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]]; then
+ aarch64-linux-gnu-gcc -static -x c "$d/cmpwait.i" -o "$d/gnu"
+ aarch64-linux-gnu-gcc -static -x assembler "$d/mini.s" -o "$d/mini"
+ for exe in mini gnu;do rc=0;timeout 30s qemu-aarch64 "$d/$exe" || rc=$?;test "$rc" -eq 42;done
+fi
+sed 's/ldxr/ldr/' "$d/cmpwait.i" > "$d/unsafe.i"
+if "$cc" --target=aarch64-linux -S "$d/unsafe.i" -o "$d/unsafe.s" >/dev/null 2>&1;then
+ echo 'nonexclusive CMPWAIT accepted' >&2;exit 1
+fi
+test ! -e "$d/unsafe.s"
+echo 'AARCH64_ORIGINAL_CMPWAIT=PASS exclusive=1 negative=rejected'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-ordered-tsc.sh", "shared": "fc5041b9ab590f8e"}
+#!/usr/bin/env bash
+cat > "$d/clock.i" <<'SRC'
+unsigned long long read_clock(void) {
+ unsigned long low,high;
+ asm volatile("# ALT: oldinstr2\n661:\n\trdtsc\n662:\n# ALT: padding2\n.skip -((((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & -(-((6651f-6641f) < (6652f-6642f))))) - (662b-661b)) > 0) * (((6651f-6641f) ^ (((6651f-6641f) ^ (6652f-6642f)) & -(-((6651f-6641f) < (6652f-6642f))))) - (662b-661b)), 0x90\n663:\n.pushsection .altinstructions,\"a\"\n .long 661b - .\n .long 6641f - .\n .4byte (20*32+ 2)\n .byte 663b-661b\n .byte 6651f-6641f\n .long 661b - .\n .long 6642f - .\n .4byte ( 1*32+27)\n .byte 663b-661b\n .byte 6652f-6642f\n.popsection\n.pushsection .altinstr_replacement, \"ax\"\n# ALT: replacement 1\n6641:\n\tlfence; rdtsc\n6651:\n# ALT: replacement 2\n6642:\n\trdtscp\n6652:\n.popsection\n" : "=a"(low), "=d"(high) :: "ecx");
+ return low | high << 32;
+}
+int main(void) {return read_clock()?42:1;}
+SRC
+"$cc" --target=x86_64-linux -S "$d/clock.i" -o "$d/mini.s"
+grep -Fq '.altinstructions' "$d/mini.s"
+grep -Fq '.altinstr_replacement' "$d/mini.s"
+if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]]; then
+ gcc -static -x assembler "$d/mini.s" -o "$d/mini"
+ gcc -static -x c "$d/clock.i" -o "$d/gnu"
+ for exe in mini gnu;do rc=0;"$d/$exe" || rc=$?;test "$rc" -eq 42;done
+fi
+sed 's/lfence; rdtsc/lfence; hlt/' "$d/clock.i" > "$d/unsafe.i"
+if "$cc" --target=x86_64-linux -S "$d/unsafe.i" -o "$d/unsafe.s" >/dev/null 2>&1;then
+ echo 'unsafe ordered-clock alternative accepted' >&2;exit 1
+fi
+test ! -e "$d/unsafe.s"
+echo 'X86_ORIGINAL_ORDERED_TSC=PASS exact_bytes=652 alt_relocations=2 negative=rejected'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-linux-static-record-zero.sh", "shared": "fc5041b9ab590f8e"}
+#!/usr/bin/env bash
+cat > "$d/zero.i" <<'SRC'
+struct Pending {unsigned long epoch;void* next;unsigned int flags;};
+static struct Pending cache;
+int main(void){return !cache.epoch && !cache.next && !cache.flags?42:1;}
+SRC
+"$cc" --target=x86_64-linux -S "$d/zero.i" -o "$d/mini.s"
+if [[ "${MINIC_SOURCE_ONLY:-0}" != 1 ]];then
+ gcc -static -x c "$d/zero.i" -o "$d/gnu"
+ gcc -static -x assembler "$d/mini.s" -o "$d/mini"
+ for exe in mini gnu;do rc=0;"$d/$exe" || rc=$?;test "$rc" -eq 42;done
+fi
+echo 'X86_ORIGINAL_STATIC_RECORD_ZERO=PASS GNU_diff=1'
+@@@ end

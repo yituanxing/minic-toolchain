@@ -1,0 +1,522 @@
+@@@ {"id": "3beba39486627ada", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+minic=${MINIC:-"$root/build/debug/bin/minic"}
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-alignof-expression.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+minic_cc=${MINIC_CC:-"$root/build/debug/bin/minic-cc"}
+host_cc=${HOST_CC:-${CC:-cc}}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/alignof-expression
+mkdir -p "$work"
+"$host_cc" -std=gnu11 -Wall -Wextra -Werror -fsyntax-only \
+    "$root/tests/compiler/c0/alignof_expression.c"
+if command -v clang >/dev/null 2>&1; then
+    clang -std=gnu11 -Wall -Wextra -Werror -fsyntax-only \
+        "$root/tests/compiler/c0/alignof_expression.c"
+fi
+"$host_cc" -E -P -x c "$root/tests/compiler/c0/alignof_expression.c" -o "$work/input.i"
+"$minic" -S "$work/input.i" -o "$work/output.s"
+test -s "$work/output.s"
+grep -F 'alignof_flexible_array_member:' "$work/output.s" >/dev/null
+
+# Every target sees exactly the same GNU member alignof and record offsets.
+# Native x86 executes the values produced by MiniC as a direct GCC oracle.
+for target in riscv32 riscv64 x86_64 aarch64 loongarch64; do
+    "$minic_cc" "--target=$target-linux" -S "$work/input.i" \
+        -o "$work/$target.s"
+    test -s "$work/$target.s"
+done
+"$host_cc" -no-pie "$work/x86_64.s" -o "$work/x86_64.out"
+"$work/x86_64.out"
+printf '%s\n' 'MINIC_RECORD_FIELD_ALIGNOF=PASS gcc_oracle=1 five_isa=5 x86_native=1 pack2=2 packed_aligned2=2 field_aligned4=4'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-braced-static-scalar.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+cc=${HOST_CC:-cc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/braced-static-scalar
+mkdir -p "$work"
+"$cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/braced_static_scalar.c" -o "$work/positive.i"
+"$minic" -S "$work/positive.i" -o "$work/positive.s"
+grep -F 'value:' "$work/positive.s" >/dev/null
+grep -F 'pointer:' "$work/positive.s" >/dev/null
+"$cc" -E -P -std=gnu11 -x c "$root/tests/compiler/c0/invalid_braced_static_scalar_extra.c" -o "$work/negative.i"
+if "$minic" -S "$work/negative.i" -o "$work/negative.s" 2>"$work/negative.err"; then exit 1; fi
+grep -F "expected '}' after static scalar initializer" "$work/negative.err" >/dev/null
+printf '%s
+' 'PASS compiler/c0/braced-static-scalar scalar=integer,pointer trailing-comma=1 excess=reject'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-gnu-signed-left-shift-ice.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-signed-left-shift-ice
+mkdir -p "$work"
+cat > "$work/positive.c" <<'SRC'
+enum { SIGN_BIT = 1 << 31 };
+static unsigned int value = (unsigned int)SIGN_BIT;
+int main(void) { return value == 0x80000000U ? 0 : 1; }
+SRC
+"$minic" -S "$work/positive.c" -o "$work/positive.s"
+grep -Fq 'value:' "$work/positive.s"
+grep -Eq '2147483648|0x80000000|-2147483648' "$work/positive.s"
+cat > "$work/negative.c" <<'SRC'
+enum { BAD_SHIFT = (-1) << 1 };
+int main(void) { return BAD_SHIFT; }
+SRC
+if "$minic" -S "$work/negative.c" -o "$work/negative.s" 2>"$work/negative.err"; then
+    echo 'FAIL compiler/c0/gnu-signed-left-shift-ice: negative signed shift accepted as ICE' >&2
+    exit 1
+fi
+grep -Fq 'integer constant expression' "$work/negative.err"
+printf '%s\n' 'PASS compiler/c0/gnu-signed-left-shift-ice'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-gnu-switch-case-range.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/gnu-switch-case-range
+mkdir -p "$work"
+cat > "$work/positive.c" <<'SRC'
+int classify(unsigned int v) {
+    switch (v) {
+    case 0x40 ... 0x7f: return 8;
+    case 0x80 ... 0xbf: return 16;
+    case 0xc0 ... 0xff: return 32;
+    default: return 4;
+    }
+}
+int main(void) { return classify(0x40) == 8 && classify(0xbf) == 16 && classify(0xff) == 32 && classify(3) == 4 ? 0 : 1; }
+SRC
+"$minic" -S "$work/positive.c" -o "$work/positive.s"
+
+# Core owns GNU switch-range dispatch. Each unsigned range lowers to two
+# unsigned bound comparisons and Core CFG conditional edges. Test that
+# semantic shape without pinning the removed AST->RV64 label namespace.
+grep -Fq 'classify:' "$work/positive.s"
+sltu_count=$(grep -E -c '^[[:space:]]+sltu[[:space:]]+' "$work/positive.s" || true)
+core_branch_count=$(grep -E -c '^[[:space:]]+b(eq|ne)z[[:space:]]+[^,]+,[[:space:]]*(1f|\.L[^[:space:]]+_core_bb[0-9]+)$' "$work/positive.s" || true)
+test "$sltu_count" -ge 6
+test "$core_branch_count" -ge 6
+if grep -Fq '.Lswitch_range_next_' "$work/positive.s"; then
+    echo 'legacy switch-range label unexpectedly present' >&2
+    exit 1
+fi
+
+cat > "$work/overlap.c" <<'SRC'
+int f(int v) { switch (v) { case 1 ... 5: return 1; case 5 ... 9: return 2; default: return 0; } }
+SRC
+if "$minic" -S "$work/overlap.c" -o "$work/overlap.s" 2>"$work/overlap.err"; then exit 1; fi
+grep -Fq 'duplicate or overlapping case value range' "$work/overlap.err"
+
+cat > "$work/descending.c" <<'SRC'
+int f(int v) { switch (v) { case 9 ... 1: return 1; default: return 0; } }
+SRC
+if "$minic" -S "$work/descending.c" -o "$work/descending.s" 2>"$work/descending.err"; then exit 1; fi
+grep -Fq 'GNU case range upper bound is below lower bound' "$work/descending.err"
+
+printf '%s\n' 'PASS compiler/c0/gnu-switch-case-range normalized=core-range-contract'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-linux-tail-batch3.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/linux-tail-batch3
+mkdir -p "$work"
+
+cat >"$work/field-head.c" <<'SRC'
+struct show;
+struct show {
+    __attribute__((__format__(printf, 2, 0)))
+    void (*showfn)(struct show *show, const char *fmt, void *args);
+};
+static struct show state __attribute__((used));
+int main(void) { return sizeof(state) == 8 ? 0 : 1; }
+SRC
+"$minic" -S "$work/field-head.c" -o "$work/field-head.s"
+grep -F '.size state, 8' "$work/field-head.s" >/dev/null
+
+cat >"$work/alias-section.c" <<'SRC'
+int target(int value) __attribute__((section(".init.text")));
+int alias_fn(int value) __attribute__((section(".init.text")));
+int alias_fn(int value) __attribute__((weak, alias("target")));
+int target(int value) { return value + 1; }
+SRC
+"$minic" -S "$work/alias-section.c" -o "$work/alias-section.s"
+grep -F '.weak alias_fn' "$work/alias-section.s" >/dev/null
+grep -F '.set alias_fn, target' "$work/alias-section.s" >/dev/null
+
+cat >"$work/alias-section-mismatch.c" <<'SRC'
+int target(int value) __attribute__((section(".target")));
+int alias_fn(int value) __attribute__((section(".alias")));
+int alias_fn(int value) __attribute__((weak, alias("target")));
+int target(int value) { return value + 1; }
+SRC
+if "$minic" -S "$work/alias-section-mismatch.c" -o "$work/alias-section-mismatch.s" \
+    2>"$work/alias-section-mismatch.err"; then
+    echo 'mismatched alias sections unexpectedly compiled' >&2
+    exit 1
+fi
+if ! grep -F 'parsed AST contract failed at function' "$work/alias-section-mismatch.err" >/dev/null ||
+   ! grep -F 'invalid function metadata or signature' "$work/alias-section-mismatch.err" >/dev/null; then
+    printf '%s\n' 'FAIL compiler/c0/linux-tail-batch3 alias-section-mismatch diagnostic' >&2
+    cat "$work/alias-section-mismatch.err" >&2
+    exit 1
+fi
+
+cat >"$work/flatten.c" <<'SRC'
+static int __attribute__((flatten)) add_one(int value) { return value + 1; }
+int main(void) { return add_one(4) == 5 ? 0 : 1; }
+SRC
+"$minic" -S "$work/flatten.c" -o "$work/flatten.s"
+
+cat >"$work/many-args.c" <<'SRC'
+extern int sink(const char *fmt, ...);
+int caller(void)
+{
+    return sink("x",
+                1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+                11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+                31, 32, 33, 34, 35, 36, 37, 38, 39, 40);
+}
+SRC
+"$minic" -S "$work/many-args.c" -o "$work/many-args.s"
+test -s "$work/many-args.s"
+
+printf '%s\n' 'PASS compiler/c0/linux-tail-batch3 field-head-format=1 alias-section=compatible flatten=parse-only call-capacity=64'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-record-value-initialize.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/record-value-initialize
+mkdir -p "$work"
+cat > "$work/positive.c" <<'SRC'
+struct Pair { int left; int right; };
+int main(void) {
+    struct Pair source = { 7, 9 };
+    struct Pair scratch = { 0, 0 };
+    const struct Pair frozen = (scratch = source);
+    return frozen.left + frozen.right + scratch.left + scratch.right - 32;
+}
+SRC
+"$minic" -S "$work/positive.c" -o "$work/positive.s"
+grep -Fq 'main:' "$work/positive.s"
+printf '%s\n' 'PASS compiler/c0/record-value-initialize assignment-rvalue=1 const-destination=initializer-only'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-static-aggregate-initializers.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+build_dir=${BUILD_DIR:-"$root/build/static-aggregate-initializers"}
+mkdir -p "$build_dir"
+
+"$minic" -S "$root/tests/programs/c0/static_record_compound_literal.c" \
+    -o "$build_dir/static_record_compound_literal.s"
+# 0xdead4ead remains bit-exact; RV64's GNU assembler dialect prints the
+# signed 32-bit interpretation regardless of the C member's signedness.
+grep -F '.word -559067475' "$build_dir/static_record_compound_literal.s" >/dev/null
+grep -F '.dword -1' "$build_dir/static_record_compound_literal.s" >/dev/null
+test "$(grep -c '  .dword value+' "$build_dir/static_record_compound_literal.s")" -eq 2
+
+"$minic" -S "$root/tests/programs/c0/static_nested_record_nonzero.c" \
+    -o "$build_dir/static_nested_record_nonzero.s"
+grep -F '  .word 3' "$build_dir/static_nested_record_nonzero.s" >/dev/null
+grep -F '  .dword 1' "$build_dir/static_nested_record_nonzero.s" >/dev/null
+grep -F '  .dword 2' "$build_dir/static_nested_record_nonzero.s" >/dev/null
+
+"$minic" -S "$root/tests/programs/c0/static_zero_size_local_array.c" \
+    -o "$build_dir/static_zero_size_local_array.s"
+grep -E '^\.size __minic_static_local_[0-9_]+, 0$' \
+    "$build_dir/static_zero_size_local_array.s" >/dev/null
+
+cat >"$build_dir/static_flexible_array.c" <<'EOF'
+struct StaticFlexibleArray {
+    int tag;
+    unsigned long tail[];
+};
+struct StaticFlexibleArray static_flexible_array = {
+    .tag = 7,
+    .tail = { [0 ... 2] = 11UL },
+};
+EOF
+"$minic" -S "$build_dir/static_flexible_array.c" \
+    -o "$build_dir/static_flexible_array.s"
+grep -F '  .word 7' "$build_dir/static_flexible_array.s" >/dev/null
+grep -F '.size static_flexible_array, 32' "$build_dir/static_flexible_array.s" >/dev/null
+test "$(grep -c '  .dword 11' "$build_dir/static_flexible_array.s")" -eq 3
+
+cat >"$build_dir/static_union_selection.c" <<'EOF'
+struct CallbackNode {
+    int count;
+    union {
+        void (*func)(unsigned long);
+        void (*callback)(struct CallbackNode *);
+    };
+    int tail;
+};
+static void callback_node(struct CallbackNode *node) { (void)node; }
+static struct CallbackNode callback_holder __attribute__((used)) = {
+    .count = 1,
+    .callback = callback_node,
+    .tail = 2,
+};
+
+struct AnonymousStructUnion {
+    union {
+        struct { void *a0; void *a1; };
+        struct { unsigned long s0; unsigned long s1; };
+    };
+};
+static struct AnonymousStructUnion anonymous_struct_union __attribute__((used)) = { .s1 = 8UL };
+
+static long backward_target;
+struct BackwardUnion {
+    int prefix;
+    union {
+        int *as_int;
+        long *as_long;
+    };
+    int tail;
+};
+static struct BackwardUnion backward_union __attribute__((used)) = {
+    .tail = 3,
+    .as_long = &backward_target,
+};
+EOF
+"$minic" -S "$build_dir/static_union_selection.c" \
+    -o "$build_dir/static_union_selection.s"
+grep -F '  .dword callback_node' "$build_dir/static_union_selection.s" >/dev/null
+grep -F '  .dword 8' "$build_dir/static_union_selection.s" >/dev/null
+grep -F '  .dword backward_target' "$build_dir/static_union_selection.s" >/dev/null
+
+if "$minic" -S "$root/tests/compiler/c0/invalid_static_record_compound_literal_type.c" \
+    -o "$build_dir/invalid.s" >"$build_dir/invalid.stdout" 2>"$build_dir/invalid.stderr"; then
+    echo 'FAIL static aggregate discovery: mismatched record compound literal accepted' >&2
+    exit 1
+fi
+grep -F 'static record compound literal type mismatch' "$build_dir/invalid.stderr" >/dev/null
+# RV64's flat record and pointer relocation array now share the common
+# DataLayout slot walk, while preserving .word/.half/.dword GNU directives.
+cat > "$build_dir/static_flat_reloc_shared.c" <<'EOF'
+static int record_target[4] = {2, 3, 5, 7};
+struct FlatReloc { int count; int *ptr; unsigned short flags; };
+static struct FlatReloc shared = {17, &record_target[2], 23};
+static int *const pointers[4] = {
+    &record_target[1], 0, &record_target[3], &record_target[0]
+};
+int main(void) {
+    return shared.count == 17 && shared.ptr == &record_target[2] &&
+           shared.flags == 23 && pointers[0] == &record_target[1] &&
+           pointers[1] == 0 && pointers[2] == &record_target[3] &&
+           pointers[3] == &record_target[0] ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_flat_reloc_shared.c" \
+    -o "$build_dir/static_flat_reloc_shared.s"
+grep -F '  .word 17' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .dword record_target+8' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .half 23' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+grep -F '  .dword record_target+12' "$build_dir/static_flat_reloc_shared.s" >/dev/null
+
+# Force the RV64 record-array path through shared recursive DataLayout.
+# Assert relocation addends and target-specific .dword spelling, while the
+# existing tests cover bitfield/flexible fallback compatibility.
+cat > "$build_dir/static_nested_shared_layout.c" <<'EOF'
+static int members_target[4] = {3, 5, 7, 11};
+struct Inner { unsigned short count; int *pointer; };
+struct Outer { struct Inner members[2]; unsigned long total; };
+static struct Outer shared_nested = {
+    {{17, &members_target[1]}, {29, &members_target[3]}}, 41
+};
+int main(void) {
+    return shared_nested.members[0].count == 17 &&
+           shared_nested.members[0].pointer == &members_target[1] &&
+           shared_nested.members[1].count == 29 &&
+           shared_nested.members[1].pointer == &members_target[3] &&
+           shared_nested.total == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_nested_shared_layout.c" \
+    -o "$build_dir/static_nested_shared_layout.s"
+grep -F '  .dword members_target+4' "$build_dir/static_nested_shared_layout.s" >/dev/null
+grep -F '  .dword members_target+12' "$build_dir/static_nested_shared_layout.s" >/dev/null
+# Bitfield + relocation combinations used to bypass the shared recursive
+# walker entirely. Verify the same source against GNU GCC and MiniC under
+# QEMU; the aggregate is intentionally nested, has a zero-width barrier and
+# a pointer relocation following a bitfield run.
+cat > "$build_dir/static_bitfield_shared.c" <<'EOF'
+static int target_words[5] = {2, 3, 5, 7, 11};
+struct Bits {
+    unsigned int a:6;
+    unsigned int b:10;
+    unsigned int :0;
+    unsigned int c:13;
+    unsigned int d:5;
+    int *pointer;
+};
+struct Aggregate {
+    struct Bits bits[2];
+    long tail;
+};
+static struct Aggregate shared_bits = {
+    {{17, 301, 4119, 19, &target_words[2]},
+     {11, 203, 33, 9, &target_words[4]}},
+    41
+};
+int main(void) {
+    return shared_bits.bits[0].a == 17 &&
+           shared_bits.bits[0].b == 301 &&
+           shared_bits.bits[0].c == 4119 &&
+           shared_bits.bits[0].d == 19 &&
+           shared_bits.bits[0].pointer == &target_words[2] &&
+           shared_bits.bits[1].a == 11 &&
+           shared_bits.bits[1].b == 203 &&
+           shared_bits.bits[1].c == 33 &&
+           shared_bits.bits[1].d == 9 &&
+           shared_bits.bits[1].pointer == &target_words[4] &&
+           shared_bits.tail == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_bitfield_shared.c" \
+    -o "$build_dir/static_bitfield_shared.s"
+grep -F '.dword target_words+8' "$build_dir/static_bitfield_shared.s" >/dev/null
+grep -F '.dword target_words+16' "$build_dir/static_bitfield_shared.s" >/dev/null
+if [ -n "${RISCV_CC:-}" ] && [ -n "${QEMU_RISCV64:-}" ]; then
+    "$RISCV_CC" -static -no-pie -o "$build_dir/static_bitfield_shared.minic" \
+        "$build_dir/static_bitfield_shared.s"
+    "$RISCV_CC" -static -no-pie -o "$build_dir/static_bitfield_shared.gcc" \
+        "$build_dir/static_bitfield_shared.c"
+    for compiler in minic gcc; do
+        set +e
+        "$QEMU_RISCV64" "$build_dir/static_bitfield_shared.$compiler"
+        actual=$?
+        set -e
+        if [ "$actual" -ne 42 ]; then
+            echo "FAIL recursive bitfield GlobalObject GNU-QEMU compiler=$compiler exit=$actual" >&2
+            exit 1
+        fi
+    done
+fi
+
+# RV64 previously used its own complete recursive serializer for these
+# shapes.  Both GNU and MiniC must agree in real QEMU execution, including
+# relocated pointers after bitfields and a dynamically extended GNU FAM.
+cat > "$build_dir/static_mixed_flexible_shared.c" <<'EOF'
+static long pointed[4] = {3, 5, 7, 11};
+struct Mix {
+    unsigned int a:6;
+    unsigned int b:10;
+    long *address;
+    unsigned long tail[];
+};
+static struct Mix mix = {
+    .a = 17, .b = 301, .address = &pointed[2],
+    .tail = { [0 ... 3] = 11UL }
+};
+int main(void) {
+    return mix.a == 17 && mix.b == 301 &&
+           mix.address == &pointed[2] &&
+           mix.tail[0] == 11 && mix.tail[1] == 11 &&
+           mix.tail[2] == 11 && mix.tail[3] == 11 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_mixed_flexible_shared.c" \
+    -o "$build_dir/static_mixed_flexible_shared.s"
+grep -F '.dword pointed+16' "$build_dir/static_mixed_flexible_shared.s" >/dev/null
+grep -F '.size mix, 48' "$build_dir/static_mixed_flexible_shared.s" >/dev/null
+test "$(grep -c '  .dword 11' "$build_dir/static_mixed_flexible_shared.s")" -ge 4
+
+# Zero-sized GNU fields and nested complete empty records consume no
+# flattened slots, yet must preserve the offsets of later stored members.
+cat > "$build_dir/static_empty_nested_shared.c" <<'EOF'
+struct Empty {};
+struct Mixed {
+    unsigned int prefix;
+    struct Empty none;
+    unsigned char missing[0];
+    unsigned long last;
+};
+static struct Mixed sparse = { .prefix = 7, .last = 41 };
+int main(void) {
+    return sparse.prefix == 7 && sparse.last == 41 ? 42 : 1;
+}
+EOF
+"$minic" -S "$build_dir/static_empty_nested_shared.c" \
+    -o "$build_dir/static_empty_nested_shared.s"
+grep -F '  .dword 41' "$build_dir/static_empty_nested_shared.s" >/dev/null
+
+if [ -n "${RISCV_CC:-}" ] && [ -n "${QEMU_RISCV64:-}" ]; then
+    for case_name in static_mixed_flexible_shared static_empty_nested_shared; do
+        "$RISCV_CC" -static -no-pie \
+            -o "$build_dir/$case_name.minic" "$build_dir/$case_name.s"
+        "$RISCV_CC" -static -no-pie \
+            -o "$build_dir/$case_name.gcc" "$build_dir/$case_name.c"
+        for compiler in minic gcc; do
+            set +e
+            "$QEMU_RISCV64" "$build_dir/$case_name.$compiler"
+            status=$?
+            set -e
+            if [ "$status" -ne 42 ]; then
+                echo "FAIL shared GlobalObject GNU-QEMU case=$case_name compiler=$compiler exit=$status" >&2
+                exit 1
+            fi
+        done
+    done
+fi
+printf '%s\n' \
+    'PASS compiler/c0/static-aggregate-initializers compound-literal=record nested-nonzero=recursive zero-size-local-array=accepted static-fam=gnu-range+extended-storage union-selection=forward+anonymous-struct+backward-reloc designated-inner=shared flat-record=shared-rv64-layout nested=shared-recursive bitfields=shared-packed flex=shared-recursive empty=zero-slot mismatch=fail-closed'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-static-local-self-reference.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/static-local-self-reference
+mkdir -p "$work"
+cat > "$work/input.c" <<'SRC'
+struct Node { struct Node *self; int value; };
+static int probe(void) {
+    static struct Node node = { .self = &node, .value = 7 };
+    return node.self == &node && node.value == 7 ? 0 : 1;
+}
+int main(void) { return probe(); }
+SRC
+"$minic" -S "$work/input.c" -o "$work/output.s"
+grep -Fq '  .dword ' "$work/output.s"
+grep -Fq '  .word 7' "$work/output.s"
+printf '%s\n' 'PASS compiler/c0/static-local-self-reference'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-string-octal-escape.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/string-octal-escape
+mkdir -p "$work"
+cat > "$work/positive.c" <<'SRC'
+static const char text[] __attribute__((used)) = "\101\102\103\0\7";
+int main(void) {
+    return text[0] == 'A' && text[1] == 'B' && text[2] == 'C' &&
+           text[3] == 0 && text[4] == 7 && text[5] == 0 ? 0 : 1;
+}
+SRC
+"$minic" -S "$work/positive.c" -o "$work/positive.s"
+grep -Fq '  .byte 65' "$work/positive.s"
+grep -Fq '  .byte 66' "$work/positive.s"
+grep -Fq '  .byte 67' "$work/positive.s"
+grep -Fq '  .byte 7' "$work/positive.s"
+cat > "$work/overflow.c" <<'SRC'
+static const char text[] = "\400";
+SRC
+if "$minic" -S "$work/overflow.c" -o "$work/overflow.s" 2>"$work/overflow.err"; then
+    echo 'FAIL compiler/c0/string-octal-escape: out-of-range octal escape accepted' >&2
+    exit 1
+fi
+grep -Fq 'unsupported string escape' "$work/overflow.err"
+printf '%s\n' 'PASS compiler/c0/string-octal-escape'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/run-zero-slot-aggregate-relocation.sh", "shared": "3beba39486627ada"}
+#!/bin/sh
+work=${BUILD_DIR:-"$root/build/debug"}/tests/zero-slot-aggregate-relocation
+mkdir -p "$work"
+cat > "$work/input.c" <<'SRC'
+struct Empty {};
+int target;
+struct Holder {
+    struct Empty empty;
+    int *pointer;
+};
+static struct Holder holder = { {}, &target };
+int main(void) { return holder.pointer == &target ? 0 : 1; }
+SRC
+"$minic" -S "$work/input.c" -o "$work/output.s"
+grep -Fq 'holder:' "$work/output.s"
+grep -Fq '  .dword target' "$work/output.s"
+printf '%s\n' 'PASS compiler/c0/zero-slot-aggregate-relocation'
+@@@ end

@@ -1,0 +1,35 @@
+@@@ {"id": "74efe1c501d007ca", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+root=$(cd "$(dirname "$0")/../../.." && pwd)
+work=$(mktemp -d)
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-call-dump.sh", "shared": "74efe1c501d007ca"}
+#!/usr/bin/env bash
+trap 'rm -rf -- "$work"' EXIT
+"${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/core/core_call_dump_test.c" \
+    "$root/src/core/core_ir.c" "$root/src/compiler/c_lower/core_ir_source.c" "$root/src/core/core_type.c" \
+    "$root/src/core/core_ir_verify.c" \
+    "$root/src/core/core_ir_dump.c" "$root/src/frontend/type.c" \
+    -o "$work/core-call-dump"
+"$work/core-call-dump"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-core-literal-branch-fold.sh", "shared": "74efe1c501d007ca"}
+#!/usr/bin/env bash
+trap 'rm -rf -- "$work"' EXIT
+"${HOST_CC:-cc}" -std=c11 -O2 -Wall -Wextra -Werror \
+    -ffunction-sections -fdata-sections -Wl,--gc-sections -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-literal-branch-fold.c" \
+    "$root/src/core/core_ir.c" "$root/src/core/core_type.c" \
+    -o "$work/core-literal-branch-fold"
+"$work/core-literal-branch-fold"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-core-value-use-counts.sh", "shared": "74efe1c501d007ca"}
+#!/usr/bin/env bash
+trap 'rm -rf "$work"' EXIT
+"${HOST_CC:-cc}" -std=c11 -Wall -Wextra -Werror -I"$root/src" \
+    "$root/tests/compiler/c0/probe-core-value-use-counts.c" \
+    "$root/src/core/value_uses.c" -o "$work/core-value-use-counts"
+"$work/core-value-use-counts"
+@@@ end

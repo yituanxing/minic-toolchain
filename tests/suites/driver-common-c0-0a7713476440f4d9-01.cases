@@ -1,0 +1,145 @@
+@@@ {"id": "0a7713476440f4d9", "kind": "shared", "newline": true}
+set -Eeuo pipefail
+minic="${1:?pass built minic-cc}"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-typed-machine-qualification-gaps.sh", "shared": "0a7713476440f4d9"}
+#!/usr/bin/env bash
+source_file="$root/tests/compiler/c0/x86_typed_machine_qualification_gaps.c"
+temp="$(mktemp -d)"
+trap 'rm -rf "$temp"' EXIT
+host_cc="${CC:-cc}"
+
+# The four forms previously arrived as Core generic owner=2. After adding
+# complete target-owned GNU source qualifiers, every positive must be owner=1.
+"$host_cc" -E -P "$source_file" -o "$temp/positive.i"
+MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=x86_64-linux \
+    -S "$temp/positive.i" -o "$temp/positive.s" \
+    2>"$temp/positive.log"
+test "$(grep -c '^CORE_ASM_OPERAND_PLAN owner=1 ' "$temp/positive.log")" -eq 4
+! grep -q '^CORE_ASM_OPERAND_PLAN owner=2 ' "$temp/positive.log"
+"$host_cc" -c -x assembler "$temp/positive.s" -o "$temp/positive.o"
+"$host_cc" -c -x c "$temp/positive.i" -o "$temp/gnu.o"
+objdump -dr "$temp/positive.o" >"$temp/positive.dump"
+objdump -dr "$temp/gnu.o" >"$temp/gnu.dump"
+for disassembly in positive gnu; do
+    test "$(grep -c 'stmxcsr' "$temp/$disassembly.dump")" -eq 2
+    test "$(grep -c 'ldmxcsr' "$temp/$disassembly.dump")" -eq 1
+    grep -q 'lea.*%rip' "$temp/$disassembly.dump"
+    grep -q 'mov.*%rsp' "$temp/$disassembly.dump"
+    grep -q 'mov.*%rbp' "$temp/$disassembly.dump"
+done
+
+# A target qualifier must not widen old admission: its seven source failures
+# still reach the generic preflight but ultimately fail closed at machine ASM.
+for negative in \
+    NEGATIVE_MXCSR_REGISTER NEGATIVE_MXCSR_WIDTH \
+    NEGATIVE_MXCSR_CLOBBER NEGATIVE_MXCSR_SUFFIX \
+    NEGATIVE_UNWIND_MEMORY NEGATIVE_UNWIND_CLOBBER \
+    NEGATIVE_UNWIND_SUFFIX; do
+    "$host_cc" -E -P -D"$negative" "$source_file" \
+        -o "$temp/$negative.i"
+    if MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=x86_64-linux \
+            -S "$temp/$negative.i" -o "$temp/$negative.s" \
+            2>"$temp/$negative.log"; then
+        echo "FAIL: invalid x86 target-owned $negative was admitted" >&2
+        exit 1
+    fi
+    grep -q '^CORE_ASM_OPERAND_PLAN owner=2 ' "$temp/$negative.log"
+done
+
+# Do not use Core's source_form_id hash as a machine opcode. Form-ID or
+# variant forgeries against an unchanged literal must fail target revalidation.
+"$host_cc" -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+    -ffunction-sections -fdata-sections -I"$root/include" -I"$root/src" \
+    "$root/tests/target/x86_64_typed_machine_qualification_test.c" \
+    "$root/src/target/x86_64/asm_contract.c" \
+    "$root/src/target/x86_64/asm_contract_source.c" \
+    "$root/src/target/x86_64/machine_raid6_source_policy.c" \
+    -Wl,--gc-sections -o "$temp/form-gate"
+"$temp/form-gate"
+echo 'X86_MXCSR_UNWIND_TYPED=PASS positives=4 owner=1 negative=7 machine_gate=11 GNU_ELF=2'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-typed-mmio-atomic-oracle.sh", "shared": "0a7713476440f4d9"}
+#!/usr/bin/env bash
+temp="$(mktemp -d)"
+trap 'rm -rf "$temp"' EXIT
+
+"${CC:-cc}" -E -P "$root/tests/compiler/c0/x86_typed_mmio_atomic_oracle.c" \
+    -o "$temp/mini.i"
+"${CC:-cc}" -E -P -DGNU_ORACLE \
+    "$root/tests/compiler/c0/x86_typed_mmio_atomic_oracle.c" \
+    -o "$temp/gnu.i"
+"$minic" --target=x86_64-linux -S "$temp/mini.i" -o "$temp/mini.s"
+"${CC:-cc}" -O0 -c "$temp/gnu.i" -o "$temp/gnu.o"
+"${CC:-cc}" -O0 -no-pie \
+    "$root/tests/compiler/c0/x86_typed_mmio_atomic_driver.c" \
+    "$temp/gnu.o" -x assembler "$temp/mini.s" -o "$temp/oracle"
+
+set +e
+"$temp/oracle"
+result=$?
+set -e
+if [[ "$result" -ne 42 ]]; then
+    echo "FAIL typed MMIO read/write and xchg GNU native differential: $result"
+    exit 1
+fi
+# Privileged and feature-dependent forms have no safe generic native runtime.
+# Keep their original Linux GNU operand contracts, require machine-assembly
+# success and inspect source-only failures through the separate negative gate.
+for fixture in x86_64_linux_pkru x86_64_linux_rng_flag x86_64_linux_fdiv_bug; do
+    "${CC:-cc}" -E -P "$root/tests/target/$fixture.c" \
+        -o "$temp/$fixture.i"
+    MINIC_X86_TYPED_REJECT_TRACE=1 "$minic" --target=x86_64-linux -S "$temp/$fixture.i" \
+        -o "$temp/$fixture.s"
+    "${CC:-cc}" -c -x assembler "$temp/$fixture.s" \
+        -o "$temp/$fixture.o"
+done
+echo 'X86_TYPED_MMIO_ATOMIC=PASS families=6 native_GCC_oracle=42 privileged_compile=3'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-x86-typed-scalar-families.sh", "shared": "0a7713476440f4d9"}
+#!/usr/bin/env bash
+source_file="$root/tests/compiler/c0/x86_typed_scalar_families.c"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+host_cc="${CC:-cc}"
+
+"$host_cc" -E -P "$source_file" -o "$work/positive.i"
+MINIC_ASM_OPERAND_PLAN_TRACE=1 "$minic" --target=x86_64-linux \
+    -S "$work/positive.i" -o "$work/positive.s" \
+    2>"$work/positive.log"
+test "$(grep -c '^CORE_ASM_OPERAND_PLAN owner=1 ' "$work/positive.log")" -eq 6
+! grep -q '^CORE_ASM_OPERAND_PLAN owner=2 ' "$work/positive.log"
+"$host_cc" -c -x assembler "$work/positive.s" -o "$work/positive.o"
+"$host_cc" -c -x c "$work/positive.i" -o "$work/gnu.o"
+objdump -dr "$work/positive.o" >"$work/positive.dump"
+objdump -dr "$work/gnu.o" >"$work/gnu.dump"
+for dump in positive gnu; do
+    for opcode in 'out ' 'add ' cmpxchg 'bt ' 'incl '; do
+        grep -Fq "$opcode" "$work/$dump.dump"
+    done
+done
+
+# Unknown instruction suffixes remain unsupported, never routed to GAS.
+for invalid in NEGATIVE_PORT_IO NEGATIVE_ATOMIC_RMW NEGATIVE_RAW_CMPXCHG \
+               NEGATIVE_TRYCAS NEGATIVE_BITOPS NEGATIVE_ATOMIC_CC; do
+    "$host_cc" -E -P -D"$invalid" "$source_file" -o "$work/$invalid.i"
+    if "$minic" --target=x86_64-linux -S "$work/$invalid.i" \
+        -o "$work/$invalid.s" >"$work/$invalid.log" 2>&1; then
+        echo "FAIL: migrated target form accepted $invalid" >&2
+        exit 1
+    fi
+    test ! -e "$work/$invalid.s"
+done
+
+# Verify full immutable text revalidation even when Core metadata is forged.
+"$host_cc" -std=c11 -Wall -Wextra -Wpedantic -Wconversion -Wshadow -Werror \
+    -ffunction-sections -fdata-sections -I"$root/include" -I"$root/src" \
+    "$root/tests/target/x86_64_typed_scalar_families_test.c" \
+    "$root/src/target/x86_64/asm_contract.c" \
+    "$root/src/target/x86_64/asm_contract_source.c" \
+    "$root/src/target/x86_64/machine_raid6_source_policy.c" \
+    -Wl,--gc-sections -o "$work/machine-gate"
+"$work/machine-gate"
+echo 'X86_TYPED_SCALAR_FAMILIES=PASS source_families=6 machine_template_gates=25 source_owner=1 negative=6 ELF=2'
+@@@ end

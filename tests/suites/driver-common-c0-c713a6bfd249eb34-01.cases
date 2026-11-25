@@ -1,0 +1,149 @@
+@@@ {"id": "c713a6bfd249eb34", "kind": "shared", "newline": true}
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+minic=${MINIC_CC:-"$root/build/debug/bin/minic-cc"}
+@@@ end
+@@@ {"head_lines": 3, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/probe-loongarch64-inline-invtlb-mnemonic.sh", "shared": "c713a6bfd249eb34"}
+#!/bin/sh
+# The target instruction's opcode must not resurrect the dead generic
+# always-inline C function, but a genuinely dynamic GNU `i` still fails.
+host_cc=${HOST_CC:-cc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/loong-inline-invtlb-mnemonic
+mkdir -p "$work"
+test -x "$minic"
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/loongarch64_inline_invtlb_mnemonic.c" \
+    -o "$work/source.i"
+"$minic" --target=loongarch64-linux -mabi=lp64s -S \
+    "$work/source.i" -o "$work/positive.s"
+test "$(grep -Ec '^[[:space:]]*invtlb[[:space:]]+0,' "$work/positive.s")" -eq 1
+
+# A used dynamic immediate operand is not made legal by mnemonic filtering.
+sed 's/invtlb(0U, info, address);/invtlb(info, info, address);/' \
+    "$work/source.i" >"$work/invalid.i"
+if cmp -s "$work/source.i" "$work/invalid.i"; then
+    echo 'LOONG_INVTLB_MNEMONIC=FAIL mutation_missing=1' >&2
+    exit 1
+fi
+rm -f "$work/invalid.s"
+if "$minic" --target=loongarch64-linux -mabi=lp64s -S \
+    "$work/invalid.i" -o "$work/invalid.s" \
+    >"$work/invalid.out" 2>"$work/invalid.err"; then
+    echo 'LOONG_INVTLB_MNEMONIC=FAIL admitted_dynamic_i=1' >&2
+    exit 1
+fi
+test ! -e "$work/invalid.s"
+echo 'LOONG_INVTLB_MNEMONIC=PASS constant_inline=1 dynamic_i_rejected=1 GNU_AS=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 1, "kind": "case", "mode": "100755", "newline": true, "path": "tests/compiler/c0/probe-zero-record-five-targets.sh", "shared": "c713a6bfd249eb34"}
+#!/bin/sh
+gnu=${CC:-cc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/zero-record-five-targets
+mkdir -p "$work"
+source="$root/tests/compiler/c0/zero_record_noop_sideeffects.c"
+"$gnu" -E -P -std=gnu11 -x c "$source" -o "$work/zero.i"
+"$gnu" -std=gnu11 -O2 -no-pie -x c "$source" -o "$work/gnu.elf"
+"$work/gnu.elf"
+for target in riscv32-linux riscv64-linux x86_64-linux aarch64-linux loongarch64-linux; do
+    "$minic" --target="$target" -S "$work/zero.i" -o "$work/$target.s"
+    test -s "$work/$target.s"
+done
+"$gnu" -no-pie -x assembler "$work/x86_64-linux.s" -o "$work/minic.elf"
+"$work/minic.elf"
+printf '%s\n' 'MINIC_ZERO_RECORD=PASS five_target_GNU_assembly=5/5 x86_GNU_and_MiniC_ELF=PASS no_memory_write=true both_pointer_calls=true'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-loongarch64-typed-invtlb-add-unless.sh", "shared": "c713a6bfd249eb34"}
+#!/bin/sh
+# Same GNU .i, R5/R6 exact Loong .s, and fail-closed hardware-template edits.
+baseline=${MINIC_LOONG_TYPED_BASELINE_CC:-}
+host_cc=${HOST_CC:-cc}
+work=${BUILD_DIR:-"$root/build/debug"}/tests/loong-typed-invtlb-add-unless
+mkdir -p "$work"
+test -x "$minic"
+if test -n "$baseline"; then test -x "$baseline"; fi
+"$host_cc" -E -P -x c \
+    "$root/tests/compiler/c0/loongarch64_typed_invtlb_add_unless.c" \
+    -o "$work/source.i"
+"$minic" --target=loongarch64-linux -S "$work/source.i" -o "$work/r6.s"
+test "$(grep -Fc '  invtlb 0,' "$work/r6.s")" -eq 4
+# Preserve the exact selected ISA/physical operands while allowing GNU's
+# original source-authored whitespace, rather than assuming the old direct
+# emitter's two-space prefix before each LL/SC source-template line.
+grep -Eq '^[[:space:]]*sc[.]w[[:space:]]+\$t1,[[:space:]]*\$t2,[[:space:]]*0$' "$work/r6.s"
+grep -Eq '^[[:space:]]*sc[.]d[[:space:]]+\$t1,[[:space:]]*\$t2,[[:space:]]*0$' "$work/r6.s"
+if test -n "$baseline"; then
+    "$baseline" --target=loongarch64-linux -S "$work/source.i" -o "$work/r5.s"
+    cmp "$work/r5.s" "$work/r6.s"
+    echo 'LOONG_TYPED_SCALAR_DIFF=PASS same_gnu_i=1 byte_identical_s=1'
+fi
+for family in invtlb add_unless; do
+    case "$family" in
+        invtlb) sed 's/invtlb %0, %1, %2/invtlb %0, %1, %2; nop/' \
+            "$work/source.i" >"$work/invalid.i" ;;
+        add_unless) sed 's/sc.w %\[rc\], %\[c\]/sc.w %[rc], %[c]; nop/' \
+            "$work/source.i" >"$work/invalid.i" ;;
+    esac
+    if cmp -s "$work/source.i" "$work/invalid.i"; then
+        echo "LOONG_TYPED_SCALAR=FAIL missed_mutation=$family" >&2
+        exit 1
+    fi
+    rm -f "$work/invalid.s"
+    if "$minic" --target=loongarch64-linux -S "$work/invalid.i" \
+        -o "$work/invalid.s" >"$work/invalid.out" 2>"$work/invalid.err"; then
+        echo "LOONG_TYPED_SCALAR=FAIL accepted=$family" >&2
+        exit 1
+    fi
+    test ! -e "$work/invalid.s"
+    if test -n "$baseline"; then
+        rm -f "$work/baseline-invalid.s"
+        if "$baseline" --target=loongarch64-linux -S "$work/invalid.i" \
+            -o "$work/baseline-invalid.s" \
+            >"$work/baseline-invalid.out" 2>"$work/baseline-invalid.err"; then
+            echo "LOONG_TYPED_SCALAR_DIFF=FAIL baseline_accepted=$family" >&2
+            exit 1
+        fi
+        test ! -e "$work/baseline-invalid.s"
+    fi
+done
+echo 'LOONG_TYPED_SCALAR=PASS invtlb_forms=4 add_unless_widths=2 invalid=2 partial_s=0 GNU_AS=NOT_RUN'
+@@@ end
+@@@ {"head_lines": 2, "kind": "case", "mode": "100644", "newline": true, "path": "tests/compiler/c0/run-riscv-mixed-checked-overflow.sh", "shared": "c713a6bfd249eb34"}
+#!/bin/sh
+# Regression for actual io_uring/net.c and fbcon.c GNU overflow operand shapes.
+host_cc=${HOST_CC:-cc}
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+
+edge="$root/tests/compiler/c0/riscv_mixed_checked_overflow_edge.c"
+"$host_cc" -std=gnu11 -O2 -Wall -Wextra "$edge" -o "$work/edge-host"
+"$work/edge-host"
+
+for fixture in riscv_mixed_checked_overflow_edge gnu_overflow_builtins mixed-overflow-u64-i32; do
+    "$host_cc" -E -P -std=gnu11 -x c \
+        "$root/tests/compiler/c0/$fixture.c" -o "$work/$fixture.i"
+    "$minic" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+        -S "$work/$fixture.i" -o "$work/$fixture-rv64.s"
+    "$minic" --target=riscv32-linux -march=rv32i -mabi=ilp32 \
+        -S "$work/$fixture.i" -o "$work/$fixture-rv32.s"
+    test -s "$work/$fixture-rv64.s"
+    test -s "$work/$fixture-rv32.s"
+done
+grep -F '__muldi3' "$work/riscv_mixed_checked_overflow_edge-rv64.s" >/dev/null
+grep -F 'wide_first:' "$work/riscv_mixed_checked_overflow_edge-rv64.s" >/dev/null
+grep -F 'signed_first:' "$work/riscv_mixed_checked_overflow_edge-rv64.s" >/dev/null
+grep -F 'multiply_signed_first:' "$work/riscv_mixed_checked_overflow_edge-rv64.s" >/dev/null
+grep -F 'multiply_unsigned_first:' "$work/riscv_mixed_checked_overflow_edge-rv64.s" >/dev/null
+
+# This has not acquired the 128-bit signed64+signed32 proof and must not be
+# silently accepted as unsigned64+signed32 arithmetic.
+"$host_cc" -E -P -std=gnu11 -DMIXED_UNSUPPORTED=1 \
+    "$root/tests/compiler/c0/mixed-overflow-u64-i32.c" \
+    -o "$work/unsupported.i"
+if "$minic" --target=riscv64-linux -march=rv64i -mabi=lp64 \
+    -S "$work/unsupported.i" -o "$work/unsupported.s" \
+    >"$work/rejected.out" 2>"$work/rejected.err"; then
+    echo 'RV64_MIXED_CHECKED_OVERFLOW=FAIL unsupported signed64 input admitted' >&2
+    exit 1
+fi
+echo 'RV64_MIXED_CHECKED_OVERFLOW=PASS host_boundaries=11 RV32_RV64_sources=3 mixed_add_mul=1 fail_closed=1'
+@@@ end
