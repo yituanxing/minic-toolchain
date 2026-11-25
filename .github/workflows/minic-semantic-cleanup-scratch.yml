@@ -224,6 +224,27 @@ jobs:
               result.sort(key=lambda a:-sum(x[2] for x in a))
               return {"groups":len(result),"candidates":result[:35]}
           print("PROD_FUNCTION_DUPLICATES",json.dumps({"scanned":countfunc,"exact":dupresults(prod_func),"renamed":dupresults(rename_func)}),flush=True)
+          # Resolve stem-only invocation and JSON fixture IDs. Full paths alone
+          # undercount shell variables, Make recipes, and named runner cases.
+          owners={p:s for p,s in blob.items() if
+                  p.endswith((".sh",".py",".json",".yml",".yaml",".mk")) or p=="Makefile"}
+          dark=[]
+          for p in c0:
+              stem=Path(p).stem
+              callers=[o for o,s in owners.items() if stem in s]
+              if not callers: dark.append(p)
+          unowned=collections.Counter()
+          for p in dark:
+              stem=Path(p).stem
+              k="invalid" if "invalid" in stem else stem.split("_")[0].split("-")[0]
+              unowned[k]+=1
+          print("C0_STEM_UNREFERENCED",json.dumps({"count":len(dark),"byfamily":unowned.most_common(30),"candidates":dark[:180]}),flush=True)
+          darksh=[]
+          for p in shell:
+              stem=Path(p).stem
+              if not any(stem in s for o,s in owners.items() if o!=p):
+                  darksh.append(p)
+          print("SHELL_STEM_UNREFERENCED",json.dumps({"count":len(darksh),"candidates":darksh[:180]}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
