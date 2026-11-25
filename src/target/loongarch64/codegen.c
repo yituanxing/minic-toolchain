@@ -37,8 +37,7 @@ static const MinicDirectLP64AbiPolicy loongarch64_abi_policy = {
 
 static bool loongarch64_core_executed_fp_type(
     const MinicCoreTypeContext *types, MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_core_type_get(
-        types, minic_core_type_unqualified(types, id));
+    const MinicCoreType *type = minic_core_type_base(types, id);
     /* Any floating scalar ABI in LP64S is unsupported, regardless of
      * source spelling or integer rank. Invalid IDs fail the Core verifier. */
     return type == NULL || type->kind == MINIC_CORE_TYPE_FLOAT;
@@ -68,10 +67,7 @@ static bool loongarch64_lp64s_executable_supported(
      * or no FP-typed SSA operand survives in the call lowering. */
     for (i = 0U; i < fn->callee_count; ++i) {
         const MinicCoreCallee *call = &fn->callees[i];
-        const MinicCoreType *signature = minic_core_type_get(
-            fn->type_context,
-            minic_core_type_unqualified(fn->type_context,
-                call->core_function_type_id));
+        const MinicCoreType *signature = minic_core_type_base(fn->type_context, call->core_function_type_id);
         if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
             (signature->value.function.parameter_count != 0U &&
              signature->value.function.parameters == NULL)) return false;
@@ -84,10 +80,7 @@ static bool loongarch64_lp64s_executable_supported(
     }
     for (i = 0U; i < fn->call_signature_count; ++i) {
         const MinicCoreCallSignature *call = &fn->call_signatures[i];
-        const MinicCoreType *signature = minic_core_type_get(
-            fn->type_context,
-            minic_core_type_unqualified(fn->type_context,
-                call->core_function_type_id));
+        const MinicCoreType *signature = minic_core_type_base(fn->type_context, call->core_function_type_id);
         if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
             (signature->value.function.parameter_count != 0U &&
              signature->value.function.parameters == NULL)) return false;

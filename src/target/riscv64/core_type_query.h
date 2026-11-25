@@ -6,14 +6,9 @@
 /* RV64 machine decisions consume the attached execution type exclusively.
  * Source MinicType descriptors have no authority after Core has been sealed.
  * Peeling physical alignment views is shared by ISA, frame and ABI gates. */
-static inline const MinicCoreType *minic_riscv64_core_base_type(
-    const MinicCoreFunction *function, MinicCoreTypeId id) {
-    return minic_core_function_base_type(function, id);
-}
-
 static inline bool minic_riscv64_core_is_i128(
     const MinicCoreFunction *function, MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_riscv64_core_base_type(function, id);
+    const MinicCoreType *type = minic_core_function_base_type(function, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
            type->value.integer.bit_width == 128U;
 }

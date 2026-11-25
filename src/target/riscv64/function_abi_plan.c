@@ -25,7 +25,7 @@ bool minic_riscv64_function_abi_view_from_prepared(
 
 static bool rv64_fn_is_fp_scalar(const MinicCoreFunction *fn,
                                 MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_riscv64_core_base_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL && type->kind == MINIC_CORE_TYPE_FLOAT &&
            (type->value.floating.format == MINIC_CORE_FLOAT_BINARY32 ||
             type->value.floating.format == MINIC_CORE_FLOAT_BINARY64);
@@ -33,7 +33,7 @@ static bool rv64_fn_is_fp_scalar(const MinicCoreFunction *fn,
 
 static bool rv64_fn_is_wide_scalar(const MinicCoreFunction *fn,
                                   MinicCoreTypeId id) {
-    const MinicCoreType *type = minic_riscv64_core_base_type(fn, id);
+    const MinicCoreType *type = minic_core_function_base_type(fn, id);
     return type != NULL &&
            ((type->kind == MINIC_CORE_TYPE_FLOAT &&
              type->value.floating.format == MINIC_CORE_FLOAT_BINARY128) ||

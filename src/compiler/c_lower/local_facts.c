@@ -1,4 +1,5 @@
 #include "compiler/c_lower/local_facts.h"
+#include "common/integer_bits.h"
 #include "frontend/const_eval.h"
 #include "frontend/expression_semantics.h"
 #include <inttypes.h>
@@ -395,9 +396,7 @@ bool minic_core_local_fact_nonnegative_range_get(
         width == 0U || width > 64U) return false;
     if (fact->known) {
         uint64_t value = fact->value.bits;
-        uint64_t width_mask = width == 64U ? UINT64_MAX :
-            (UINT64_C(1) << width) - UINT64_C(1);
-        value &= width_mask;
+        value &= minic_integer_mask64(width);
         if (minic_type_is_signed_integer(local->type) &&
             (value & (UINT64_C(1) << (width - 1U))) != 0U) return false;
         *minimum = *maximum = value;
@@ -432,9 +431,7 @@ bool minic_core_local_fact_nonnegative_range_set(
             context->body->program, local->type, &width) ||
         width == 0U || width > 64U) return false;
     signed_limit = minic_type_is_signed_integer(local->type)
-        ? (UINT64_C(1) << (width - 1U)) - UINT64_C(1)
-        : (width == 64U ? UINT64_MAX :
-           (UINT64_C(1) << width) - UINT64_C(1));
+        ? minic_integer_mask64(width - 1U) : minic_integer_mask64(width);
     if (maximum > signed_limit) return false;
     fact->nonnegative_min = minimum;
     fact->nonnegative_max = maximum;

@@ -1,4 +1,5 @@
 #include "compiler/c_lower/core_lower_internal.h"
+#include "common/integer_bits.h"
 #include "compiler/c_lower/local_facts.h"
 #include "compiler/c_lower/cfg_constant_calls.h"
 #include "compiler/c_lower/core_const_global_record.h"
@@ -509,7 +510,6 @@ bool core_const_signed_value(const MinicCoreLowerContext *context,
                                     int64_t *result) {
     unsigned int width;
     uint64_t bits;
-    uint64_t mask;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->target == NULL || value == NULL || result == NULL ||
@@ -519,14 +519,7 @@ bool core_const_signed_value(const MinicCoreLowerContext *context,
         width == 0U || width > 64U) {
         return false;
     }
-    bits = value->bits;
-    if (width < 64U) {
-        mask = (UINT64_C(1) << width) - UINT64_C(1);
-        bits &= mask;
-        if ((bits & (UINT64_C(1) << (width - 1U))) != 0U) {
-            bits |= ~mask;
-        }
-    }
+    bits = minic_integer_sign_extend64(value->bits, width);
     (void)memcpy(result, &bits, sizeof(*result));
     return true;
 }
@@ -647,10 +640,8 @@ static bool core_cfg_normalize_integer(const MinicCoreLowerContext *context,
     }
     if (minic_type_is_bool_integer(type)) {
         *normalized = bits == 0U ? 0U : 1U;
-    } else if (width == 64U) {
-        *normalized = bits;
     } else {
-        *normalized = bits & ((UINT64_C(1) << width) - UINT64_C(1));
+        *normalized = bits & minic_integer_mask64(width);
     }
     return true;
 }
@@ -683,8 +674,7 @@ static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
     if (pointer_width == 0U || pointer_width > 64U) {
         return false;
     }
-    mask = pointer_width == 64U ? UINT64_MAX
-                                : ((UINT64_C(1) << pointer_width) - UINT64_C(1));
+    mask = minic_integer_mask64(pointer_width);
 
     if (expression->kind == MINIC_EXPRESSION_CAST ||
         expression->kind == MINIC_EXPRESSION_BITCAST) {
@@ -1358,10 +1348,6 @@ static bool core_cfg_zero_union_scalar_read(
  * checks that evaluating the complete expression has no side effects before
  * replacing the expression with a constant.  Unsupported operators widen to
  * the full type mask instead of assuming a value. */
-static uint64_t core_cfg_integer_width_mask(unsigned int width) {
-    return width >= 64U ? UINT64_MAX : (UINT64_C(1) << width) - UINT64_C(1);
-}
-
 static uint64_t core_cfg_possible_one_bits(
     const MinicCoreLowerContext *context, MinicExpressionId id,
     unsigned int depth, bool allow_local_facts);
@@ -1387,9 +1373,9 @@ static uint64_t core_cfg_possible_one_bits_as(
     if (result_width > operand_width &&
         minic_type_is_signed_integer(operand->type) &&
         (bits & (UINT64_C(1) << (operand_width - 1U))) != 0U) {
-        bits |= ~core_cfg_integer_width_mask(operand_width);
+        bits |= ~minic_integer_mask64(operand_width);
     }
-    return bits & core_cfg_integer_width_mask(result_width);
+    return bits & minic_integer_mask64(result_width);
 }
 
 static uint64_t core_cfg_possible_one_bits(
@@ -1412,7 +1398,7 @@ static uint64_t core_cfg_possible_one_bits(
         width == 0U || width > 64U) {
         return UINT64_MAX;
     }
-    full = core_cfg_integer_width_mask(width);
+    full = minic_integer_mask64(width);
     if (minic_const_eval_integer(context->body->program, context->target,
                                  id, &constant)) {
         MinicConstValue converted;
@@ -1497,8 +1483,8 @@ static bool core_cfg_nonnegative_range_impl(
             context->body->program, expression->type, &width) ||
         width == 0U || width > 64U) return false;
     type_max = minic_type_is_signed_integer(expression->type)
-        ? ((UINT64_C(1) << (width - 1U)) - UINT64_C(1))
-        : core_cfg_integer_width_mask(width);
+        ? minic_integer_mask64(width - 1U)
+        : minic_integer_mask64(width);
     /* A value computed after an effectful subexpression must not consult a
      * pre-evaluation local fact: f(&local) ? local : local is NOT bounded by
      * the value of local before f executes. Source-intrinsic constants and
@@ -2107,7 +2093,7 @@ statement_expression_done:
                                             context->body->program,
                                             operand->type, &width) &&
             width > 0U && width <= 64U) {
-            bits = operand_value.bits & core_cfg_integer_width_mask(width);
+            bits = operand_value.bits & minic_integer_mask64(width);
             if (operation == MINIC_BUILTIN_UNARY_CLZ ||
                 operation == MINIC_BUILTIN_UNARY_CLZL ||
                 operation == MINIC_BUILTIN_UNARY_CLZLL) {

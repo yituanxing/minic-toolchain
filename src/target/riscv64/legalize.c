@@ -68,8 +68,8 @@ bool minic_riscv64_core_scalar_bitcast_supported(const MinicCoreFunction *functi
 static bool minic_riscv64_core_integer_type_range_fits(
     const MinicCoreFunction *function, MinicCoreTypeId source_type,
     MinicCoreTypeId result_type) {
-    const MinicCoreType *source = minic_riscv64_core_base_type(function, source_type);
-    const MinicCoreType *result = minic_riscv64_core_base_type(function, result_type);
+    const MinicCoreType *source = minic_core_function_base_type(function, source_type);
+    const MinicCoreType *result = minic_core_function_base_type(function, result_type);
     bool source_signed;
     bool result_signed;
 
@@ -94,8 +94,8 @@ static bool minic_riscv64_core_integer_type_range_fits(
 static bool minic_riscv64_core_integer_overflow_xlen_scratch_exact(
     const MinicCoreFunction *function, MinicCoreTypeId left_type,
     MinicCoreTypeId right_type, size_t result_size) {
-    const MinicCoreType *left = minic_riscv64_core_base_type(function, left_type);
-    const MinicCoreType *right = minic_riscv64_core_base_type(function, right_type);
+    const MinicCoreType *left = minic_core_function_base_type(function, left_type);
+    const MinicCoreType *right = minic_core_function_base_type(function, right_type);
     return result_size > 0U && result_size < 8U &&
            left != NULL && right != NULL &&
            left->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -130,12 +130,12 @@ bool minic_riscv64_core_integer_overflow_supported(
             &pointee_id)) {
         return false;
     }
-    flag = minic_riscv64_core_base_type(function, instruction->core_type_id);
-    result = minic_riscv64_core_base_type(function, pointee_id);
+    flag = minic_core_function_base_type(function, instruction->core_type_id);
+    result = minic_core_function_base_type(function, pointee_id);
     left_id = function->values[instruction->value.integer_overflow.left].core_type_id;
     right_id = function->values[instruction->value.integer_overflow.right].core_type_id;
-    left = minic_riscv64_core_base_type(function, left_id);
-    right = minic_riscv64_core_base_type(function, right_id);
+    left = minic_core_function_base_type(function, left_id);
+    right = minic_core_function_base_type(function, right_id);
     if (flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
         !flag->value.integer.is_bool ||
         result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
@@ -230,7 +230,7 @@ static bool rv64_core_call_arguments_resolved_supported(
         if (!minic_core_call_view_argument_core_type(
                 function, call, index, &actual_type)) return false;
         type_id = fixed ? call->core_parameter_type_ids[index] : actual_type;
-        type = minic_riscv64_core_base_type(function, type_id);
+        type = minic_core_function_base_type(function, type_id);
         if (type == NULL || (!fixed &&
             (!call->is_variadic ||
              (!minic_riscv64_core_scalar_kind(type) &&
@@ -330,7 +330,7 @@ static bool rv64_core_call_return_supported(
     if (function == NULL || function->type_context == NULL ||
         call == NULL || value == NULL)
         return false;
-    core = minic_riscv64_core_base_type(function, call->core_return_type_id);
+    core = minic_core_function_base_type(function, call->core_return_type_id);
     if (core == NULL) return false;
     switch (value->kind) {
     case MINIC_RISCV64_ABI_VALUE_VOID:
@@ -371,7 +371,7 @@ static bool rv64_core_preparedless_call_supported(
         call->argument_count > 8U ||
         (call->parameter_count != 0U && call->core_parameter_type_ids == NULL))
         return false;
-    return_type = minic_riscv64_core_base_type(function, call->core_return_type_id);
+    return_type = minic_core_function_base_type(function, call->core_return_type_id);
     if (return_type == NULL ||
         (return_type->kind != MINIC_CORE_TYPE_VOID &&
          !minic_riscv64_core_scalar_kind(return_type))) return false;
@@ -385,7 +385,7 @@ static bool rv64_core_preparedless_call_supported(
         if (argument_index < call->parameter_count)
             type_id = call->core_parameter_type_ids[argument_index];
         else if (!call->is_variadic) return false;
-        if (!minic_riscv64_core_scalar_kind(minic_riscv64_core_base_type(function, type_id)))
+        if (!minic_riscv64_core_scalar_kind(minic_core_function_base_type(function, type_id)))
             return false;
     }
     return true;

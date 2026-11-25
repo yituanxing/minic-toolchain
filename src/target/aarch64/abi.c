@@ -10,8 +10,7 @@ static bool aarch64_special_core_aggregate_member(
     const MinicCoreType *type;
     size_t i;
     if (depth > 16U || types == NULL) return true;
-    id = minic_core_type_unqualified(types, id);
-    type = minic_core_type_get(types, id);
+    type = minic_core_type_base(types, id);
     if (type == NULL) return true;
     switch (type->kind) {
     case MINIC_CORE_TYPE_POINTER:

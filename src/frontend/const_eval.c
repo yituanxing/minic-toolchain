@@ -1,4 +1,5 @@
 #include "frontend/const_eval.h"
+#include "common/integer_bits.h"
 #include "frontend/expression_semantics.h"
 #include "target/source_policy/source_info.h"
 
@@ -12,10 +13,6 @@ static bool integer_width(const MinicC0Program *program,
                           MinicType type,
                           unsigned int *width) {
     return minic_target_info_integer_width(target, program, type, width) && *width <= 64U;
-}
-
-static uint64_t width_mask(unsigned int width) {
-    return width == 64U ? UINT64_MAX : (UINT64_C(1) << width) - UINT64_C(1);
 }
 
 static bool normalize_bits(const MinicC0Program *program,
@@ -32,7 +29,7 @@ static bool normalize_bits(const MinicC0Program *program,
         *normalized = bits == 0U ? 0U : 1U;
         return true;
     }
-    *normalized = bits & width_mask(width);
+    *normalized = bits & minic_integer_mask64(width);
     return true;
 }
 
@@ -48,9 +45,7 @@ static bool value_signed(const MinicC0Program *program,
         !normalize_bits(program, target, value->type, value->bits, &bits)) {
         return false;
     }
-    if (width < 64U && (bits & (UINT64_C(1) << (width - 1U))) != 0U) {
-        bits |= ~width_mask(width);
-    }
+    bits = minic_integer_sign_extend64(bits, width);
     (void)memcpy(result, &bits, sizeof(*result));
     return true;
 }
@@ -411,7 +406,7 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
                                          expression->value.unary.operand,
                                          depth + 1U,
                                          &operand_bits)) {
-        if (pointer_width < 64U && operand_bits > width_mask(pointer_width)) {
+        if (pointer_width < 64U && operand_bits > minic_integer_mask64(pointer_width)) {
             return false;
         }
         return normalize_bits(program, target, expression->type, operand_bits, bits);
@@ -437,7 +432,7 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
     } else if (!normalize_bits(program, target, operand.type, operand.bits, &operand_bits)) {
         return false;
     }
-    if (pointer_width < 64U && operand_bits > width_mask(pointer_width)) {
+    if (pointer_width < 64U && operand_bits > minic_integer_mask64(pointer_width)) {
         return false;
     }
     return normalize_bits(program, target, expression->type, operand_bits, bits);
@@ -628,10 +623,10 @@ static bool eval_builtin_overflow_predicate(const MinicC0Program *program,
         break;
     default: return false;
     }
-    truncated = result.low & width_mask(result_width);
+    truncated = result.low & minic_integer_mask64(result_width);
     if (minic_c0_integer_type_is_signed(program, third->type)) {
         if ((truncated & (UINT64_C(1) << (result_width - 1U))) != 0U)
-            extended = truncated | ~width_mask(result_width);
+            extended = truncated | ~minic_integer_mask64(result_width);
         else
             extended = truncated;
         overflow = result.low != extended ||
@@ -707,7 +702,7 @@ static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
     } else if (!normalize_bits(program, target, integer.type, integer.bits, &integer_bits)) {
         return false;
     }
-    *bits = integer_bits & width_mask(pointer_width);
+    *bits = integer_bits & minic_integer_mask64(pointer_width);
     return true;
 }
 
@@ -974,7 +969,7 @@ static bool eval_binary(const MinicC0Program *program,
         if (minic_c0_integer_type_is_signed(program, operation_type) && count != 0U &&
             (left_bits & (UINT64_C(1) << (width - 1U))) != 0U) {
             uint64_t fill =
-                width_mask(width) ^ ((UINT64_C(1) << (width - (unsigned int)count)) - UINT64_C(1));
+                minic_integer_mask64(width) ^ ((UINT64_C(1) << (width - (unsigned int)count)) - UINT64_C(1));
             left_bits = (left_bits >> count) | fill;
         } else {
             left_bits >>= count;

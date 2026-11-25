@@ -196,7 +196,7 @@ static bool rv_type(const RvCoreSelection *sel, MinicCoreTypeId id,
     const MinicCoreType *type;
     if (types == NULL || bytes == NULL || sign == NULL || pointer == NULL)
         return false;
-    type = minic_core_type_get(types, minic_core_type_unqualified(types, id));
+    type = minic_core_type_base(types, id);
     if (type == NULL || !type->has_layout || type->size == 0U ||
         type->size > sel->xlen / 8U) return false;
     *pointer = type->kind == MINIC_CORE_TYPE_POINTER;
@@ -493,7 +493,7 @@ static bool rv_transport_type(const RvCoreSelection *sel,
     bool *is_signed) {
     const MinicCoreTypeContext *types = sel->plan->core->type_context;
     const MinicCoreType *type = types == NULL ? NULL :
-        minic_core_type_get(types, minic_core_type_unqualified(types, id));
+        minic_core_type_base(types, id);
     const size_t word = sel->xlen / 8U;
     if (type == NULL || !type->has_layout || type->size == 0U ||
         type->size > 2U * word || size == NULL ||
@@ -517,8 +517,7 @@ static bool rv_core_constant(RvCoreSelection *sel,
     bool sign, pointer;
     const MinicCoreTypeContext *types = sel->plan->core->type_context;
     const MinicCoreType *type = types == NULL ? NULL :
-        minic_core_type_get(types,
-            minic_core_type_unqualified(types, ins->core_type_id));
+        minic_core_type_base(types, ins->core_type_id);
     const unsigned word = sel->xlen / 8U;
     if (type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
         type->has_layout && type->size == 2U * word &&
@@ -547,8 +546,7 @@ static bool rv_core_float_constant(RvCoreSelection *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreTypeContext *types = sel->plan->core->type_context;
     const MinicCoreType *type = types == NULL ? NULL :
-        minic_core_type_get(types,
-            minic_core_type_unqualified(types, ins->core_type_id));
+        minic_core_type_base(types, ins->core_type_id);
     const size_t word = sel->xlen / 8U;
     const uint64_t bits = ins->value.floating_bits;
     size_t chunks, i;
@@ -595,12 +593,9 @@ static bool rv_core_runtime_binary(RvCoreSelection *sel,
         types == NULL || lhs >= fn->value_count ||
         rhs >= fn->value_count || !sel->plan->frame->saves_return_address ||
         !minic_riscv_target_isa_load(sel->plan->target, &isa)) return false;
-    result = minic_core_type_get(types,
-        minic_core_type_unqualified(types, ins->core_type_id));
-    left = minic_core_type_get(types,
-        minic_core_type_unqualified(types, fn->values[lhs].core_type_id));
-    right = minic_core_type_get(types,
-        minic_core_type_unqualified(types, fn->values[rhs].core_type_id));
+    result = minic_core_type_base(types, ins->core_type_id);
+    left = minic_core_type_base(types, fn->values[lhs].core_type_id);
+    right = minic_core_type_base(types, fn->values[rhs].core_type_id);
     if (result == NULL || left == NULL || right == NULL ||
         !result->has_layout || !left->has_layout || !right->has_layout ||
         result->size != left->size || result->size != right->size ||
@@ -938,9 +933,7 @@ static bool rv_core_dynamic_stack(RvCoreSelection *sel,
         ins->result >= fn->value_count ||
         fn->values[ins->result].core_type_id != ins->core_type_id)
         return false;
-    count_type = minic_core_type_get(types,
-        minic_core_type_unqualified(types,
-            fn->values[count].core_type_id));
+    count_type = minic_core_type_base(types, fn->values[count].core_type_id);
     if (count_type == NULL || count_type->kind != MINIC_CORE_TYPE_INTEGER ||
         !count_type->has_layout ||
         count_type->size != sel->xlen / 8U ||
@@ -1026,10 +1019,8 @@ static bool rv_core_bitscan(RvCoreSelection *sel,
     const MinicCoreType *input, *result;
     if (types == NULL || ins->value.operand >= fn->value_count ||
         ins->result >= fn->value_count) return false;
-    input = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[ins->value.operand].core_type_id));
-    result = minic_core_type_get(types, minic_core_type_unqualified(types,
-        ins->core_type_id));
+    input = minic_core_type_base(types, fn->values[ins->value.operand].core_type_id);
+    result = minic_core_type_base(types, ins->core_type_id);
     if (input == NULL || result == NULL ||
         input->kind != MINIC_CORE_TYPE_INTEGER ||
         input->value.integer.is_signed ||
@@ -1112,7 +1103,7 @@ static bool rv_wide_integer(RvCoreSelection *sel, MinicCoreTypeId id,
     bool *sign) {
     const MinicCoreTypeContext *types = sel->plan->core->type_context;
     const MinicCoreType *type = types == NULL ? NULL :
-        minic_core_type_get(types, minic_core_type_unqualified(types, id));
+        minic_core_type_base(types, id);
     if (sign == NULL || type == NULL || !type->has_layout ||
         type->kind != MINIC_CORE_TYPE_INTEGER ||
         type->size != 2U * (sel->xlen / 8U) ||
@@ -1151,8 +1142,7 @@ static bool rv_core_wide_shift(RvCoreSelection *sel,
         !rv_transport_type(sel, fn->values[right].core_type_id,
             &count_bytes, &integer, &count_sign) || !integer ||
         count_bytes == 0U || count_bytes > 2U * (width / 8U)) return false;
-    count = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[right].core_type_id));
+    count = minic_core_type_base(types, fn->values[right].core_type_id);
     if (count == NULL || count->kind != MINIC_CORE_TYPE_INTEGER ||
         (ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT &&
          !shift_right) ||
@@ -1471,8 +1461,7 @@ static bool rv_core_parameter(RvCoreSelection *sel,
     chunks = (size + word - 1U) / word;
     if (loc.words != chunks) return false;
     if (loc.floating_register_count != 0U) {
-        const MinicCoreType *type = minic_core_type_get(types,
-            minic_core_type_unqualified(types, ins->core_type_id));
+        const MinicCoreType *type = minic_core_type_base(types, ins->core_type_id);
         if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
             (size != 4U && size != 8U)) return false;
         return rv_fp_to_bits(sel, RV_T0,
@@ -1533,7 +1522,7 @@ static bool rv_record_extent(const RvCoreSelection *sel,
     const MinicCoreTypeContext *types = sel->plan->core->type_context;
     const MinicCoreType *type;
     if (types == NULL || extent == NULL) return false;
-    type = minic_core_type_get(types, minic_core_type_unqualified(types, id));
+    type = minic_core_type_base(types, id);
     if (type == NULL || type->kind != MINIC_CORE_TYPE_RECORD ||
         !type->has_layout || type->alignment == 0U) return false;
     *extent = type->size;
@@ -1811,8 +1800,7 @@ static bool rv_core_memory(RvCoreSelection *sel,
     MinicMachineOperand ops[2];
     const MinicCoreType *memory_type;
     memory_type = fn->type_context == NULL ? NULL :
-        minic_core_type_get(fn->type_context,
-            minic_core_type_unqualified(fn->type_context, type_id));
+        minic_core_type_base(fn->type_context, type_id);
     if (!atomic && memory_type != NULL &&
         (memory_type->kind == MINIC_CORE_TYPE_FLOAT ||
          (memory_type->kind == MINIC_CORE_TYPE_INTEGER &&
@@ -1830,8 +1818,7 @@ static bool rv_core_memory(RvCoreSelection *sel,
             ins->value.atomic_store.memory_order) != 0U) ||
         !rv_type(sel, type_id, &bytes, &sign, &pointer) ||
         (atomic && (fn->type_context == NULL ||
-            (memory_type = minic_core_type_get(fn->type_context,
-                minic_core_type_unqualified(fn->type_context, type_id))) == NULL ||
+            (memory_type = minic_core_type_base(fn->type_context, type_id)) == NULL ||
             !memory_type->has_layout || memory_type->alignment < bytes)) ||
         (opcode = rv_memory_opcode(sel, load, bytes, sign)) == 0U ||
         !rv_load(sel, address, RV_T0) ||
@@ -2224,10 +2211,8 @@ static bool rv_core_checked32(RvCoreSelection *sel,
          op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
          op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY))
         return false;
-    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[address].core_type_id));
-    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
-        ins->core_type_id));
+    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
+    flag = minic_core_type_base(types, ins->core_type_id);
     if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
         !pointer->has_layout || pointer->size != 4U ||
         flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
@@ -2239,10 +2224,8 @@ static bool rv_core_checked32(RvCoreSelection *sel,
     pointee = minic_core_type_unqualified(types,
         pointer->value.pointer.pointee);
     result = minic_core_type_get(types, pointee);
-    lt = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[left].core_type_id));
-    rt = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[right].core_type_id));
+    lt = minic_core_type_base(types, fn->values[left].core_type_id);
+    rt = minic_core_type_base(types, fn->values[right].core_type_id);
     if (result == NULL || lt == NULL || rt == NULL ||
         result->kind != MINIC_CORE_TYPE_INTEGER ||
         result->value.integer.is_bool || !result->has_layout ||
@@ -2386,10 +2369,8 @@ static bool rv_core_checked_overflow(RvCoreSelection *sel,
         (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
          op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)) return false;
-    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[address].core_type_id));
-    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
-        ins->core_type_id));
+    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
+    flag = minic_core_type_base(types, ins->core_type_id);
     if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
         !pointer->has_layout || pointer->size != 8U ||
         flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
@@ -2880,9 +2861,7 @@ static bool rv_core_call_arguments(RvCoreSelection *sel,
                         MINIC_CORE_CALL_ARGUMENT_VALUE ||
                     arg->value.value_id >= fn->value_count ||
                     fn->type_context == NULL) return false;
-                fp_type = minic_core_type_get(fn->type_context,
-                    minic_core_type_unqualified(fn->type_context,
-                        fn->values[arg->value.value_id].core_type_id));
+                fp_type = minic_core_type_base(fn->type_context, fn->values[arg->value.value_id].core_type_id);
                 if (fp_type == NULL || fp_type->kind != MINIC_CORE_TYPE_FLOAT ||
                     (fp_type->size != 4U && fp_type->size != 8U) ||
                     !rv_value_chunk(sel, arg->value.value_id,
@@ -3013,9 +2992,7 @@ static bool rv_core_call_result(RvCoreSelection *sel,
     if (sel->xlen == 64U &&
         minic_riscv_target_isa(sel->plan->target).abi ==
             MINIC_RISCV_ABI_LP64D && !integer) {
-        const MinicCoreType *fp_type = minic_core_type_get(fn->type_context,
-            minic_core_type_unqualified(fn->type_context,
-                ins->core_type_id));
+        const MinicCoreType *fp_type = minic_core_type_base(fn->type_context, ins->core_type_id);
         if (fp_type != NULL && fp_type->kind == MINIC_CORE_TYPE_FLOAT) {
             const MinicRiscv64PreparedCall *prepared;
             size_t ordinal;
@@ -3248,8 +3225,7 @@ static bool rv_core_asm_lvalue(RvCoreSelection *sel,
         !rv_type(sel, fn->values[address].core_type_id,
             &ptr_bytes, &ptr_signed, &ptr) || !ptr)
         return false;
-    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[address].core_type_id));
+    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
     return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER &&
         rv_type(sel, pointer->value.pointer.pointee, bytes, sign, &ptr);
 }
@@ -3265,8 +3241,7 @@ static bool rv_core_asm_wide_output_lvalue(RvCoreSelection *sel,
     const MinicCoreType *pointer;
     if (sel->xlen != 32U || types == NULL || sign == NULL ||
         address >= fn->value_count) return false;
-    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[address].core_type_id));
+    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
     return pointer != NULL && pointer->kind == MINIC_CORE_TYPE_POINTER &&
         rv_wide_integer(sel, pointer->value.pointer.pointee, sign);
 }
@@ -4091,9 +4066,7 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
                     MINIC_RISCV_ABI_LP64D &&
                 sel->plan->abi64->return_value.kind ==
                     MINIC_RISCV64_ABI_VALUE_FLOAT) {
-                const MinicCoreType *type = minic_core_type_get(
-                    fn->type_context, minic_core_type_unqualified(
-                        fn->type_context, fn->values[value].core_type_id));
+                const MinicCoreType *type = minic_core_type_base(fn->type_context, fn->values[value].core_type_id);
                 if (type == NULL || type->kind != MINIC_CORE_TYPE_FLOAT ||
                     chunks != 1U || (size != 4U && size != 8U) ||
                     !rv_fp_from_bits(sel, 10U, RV_A0, size == 8U))

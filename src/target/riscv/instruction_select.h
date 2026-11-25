@@ -32,10 +32,8 @@ static inline bool minic_riscv_machine_checked_mul_runtime_call(
     if (left >= fn->value_count || right >= fn->value_count ||
         address >= fn->value_count || ins->result >= fn->value_count)
         return false;
-    pointer = minic_core_type_get(types, minic_core_type_unqualified(types,
-        fn->values[address].core_type_id));
-    flag = minic_core_type_get(types, minic_core_type_unqualified(types,
-        ins->core_type_id));
+    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
+    flag = minic_core_type_base(types, ins->core_type_id);
     if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
         !pointer->has_layout || pointer->size != 8U ||
         flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||

@@ -61,8 +61,7 @@ bool minic_riscv64_abi_classify_core_value_profile(
     MinicRiscv64AbiValue value = {0};
     if (types == NULL || result == NULL ||
         (type = minic_core_type_get(types, type_id)) == NULL ||
-        (base = minic_core_type_get(
-            types, minic_core_type_unqualified(types, type_id))) == NULL)
+        (base = minic_core_type_base(types, type_id)) == NULL)
         return false;
     value.kind = MINIC_RISCV64_ABI_VALUE_INVALID;
     if (base->kind == MINIC_CORE_TYPE_VOID) {
@@ -136,8 +135,7 @@ bool minic_riscv64_abi_cursor_initialize_for_core_return_profile(
     minic_riscv64_abi_cursor_initialize(&next);
     next.lp64_soft_float = lp64_soft_float;
     if (classified.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT) {
-        const MinicCoreType *base = minic_core_type_get(
-            types, minic_core_type_unqualified(types, return_type));
+        const MinicCoreType *base = minic_core_type_base(types, return_type);
         if (base == NULL || base->kind != MINIC_CORE_TYPE_RECORD ||
             classified.storage_size <= 16U) return false;
         next.integer_register_count = 1U;

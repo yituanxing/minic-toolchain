@@ -150,7 +150,7 @@ bool minic_riscv_isa_admit_core_instruction(
      * compiler-rt translation unit contains many inline helper functions. */
     if (getenv("MINIC_RV64I_CORE_REJECT_TRACE") != NULL) {
         const MinicCoreType *type =
-            minic_riscv64_core_base_type(function, instruction->core_type_id);
+            minic_core_function_base_type(function, instruction->core_type_id);
         (void)fprintf(stderr,
             "RV64I_CORE_REJECT kind=%d core_kind=%d sign=%d bits=%u "
             "result=%u machine=%s\n",
