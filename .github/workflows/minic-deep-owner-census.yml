@@ -157,5 +157,28 @@ jobs:
                       referrer.append((other,snippets[:5]))
               jobs=re.findall(r"(?m)^  ([a-zA-Z][\w-]*):\s*$",s.split("\njobs:\n",1)[1]) if "\njobs:\n" in s else []
               print("WORKFLOW_ROUTING",json.dumps({"p":p,"bytes":len(s),"lines":len(s.splitlines()),"events":events or top,"branches":scopes,"jobs":len(jobs),"referencers":referrer[:15]}),flush=True)
+          # Resolve conservative literal stem prefixes inside real executable callers.
+          # Dynamic basename construction can survive full-name grep but MUST have an
+          # identifiable source-root prefix, basename variable, glob, or finite case list.
+          executable={p:v for p,v in blob.items() if
+                      p.endswith((".sh",".py",".yml",".yaml",".mk")) or p=="Makefile"}
+          def prefix_refs(stem):
+              parts=re.split(r"[_-]",stem)
+              prefs=["_".join(parts[:i]) for i in range(1,len(parts)) if len("_".join(parts[:i]))>=12]
+              prefs += ["-".join(parts[:i]) for i in range(1,len(parts)) if len("-".join(parts[:i]))>=12]
+              result=[]
+              for p,s in executable.items():
+                  if p.endswith("minic-deep-owner-census.yml"):continue
+                  if "/audit/" in p and "historical" in p:continue
+                  for i,line in enumerate(s.splitlines(),1):
+                      for term in sorted(prefs,key=len,reverse=True):
+                          if term in line and not line.strip().startswith("#"):
+                              result.append((p,i,term,line.strip()[:210]))
+                              break
+              return sorted(result,key=lambda x:-len(x[2]))[:16]
+          for p in c0_dark:
+              n=pathlib.Path(p).name
+              if n.startswith(("core_","aarch64_gnu_inline_lazy_","aarch64_gnu_neon_inline_","incomplete_function_pointer_array_")):continue
+              print("DARK_C0_SEMANTIC_REFS",json.dumps({"path":p,"refs":prefix_refs(pathlib.Path(p).stem)}),flush=True)
           print("OWNER_AUDIT_COMPLETE",flush=True)
           PY
