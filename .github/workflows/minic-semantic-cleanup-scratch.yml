@@ -272,6 +272,61 @@ jobs:
               for match in pattern.finditer(s):
                   discover.append((p,s.count("\n",0,match.start())+1,match.group(0).strip()[:185]))
           print("C0_DYNAMIC_DISCOVERY",json.dumps({"count":len(discover),"matches":discover[:140]}),flush=True)
+          # Some live runners concatenate family prefixes and runtime loop variables.
+          # Check every removed historical C0 fixture against *partial* prefix matches,
+          # and avoid calling stem-based unreferenced files genuinely dead.
+          audited_removed=[
+          "aarch64_glibc_mathvec_unused.c","aarch64_glibc_mathvec_used_reject.c",
+          "aarch64_gnu_inline_lazy_after_header_inline_invalid.c","aarch64_gnu_inline_lazy_after_header_invalid.c",
+          "aarch64_gnu_inline_lazy_after_pop_spoof.c","aarch64_gnu_inline_lazy_bad_spoof.c",
+          "aarch64_gnu_inline_lazy_conflicting_typedef.c","aarch64_gnu_inline_lazy_plain_invalid.c",
+          "aarch64_gnu_inline_lazy_unbalanced.c","aarch64_gnu_inline_lazy_used_indirect.c",
+          "aarch64_gnu_inline_lazy_used_unsupported.c",
+          "aarch64_gnu_neon_inline_bad_cfg.c","aarch64_gnu_neon_inline_bad_pointer_di_qi.c",
+          "aarch64_gnu_neon_inline_bad_pointer_di_rank.c","aarch64_gnu_neon_inline_bad_pointer_qi_di.c",
+          "aarch64_gnu_neon_inline_bad_reduction.c","aarch64_gnu_neon_inline_bad_signature.c",
+          "aarch64_gnu_neon_inline_bad_spoof.c"]
+          audited_removed += [
+          "m129_builtin_isdigit.c","m129_discarded_record_values.c","m130_discarded_lvalue.c",
+          "m131_zero_size_record_subscript.c","m132_unbounded_for_termination.c",
+          "m133_constant_true_loop_reachability.c","m134_unreachable_nested_label.c",
+          "m134_unreachable_tail.c","m141_scoped_loop_continue_tail.c",
+          "m142_nonedge_cleanup_metadata.c","m147_normalized_for_continue_binding.c",
+          "m148_for_update_continue_cfg.c","m149_parser_tail_continue_provenance.c",
+          "m152_enum_bit_field_write.c","m153_signed_bit_field_write.c",
+          "m154_signed_bit_field_update.c","m155_extern_void_symbol_address.c",
+          "m156_structural_pointer_relational.c","m157_scalar_compound_literal_address.c",
+          "m158_final_strict_tail.c","m159_constant_true_do_while.c"]
+          def prefixes(stem):
+              parts=stem.replace("-","_").split("_")
+              options=[parts[0]] if re.match(r"m\d{2,3}",parts[0]) else []
+              for n in range(2,len(parts)):
+                  pre="_".join(parts[:n])
+                  if len(pre)>12:options.append(pre)
+              return options
+          prefix_references={}
+          for name in audited_removed:
+              pref=prefixes(Path(name).stem)
+              matches=[]
+              for p,s in owners.items():
+                  if p.startswith("tests/suites/"):continue
+                  for term in pref:
+                      if term in s:
+                          for lineno,line in enumerate(s.splitlines(),1):
+                              if term in line:
+                                  matches.append((p,lineno,term,line.strip()[:200]))
+                                  if len(matches)>=12:break
+                      if len(matches)>=12:break
+                  if len(matches)>=12:break
+              if matches:prefix_references[name]=matches
+          print("REMOVED_FIXTURE_PREFIX_ROUTES",json.dumps({"candidates":len(audited_removed),"suspicious":prefix_references}),flush=True)
+          # Additional exact-plus-stem dynamic paths detected by a path-construction regex.
+          dynamic=collections.defaultdict(list)
+          for p,s in owners.items():
+              for line_no,line in enumerate(s.splitlines(),1):
+                  if "tests/compiler/c0/" in line and ("$" in line or "%" in line or "{" in line):
+                      dynamic[p].append((line_no,line.strip()[:230]))
+          print("C0_VARIABLE_PATH_BUILDERS",json.dumps({"owners":len(dynamic),"builders":dict(list(dynamic.items())[:50])}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
