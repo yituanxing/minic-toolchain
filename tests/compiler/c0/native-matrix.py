@@ -391,6 +391,18 @@ def run(name, supplied):
             positive(settings(group, row), cc, mini, dest)
             if row.get("marker"):
                 print(row["marker"], flush=True)
+        # Preserve exact equality oracles when one source is compiled with
+        # multiple ABI/PIC flags; independent "contains" checks are insufficient.
+        for left, right, target in group.get("same_asm", []):
+            require(0 <= left < len(group.get("positive", [])) and
+                    0 <= right < len(group.get("positive", [])),
+                    "invalid assembly comparison indices")
+            require(target in TARGETS, "invalid assembly comparison target")
+            def emitted(index):
+                dest = work if index == 0 else work / f"positive-{index}"
+                return (dest / (target + "-linux.s")).read_bytes()
+            require(emitted(left) == emitted(right),
+                    f"{target}: positive variants {left}/{right} differ in assembly")
         for index, row in enumerate(group.get("negative", [])):
             dest = work / f"negative-{index}"
             dest.mkdir(parents=True, exist_ok=True)
