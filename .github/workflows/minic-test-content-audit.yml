@@ -80,7 +80,7 @@ jobs:
                   try:
                       a=subprocess.run(["bash",str(old),*args],cwd=baseline,env=oldenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=200)
                       b=subprocess.run(["sh","tests/compiler/c0/run-native-matrix.sh",name,*args],env=newenv,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=100)
-                      return dict(name=name,old=a.returncode,new=b.returncode,stdout_equal=a.stdout==b.stdout,stderr_equal=a.stderr==b.stderr,oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-700:] if a.returncode else "",newerr=b.stderr.decode(errors="replace")[-1000:] if b.returncode else "")
+                      return dict(name=name,old=a.returncode,new=b.returncode,stdout_equal=a.stdout==b.stdout,stderr_equal=a.stderr==b.stderr,oldout=a.stdout.decode(errors="replace")[-500:],newout=b.stdout.decode(errors="replace")[-500:],olderr=a.stderr.decode(errors="replace")[-1300:] if a.returncode or a.stderr!=b.stderr else "",newerr=b.stderr.decode(errors="replace")[-1300:] if b.returncode or a.stderr!=b.stderr else "")
                   except subprocess.TimeoutExpired as exc:
                       return dict(name=name,old=-99,new=-99,error=str(exc))
           with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
