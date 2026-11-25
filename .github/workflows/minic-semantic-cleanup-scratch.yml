@@ -1,0 +1,136 @@
+name: MiniC deep semantic cleanup - scratch audit
+on:
+  push:
+    branches:
+      - cleanup/minic-semantic-deep-20261125
+permissions:
+  contents: read
+jobs:
+  full-tree-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read every tracked source and test; inspect semantic collisions and live references
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          import collections, hashlib, json, os, re, subprocess
+          from pathlib import Path
+          
+          paths=[s.decode() for s in subprocess.check_output(["git","ls-files","-z"]).split(b"\0") if s]
+          blob={}
+          for p in paths:
+              try: blob[p]=Path(p).read_text(encoding="utf-8")
+              except (UnicodeDecodeError, OSError): continue
+          tests={p:s for p,s in blob.items() if p.startswith("tests/")}
+          c0={p:s for p,s in tests.items() if p.startswith("tests/compiler/c0/") and p.endswith((".c",".i",".h"))}
+          shell={p:s for p,s in tests.items() if p.endswith(".sh")}
+          src={p:s for p,s in blob.items() if p.startswith("src/") and p.endswith(".c")}
+          print("AUDIT_BASE",subprocess.check_output(["git","rev-parse","HEAD"],text=True).strip(),flush=True)
+          print("AUDIT_INVENTORY",json.dumps({"tracked":len(paths),"text":len(blob),"tests":len(tests),"C0_sources":len(c0),"test_shell":len(shell),"prod_c":len(src),"test_bytes":sum(len(s.encode()) for s in tests.values()),"prod_c_bytes":sum(len(s.encode()) for s in src.values())}),flush=True)
+          
+          # Read all tracked UTF-8 files and index concrete references, separately from
+          # test-source contents (self references cannot count as independent use).
+          refs=collections.defaultdict(set)
+          basename_refs=collections.defaultdict(set)
+          pathset=set(paths)
+          for origin,content in blob.items():
+              if origin.startswith("tests/suites/"): continue
+              candidates=set(re.findall(r"(?<![A-Za-z0-9_/])(?:tests/)?(?:[A-Za-z0-9_.+-]+/)*[A-Za-z0-9_.+-]+\.(?:c|sh|i|S|h)(?![A-Za-z0-9_])",content))
+              for target in candidates:
+                  if target in pathset and target!=origin: refs[target].add(origin)
+                  elif "/" not in target:
+                      basename_refs[target].add(origin)
+          
+          # Removing comments and whitespace does NOT establish test equivalence; this
+          # is a high-recall candidate finder, not a deletion decision.
+          token_rx=re.compile(r"/\*.*?\*/|//[^\n]*|\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[A-Za-z_]\w*|(?:0[xX][0-9a-fA-F]+|\d+)(?:[uUlL.]*)|==|!=|<=|>=|&&|\|\||<<|>>|->|[^\s]",re.S)
+          keywords=set(("auto break case char const continue default do double else enum extern float for goto if inline int long register restrict return short signed sizeof static struct switch typedef union unsigned void volatile while _Bool _Complex _Atomic _Static_assert _Alignof _Alignas _Generic __asm__ __attribute__ __builtin_offsetof __extension__".split()))
+          def scan(s):
+              return [x for x in token_rx.findall(s) if not x.startswith(("/*","//"))]
+          def canonical(ts,normalize_numbers=False):
+              mapping={}
+              out=[]
+              for t in ts:
+                  if re.fullmatch(r"[A-Za-z_]\w*",t) and t not in keywords:
+                      if t not in mapping: mapping[t]="ID"+str(len(mapping))
+                      out.append(mapping[t])
+                  elif normalize_numbers and re.fullmatch(r"(?:0[xX][0-9a-fA-F]+|\d+)[uUlL.]*",t):
+                      out.append("NUM")
+                  else:out.append(t)
+              return "\x1f".join(out)
+          def grouped(items,kind,limit=24):
+              groups=collections.defaultdict(list)
+              for p,st in items.items():
+                  ts=scan(st)
+                  if len(ts)<15:continue
+                  if kind=="exact": key=hashlib.sha256("\x1f".join(ts).encode()).hexdigest()
+                  elif kind=="rename": key=hashlib.sha256(canonical(ts).encode()).hexdigest()
+                  else:key=hashlib.sha256(canonical(ts,True).encode()).hexdigest()
+                  groups[key].append(p)
+              return sorted([v for v in groups.values() if len(v)>1],key=lambda a:(-len(a),-sum(len(items[p]) for p in a)))[:limit]
+          
+          for kind in ("exact","rename","shape"):
+              families=grouped(c0,kind)
+              print("C0_SIMILAR_"+kind.upper(),json.dumps({"groups":len(families),"files_in_groups":sum(len(g) for g in families),"samples":[{"count":len(g),"files":g[:12]} for g in families[:22]]},ensure_ascii=False),flush=True)
+          
+          # Reports all tests with no literal path reference, but NOT as proven dead:
+          # historical shell invocation may form filenames dynamically.
+          unref_c0=[]
+          for p in c0:
+              count=len(refs.get(p,()))+len(basename_refs.get(Path(p).name,())-set([p]))
+              if not count:unref_c0.append(p)
+          cats=collections.Counter()
+          for p in unref_c0:
+              stem=Path(p).stem
+              cat= "negative" if "invalid" in stem or "reject" in stem else ("driver" if "driver" in stem or "support" in stem else stem.split("_")[0].split("-")[0])
+              cats[cat]+=1
+          print("C0_UNREFERENCED_CANDIDATES",json.dumps({"count":len(unref_c0),"families":cats.most_common(30),"samples":unref_c0[:70]}),flush=True)
+          
+          def shell_lines(s):
+              ls=[re.sub(r"\s+"," ",x.strip()) for x in s.splitlines()]
+              return [x for x in ls if x and not x.startswith("#")]
+          same=collections.defaultdict(list)
+          for p,s in shell.items():
+              seq="\n".join(shell_lines(s))
+              same[hashlib.sha256(seq.encode()).hexdigest()].append(p)
+          sames=[x for x in same.values() if len(x)>1]
+          print("SHELL_EXACT_NONCOMMENT_DUP",json.dumps({"groups":len(sames),"files":sum(map(len,sames)),"samples":sames[:18]}),flush=True)
+          # Identical command blocks of 4+ lines indicate cross-file setup duplication.
+          windows=collections.defaultdict(set)
+          for p,s in shell.items():
+              lines=shell_lines(s)
+              for i in range(len(lines)-3):
+                  w="\n".join(lines[i:i+4])
+                  if len(w)>90 and not any(x in w for x in ("EOF","SRC","ASM","PATCH")):
+                      windows[hashlib.sha1(w.encode()).hexdigest()].add(p)
+          clusters=sorted([(len(v),list(sorted(v))) for v in windows.values() if len(v)>=5],reverse=True)
+          print("SHELL_SHARED_COMMAND_BLOCKS",json.dumps({"distinct_blocks":len(clusters),"top":[{"count":n,"paths":p[:16]} for n,p in clusters[:15]]}),flush=True)
+          unref_shell=[]
+          for p in shell:
+              count=len(refs.get(p,()))+len(basename_refs.get(Path(p).name,())-set([p]))
+              if not count:unref_shell.append(p)
+          print("SHELL_UNREFERENCED_CANDIDATES",json.dumps({"count":len(unref_shell),"sample":unref_shell[:100]}),flush=True)
+          
+          # Large source modules; no inference of dead production functionality.
+          print("PROD_LARGEST",json.dumps([{"p":p,"lines":len(v.splitlines()),"bytes":len(v)} for p,v in sorted(src.items(),key=lambda z:-len(z[1]))[:20]]),flush=True)
+          # Marker strings are not behavioral assertions. Evaluate existing test contracts.
+          matrix=json.loads(blob["tests/compiler/c0/native-matrix.json"])
+          fields=collections.Counter()
+          for k,v in matrix.items():
+              rows=v.get("positive",[])+v.get("negative",[])
+              if v.get("compare"):fields["runtime_compare"]+=1
+              if v.get("negative"):fields["negative_group"]+=1
+              if not any(x.get("checks") or x.get("counts") or x.get("diagnostic") or x.get("gnu_reject") or x.get("syntax") for x in rows) and not v.get("units"):fields["no_explicit_assertions"]+=1
+              fields["rows"]+=len(rows)
+          print("MATRIX_AUDIT",json.dumps({"groups":len(matrix),**fields}),flush=True)
+          print("AUDIT_COMPLETE",flush=True)
+          PY
+      - name: Verify compiler build and architecture boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
+          bash tests/compiler/c0/check-minic-target-boundaries.sh
