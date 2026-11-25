@@ -245,6 +245,26 @@ jobs:
               if not any(stem in s for o,s in owners.items() if o!=p):
                   darksh.append(p)
           print("SHELL_STEM_UNREFERENCED",json.dumps({"count":len(darksh),"candidates":darksh[:180]}),flush=True)
+          # Large case dispatchers may preserve dead branches even after their old
+          # callers were retired. Inspect all registered cases against all active code.
+          for script,rx in [
+              ("tests/compiler/c0/run-compile-only-case.sh",r"(?m)^    ([A-Za-z0-9_-]+)\)\s+_c0_family="),
+              ("tests/compiler/c0/run-target-probe-case.sh",r"(?m)^    ([A-Za-z0-9_-]+)\)\s+_probe_family=")]:
+              allnames=sorted(set(re.findall(rx,blob[script])))
+              uncalled=[]
+              for n in allnames:
+                  callers=[p for p,s in owners.items() if p!=script and n in s]
+                  if not callers:uncalled.append(n)
+              print("DISPATCH_REACHABILITY",json.dumps({"driver":script,"registered":len(allnames),"no_stem_caller":len(uncalled),"candidate_case_ids":uncalled}),flush=True)
+          # Preprocessor includes and #if 0 branches are actual dead-code candidates.
+          incdup={}
+          for p,s in src.items():
+              names=re.findall(r"(?m)^[ \t]*#[ \t]*include[ \t]*([<\"][^>\"]+[>\"])",s)
+              dup=[(name,n) for name,n in collections.Counter(names).items() if n>1]
+              if dup:incdup[p]=dup
+          disabled={p:len(re.findall(r"(?m)^[ \t]*#[ \t]*if[ \t]+0(?:\s|$)",s)) for p,s in src.items()}
+          disabled={p:n for p,n in disabled.items() if n}
+          print("PROD_PREPROCESSOR_DEAD_CANDIDATES",json.dumps({"duplicate_includes":incdup,"if_zero":disabled}),flush=True)
           print("AUDIT_COMPLETE",flush=True)
           PY
       - name: Verify compiler build and architecture boundary
