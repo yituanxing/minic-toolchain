@@ -97,6 +97,26 @@ jobs:
           for path, sha in route_blobs.items():
               assert git("hash-object", path).decode().strip() == sha, path
           expected |= retired_route_files
+          # Four replay routes require artifacts from one exact producer run.
+          # Its artifact API returned total_count=0 on 2026-11-25. Preserve
+          # original source/command pins and executable oracles in Git.
+          expired_replay_snapshot = "a5eb02c7f5345bed15d0e97f6217b8ef442df378"
+          expired_replay_files = {
+              ".github/workflows/minic-aarch64-original-shard2-gnu-as.yml",
+              ".github/workflows/minic-aarch64-original56-gnu-as.yml",
+              ".github/workflows/minic-loong-original-linux-shard2-gnu-as.yml",
+              ".github/workflows/minic-loong-original-linux-seven-samples-gnu-as.yml",
+              "tools/ci/minic-aarch64-original-shard2-gnu-as-v1.py",
+              "tools/ci/minic-aarch64-original56-gnu-as-v1.py",
+              "tools/ci/minic-loong-original-shard2-gnu-as.py",
+          }
+          for path in expired_replay_files:
+              old = git("show", expired_replay_snapshot + ":" + path).decode()
+              if path.endswith(".yml"):
+                  assert "42345808682" in old and "actions/download-artifact@v4" in old
+              else:
+                  assert "42345808682" in old and "MINIC_S_GNU_AS_PASS" in old
+          expected |= expired_replay_files
           metadata |= set(route_blobs)
           shared_fixtures = {
               "tests/programs/c0/cast_expressions.c",
@@ -349,10 +369,10 @@ jobs:
           metadata |= {"docs/ci/linux-runtime-isolation.md"}
           metadata |= {"tools/ci/linux-perf-build-minic-profile-v1.sh", "tools/ci/linux-perf-ast-growth-ab-v1.sh"}
           metadata |= {"tools/ci/linux-runtime-build-minic-profile-v1.sh", "tools/ci/linux-runtime-profile-cache-id-v1.py"}
-          metadata -= retired_route_files
+          metadata -= retired_route_files | expired_replay_files
           deleted = changed_paths(base, "HEAD", "--diff-filter=D")
           changed = changed_paths(base, "HEAD")
-          if len(expected) != 967 or deleted != expected or changed != expected | metadata:
+          if len(expected) != 974 or deleted != expected or changed != expected | metadata:
               raise SystemExit("RETIREMENT_SCOPE=FAIL: unexpected tree changes")
           # Preserve the full closure in a historical checkout, not a successful
           # no-op overlay on a different source architecture.
