@@ -7,8 +7,10 @@ assembly contracts and invalid-source diagnostics. It contains no shell code.
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,7 +72,8 @@ def function_section(data, function):
     require(last < len(lines), f"missing .size for function {function}")
     return b"".join(lines[first:last + 1])
 
-def check_all(checks, artifacts, targets, counts=(), cfg=(), order=()):
+def check_all(checks, artifacts, targets, counts=(), cfg=(), order=(),
+              section_labels=(), object_zeros=()):
     for target, sense, mode, pattern, *section in checks:
         for t in targets if target == "*" else [target]:
             require(t in artifacts, f"missing check artifact {t}")
@@ -95,6 +98,32 @@ def check_all(checks, artifacts, targets, counts=(), cfg=(), order=()):
         b = data.find(second.encode())
         require(a >= 0 and b >= 0 and a < b,
                 f"{target}: assembly ordering contract {first!r} before {second!r} failed")
+
+    for target, section, label in section_labels:
+        current = None
+        found = False
+        for line in artifacts[target].decode(errors="replace").splitlines():
+            if line.startswith(".section "):
+                current = line[len(".section "):].split(",", 1)[0].strip()
+            if current == section and line.strip() == label + ":":
+                found = True
+        require(found, f"{target}: label {label} missing from section {section}")
+
+    for target, pattern, expected_bytes in object_zeros:
+        lines = artifacts[target].decode(errors="replace").splitlines()
+        match = matching
+        label_re = re.compile(pattern)
+        found = False
+        for i, line in enumerate(lines):
+            if not label_re.fullmatch(line.strip()):
+                continue
+            for next_line in lines[i + 1:]:
+                if next_line.startswith(".section ") or next_line.startswith(".size "):
+                    break
+                if next_line.strip() == f".zero {expected_bytes}":
+                    found = True
+                    break
+        require(found, f"{target}: object {pattern} missing zero fill {expected_bytes}")
 
     for target, function, minimum in cfg:
         require(function.replace("_", "").isalnum(), "invalid CFG function")
@@ -219,6 +248,14 @@ def positive(config, cc, mini, work):
         artifacts[target + "_log"] = p.stderr
         if config.get("relay_compile_stderr"):
             sys.stderr.buffer.write(p.stderr)
+        optional_tool = config.get("optional_asm_tool")
+        if optional_tool and shutil.which(optional_tool):
+            execute([optional_tool, "-c", out, "-o", work / (target + "-cross.o")],
+                    env, label="optional GNU cross assembly")
+        if config.get("host_asm_object"):
+            execute([cc, "-x", "assembler", "-c", out,
+                     "-o", work / (target + "-host.o")], env,
+                    label="GNU host assembly object")
     if config.get("native", True):
         require("x86_64" in targets, "native test must compile x86_64")
         mini_s = work / "x86_64-linux.s"
@@ -239,7 +276,9 @@ def positive(config, cc, mini, work):
         if config.get("compare"):
             require(config.get("gnu", True) and p.stdout == g.stdout and p.stderr == g.stderr,
                     "GNU and MiniC native outputs diverge")
-    check_all(config.get("checks", []), artifacts, targets, config.get("counts", []), config.get("cfg", []), config.get("order", []))
+    check_all(config.get("checks", []), artifacts, targets,
+              config.get("counts", []), config.get("cfg", []), config.get("order", []),
+              config.get("section_labels", []), config.get("object_zeros", []))
 
 def negative(config, cc, mini, work):
     env = environment(config)
