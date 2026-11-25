@@ -306,6 +306,17 @@ def run(name, supplied):
             work = base.resolve()
         if "units" in group:
             host_units(group, cc, work)
+        for index, step in enumerate(group.get("steps", [])):
+            dest = work / f"step-{index}"
+            dest.mkdir(parents=True, exist_ok=True)
+            if step["kind"] == "positive":
+                positive(settings(group, step), cc, mini, dest)
+            elif step["kind"] == "negative":
+                negative(settings(group, step), cc, mini, dest)
+            else:
+                raise ValueError(f"unsupported matrix step {step['kind']!r}")
+            if step.get("marker"):
+                print(step["marker"], flush=True)
         for index, row in enumerate(group.get("positive", [])):
             dest = work if index == 0 else work / f"positive-{index}"
             dest.mkdir(parents=True, exist_ok=True)
