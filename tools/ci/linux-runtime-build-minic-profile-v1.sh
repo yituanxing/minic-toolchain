@@ -83,12 +83,12 @@ patches=(
   # Keep the original label for comparing historical Runtime receipts.
   apply-riscv64-default-text-section-v0.py # historical-only
   apply-inline-asm-symbolic-specialization-v0.py
-  apply-riscv64-core-value-slot-pack-v0.py
-  apply-riscv64-core-value-slot-reuse-v0.py
+  apply-riscv64-core-value-slot-pack-v0.py # historical-only
+  apply-riscv64-core-value-slot-reuse-v0.py # historical-only
   apply-riscv64-record-call-result-snapshot-reuse-v0.py # historical-only
-  apply-riscv64-core-object-slot-reuse-v0.py
-  apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py
-  apply-riscv64-structured-asm-used-callee-save-v0.py
+  apply-riscv64-core-object-slot-reuse-v0.py # historical-only
+  apply-riscv64-core-object-slot-reuse-cfg-hotfix-v0.py # historical-only
+  apply-riscv64-structured-asm-used-callee-save-v0.py # historical-only
   # The validated .L*-only PC-relative global-address selection lives in
   # src/target/riscv64/core_codegen.c; do not re-run its old Python rewrite.
   apply-loop-mutated-specialization-fact-barrier-v0.py # historical-only
