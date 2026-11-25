@@ -335,3 +335,8 @@ jobs:
           set -Eeuo pipefail
           make -j4 MODE=release CFLAGS=-Werror build/release/bin/minic-cc
           bash tests/compiler/c0/check-minic-target-boundaries.sh
+          # Dynamic source-name families omitted by naive filename scans.
+          export MINIC_CC="$PWD/build/release/bin/minic-cc"
+          bash tests/compiler/c0/run-aarch64-gnu-inline-lazy-negatives.sh
+          bash tests/compiler/c0/run-aarch64-gnu-neon-inline-six.sh
+          bash tests/compiler/c0/run-incomplete-function-pointer-array-lifetime.sh
