@@ -43,4 +43,19 @@ jobs:
                   for match in pattern.finditer(body):
                       sites.append((path,body.count("\n",0,match.start())+1))
               print("SYMBOL",name,"HITS",len(sites),"SITES"," ".join(f"{p}:{n}" for p,n in sites[:16]),flush=True)
+          from collections import Counter
+          all_tokens=Counter()
+          for body in data.values():
+              all_tokens.update(re.findall(r"[A-Za-z_]\w*",body))
+          signature=re.compile(r"(?m)^[ \t]*(?:static[ \t]+)?(?:inline[ \t]+)?(?:[A-Za-z_]\w*(?:[ \t]+|[ \t]*\*+[ \t]*)){1,6}([A-Za-z_]\w*)[ \t]*\([^;{}]{0,550}\)[ \t\n]*\{")
+          scarce=[]
+          for path,body in data.items():
+              if not path.endswith(".c") or not path.startswith(("src/","compiler/","tools/","assembler/","linker/","preprocessor/","elf/")):continue
+              for match in signature.finditer(body):
+                  name=match.group(1)
+                  if all_tokens[name] <= 2:
+                      scarce.append((name,path,body.count("\n",0,match.start())+1,all_tokens[name]))
+          print("RARE_FUNCTION_DEFINITIONS",len(scarce),flush=True)
+          for name,path,line,count in scarce[:200]:
+              print("RARE_DEF",name,f"{path}:{line}","HITS",count,flush=True)
           PY
