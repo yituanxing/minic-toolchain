@@ -702,16 +702,9 @@ static bool core_inline_asm_symbolic_address_depth(
     if (expression == NULL) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
-        const MinicGlobalObject *object =
-            minic_c0_program_global_object(program, expression->value.global_object_id);
-        if (object == NULL || object->name == NULL || object->name_length == 0U) {
-            return false;
-        }
-        *symbol = object->name;
-        *addend = 0;
-        return true;
-    }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT)
+        return core_inline_asm_symbolic_lvalue_address(
+            context, expression_id, symbol, addend, depth);
     if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
         const MinicFunction *function =
             minic_c0_program_function(program, expression->value.function_id);
@@ -997,7 +990,9 @@ bool core_inline_asm_immediate_fact(
          !core_inline_asm_constraint_is(operand, "rK"))) {
         return false;
     }
-    if ((minic_const_eval_integer(
+    /* Try an ordinary constant fact first; specialization remains a fallback
+     * when the ordinary value cannot satisfy the target immediate constraint. */
+    if (((minic_const_eval_integer(
              context->body->program, context->target, operand->expression, &constant) ||
          core_inline_asm_local_integer_fact_depth(context, operand->expression, &constant, 0U)) &&
         minic_const_value_as_int64(
@@ -1006,23 +1001,14 @@ bool core_inline_asm_immediate_fact(
          (value >= 0 && value <= 31)) &&
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
-             context->target, "I", 1U, value))) {
-        *is_symbol = false;
-        *integer = value;
-        *symbol = NULL;
-        *byte_addend = 0;
-        return true;
-    }
-    /* Compute expressions such as `1 << (feature & 7)` and `feature >> 3`
-     * after transitive inline specialization. This path is also used by
-     * relocatable-symbol indexing, and never fabricates an unknown value. */
-    if (core_inline_asm_specialized_integer(
+             context->target, "I", 1U, value))) ||
+        (core_inline_asm_specialized_integer(
             context, operand->expression, &value, 0U) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
          (value >= 0 && value <= 31)) &&
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
-             context->target, "I", 1U, value))) {
+             context->target, "I", 1U, value)))) {
         *is_symbol = false;
         *integer = value;
         *symbol = NULL;

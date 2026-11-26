@@ -549,42 +549,14 @@ bool minic_parser_control_parse_default(MinicParser *parser) {
     return minic_parser_add_statement(parser, &statement);
 }
 
+/* A NULL statement_id selects the initializer clause, which consumes ';'. */
 static bool parse_for_update(MinicParser *parser, MinicStatementId *statement_id) {
     const MinicExpression *expression;
     MinicStatement statement;
+    bool initializer = statement_id == NULL;
 
-    if (parser == NULL || statement_id == NULL) {
+    if (parser == NULL)
         return false;
-    }
-
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_EXPRESSION;
-    statement.target_expression = MINIC_EXPRESSION_INVALID;
-    statement.expression = MINIC_EXPRESSION_INVALID;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
-
-    if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
-        return false;
-    }
-    expression = minic_c0_program_expression(parser->program, statement.expression);
-    if (expression == NULL) {
-        minic_parser_error(parser, "invalid for update expression");
-        return false;
-    }
-    statement.span = expression->span;
-    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
-}
-
-
-static bool parse_for_initializer_expression(MinicParser *parser) {
-    MinicStatement statement;
-    const MinicExpression *expression;
-
-    if (parser == NULL) {
-        return false;
-    }
     (void)memset(&statement, 0, sizeof(statement));
     statement.kind = MINIC_STATEMENT_EXPRESSION;
     statement.span.begin = parser->current.span.begin;
@@ -593,19 +565,22 @@ static bool parse_for_initializer_expression(MinicParser *parser) {
     statement.target_statement = MINIC_STATEMENT_INVALID;
     statement.then_block = MINIC_BLOCK_INVALID;
     statement.else_block = MINIC_BLOCK_INVALID;
-
-    if (!minic_parser_parse_full_expression(parser, &statement.expression)) {
+    if (!minic_parser_parse_full_expression(parser, &statement.expression))
         return false;
-    }
     expression = minic_c0_program_expression(parser->program, statement.expression);
     if (expression == NULL) {
-        minic_parser_error(parser, "invalid for initializer expression");
+        minic_parser_error(parser, initializer
+            ? "invalid for initializer expression" : "invalid for update expression");
         return false;
     }
-    statement.span.end = expression->span.end;
-    return minic_parser_expect(
-               parser, MINIC_TOKEN_SEMICOLON, "expected ';' after for initializer") &&
-           minic_parser_add_statement(parser, &statement);
+    if (initializer) {
+        statement.span.end = expression->span.end;
+        return minic_parser_expect(
+                   parser, MINIC_TOKEN_SEMICOLON, "expected ';' after for initializer") &&
+               minic_parser_add_statement(parser, &statement);
+    }
+    statement.span = expression->span;
+    return minic_c0_program_add_statement(parser->program, &statement, statement_id);
 }
 
 bool minic_parser_control_parse_for(MinicParser *parser) {
@@ -641,7 +616,7 @@ bool minic_parser_control_parse_for(MinicParser *parser) {
         if (!minic_parser_local_decl_ordinary(parser)) {
             return false;
         }
-    } else if (!parse_for_initializer_expression(parser)) {
+    } else if (!parse_for_update(parser, NULL)) {
         return false;
     }
 

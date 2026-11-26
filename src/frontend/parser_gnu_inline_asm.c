@@ -276,38 +276,20 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
     }
     free(template_text);
 
-    if (parser->current.kind == MINIC_TOKEN_COLON) {
-        if (!minic_parser_advance(parser)) {
+    /* Outputs and inputs share the same comma-separated operand grammar.
+     * Leave any third colon for the clobber parser below. */
+    for (unsigned int section = 0U;
+         section < 2U && parser->current.kind == MINIC_TOKEN_COLON; ++section) {
+        if (!minic_parser_advance(parser))
             return false;
-        }
         while (parser->current.kind != MINIC_TOKEN_COLON &&
                parser->current.kind != MINIC_TOKEN_RPAREN) {
-            if (!parse_gnu_inline_asm_operand(parser, inline_asm_id, true)) {
+            if (!parse_gnu_inline_asm_operand(parser, inline_asm_id, section == 0U))
                 return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_COMMA) {
+            if (parser->current.kind != MINIC_TOKEN_COMMA)
                 break;
-            }
-            if (!minic_parser_advance(parser)) {
+            if (!minic_parser_advance(parser))
                 return false;
-            }
-        }
-    }
-    if (parser->current.kind == MINIC_TOKEN_COLON) {
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        while (parser->current.kind != MINIC_TOKEN_COLON &&
-               parser->current.kind != MINIC_TOKEN_RPAREN) {
-            if (!parse_gnu_inline_asm_operand(parser, inline_asm_id, false)) {
-                return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_COMMA) {
-                break;
-            }
-            if (!minic_parser_advance(parser)) {
-                return false;
-            }
         }
     }
     if (parser->current.kind == MINIC_TOKEN_COLON) {
