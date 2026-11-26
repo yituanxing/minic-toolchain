@@ -20,24 +20,3 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
-  temporary_linker_regression:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install RISC-V test dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq binutils-riscv64-linux-gnu qemu-user
-      - name: Build and validate MiniAS and MiniLD CLI after wrapper removal
-        shell: bash
-        run: |
-          set -euo pipefail
-          make -j4 MODE=release CFLAGS=-Werror all
-          export BUILD_DIR="$PWD/build/release"
-          export MINIAS="$PWD/build/release/bin/minic-as"
-          export MINIC="$PWD/build/release/bin/minic"
-          export MINILD="$PWD/build/release/bin/minic-ld"
-          sh tests/linker/run-a0.sh
-          sh tests/linker/run-a1.sh
-          sh tests/linker/run-gc-v0.sh

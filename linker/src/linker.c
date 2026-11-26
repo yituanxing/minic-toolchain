@@ -21,7 +21,6 @@ int minild_link_static_elf64_riscv_inputs_options(
     const MiniLdStaticOptions *options,
     FILE *diagnostics);
 
-
 void minild_cli_enable_gc_sections_v0(void) {
     minild_gc_sections_enabled = true;
 }
@@ -365,7 +364,6 @@ done:
     return ok;
 }
 
-
 typedef struct MiniLdGcSectionOrder {
     size_t old_index;
     size_t order;
@@ -528,7 +526,6 @@ done:
     return ok;
 }
 
-
 /*
  * GNU's default linker script groups executable input sections into
  * the text output region before read-only data.  The GC frontier
@@ -653,7 +650,6 @@ done:
     free(remap);
     return ok;
 }
-
 
 typedef struct MiniLdGcOutputAlignmentOrder {
     size_t old_index;
@@ -1060,5 +1056,3 @@ int minild_link_static_elf64_riscv_inputs_options(
                                          options,
                                          diagnostics);
 }
-
-

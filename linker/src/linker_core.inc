@@ -475,7 +475,6 @@ static bool section_append_data(MiniLdSection *section,
     return true;
 }
 
-
 static uint64_t hash_text(const char *text) {
     uint64_t hash = UINT64_C(14695981039346656037);
 
@@ -1773,7 +1772,6 @@ static bool object_defines_needed_symbol(MiniLdState *state,
     return ok;
 }
 
-
 static void embedded_archive_destroy(MiniLdEmbeddedArchive *archive) {
     size_t i;
 
@@ -2130,7 +2128,6 @@ static bool process_object_or_archive(MiniLdState *state,
     }
     return process_input(state, path);
 }
-
 
 static bool process_group_sequence(MiniLdState *state,
                                    const MiniLdInput *inputs,
@@ -2548,7 +2545,6 @@ static bool static_patch_branch(MiniLdSection *section,
     return true;
 }
 
-
 static bool static_patch_rvc_branch(MiniLdSection *section,
                                     uint64_t offset,
                                     int64_t delta,
@@ -2680,7 +2676,6 @@ static bool static_allocate_common(MiniLdState *state) {
     return true;
 }
 
-
 static void static_got_destroy(MiniLdStaticGot *got) {
     free(got->slot_offsets);
     got->slot_offsets = NULL;
@@ -2752,7 +2747,6 @@ static bool static_build_got(MiniLdState *state, MiniLdStaticGot *got) {
     }
     return true;
 }
-
 
 static int static_align_site_compare(const void *left, const void *right) {
     const MiniLdAlignSite *a = left;
@@ -3236,7 +3230,6 @@ static bool shared_build_layout(MiniLdState *state,
      */
     return static_build_layout_at(state, layout, UINT64_C(0x1000));
 }
-
 
 typedef struct MiniLdScriptLayoutState {
     MiniLdState *state;
@@ -4287,7 +4280,6 @@ static bool static_synthesize_array_bound_pair(
     return static_define_absolute_if_undefined(state, start_name, start) &&
            static_define_absolute_if_undefined(state, end_name, end);
 }
-
 
 static bool static_resolve_symbol(MiniLdState *state,
                                   const MiniLdStaticLayout *layout,
@@ -5842,7 +5834,6 @@ static bool shared_symbol_needs_plt(const MiniLdState *state,
     }
     return shared->preemptible[index];
 }
-
 
 static bool shared_tls_base_address(const MiniLdState *state,
                                     const MiniLdStaticLayout *layout,
@@ -7563,7 +7554,6 @@ static bool shared_fill_dynamic(MiniLdState *state,
     return true;
 }
 
-
 typedef struct MiniLdSharedTlsSegment {
     bool present;
     size_t file_offset;
@@ -8386,8 +8376,6 @@ done:
     return ok ? 0 : 1;
 }
 
-
-
 /*
  * CPU-time profile for costly whole-Linux static links. Disabled unless
  * MINILD_PROFILE_PHASES=1; diagnostics go to stderr only, never an ELF output
@@ -8506,8 +8494,6 @@ done:
     return ok ? 0 : 1;
 }
 
-
-
 int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
                                                const MiniLdInput *inputs,
                                                size_t input_count,
@@ -8535,5 +8521,3 @@ done:
     state_destroy(&state);
     return ok ? 0 : 1;
 }
-
-

@@ -4878,8 +4878,3 @@ int minias_assemble_file_target_isa(const char *input_path,
     free(long_branch_lines);
     return rc;
 }
-
-/* Historical API stays permissive: only explicit -march=rv64i activates
- * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
-
-
