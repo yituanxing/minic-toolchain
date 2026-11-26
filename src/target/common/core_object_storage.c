@@ -63,27 +63,16 @@ void minic_core_object_storage_plan_destroy(MinicCoreObjectStoragePlan *plan) {
     (void)memset(plan, 0, sizeof(*plan));
 }
 
-/* Shared resource ownership for five machine backends. No target-specific
- * memory addresses, register assignment, spill policy or stack direction. */
-bool minic_core_object_storage_plan_acquire(
+/* A prepared Common FunctionPlan always owns the resolved object layouts.
+ * Every machine frame only borrows this exact plan; no target may create a
+ * second semantic storage snapshot or conditionally free the shared array. */
+bool minic_core_object_storage_plan_borrow(
     const MinicCoreFunction *fn, const MinicCoreObjectStoragePlan *shared,
-    MinicCoreObjectStoragePlan *result, bool *borrowed) {
-    if (fn == NULL || fn->type_context == NULL || result == NULL || borrowed == NULL ||
-        result->objects != NULL || result->count != 0U) return false;
-    *borrowed = false;
-    if (shared != NULL) {
-        if (shared->count != fn->object_count ||
-            (shared->count != 0U && shared->objects == NULL)) return false;
-        *result = *shared;
-        *borrowed = true;
-        return true;
-    }
-    return minic_core_object_storage_plan_build(fn, result);
-}
-
-void minic_core_object_storage_plan_release(
-    MinicCoreObjectStoragePlan *plan, bool borrowed) {
-    if (plan == NULL) return;
-    if (borrowed) *plan = (MinicCoreObjectStoragePlan){0};
-    else minic_core_object_storage_plan_destroy(plan);
+    const MinicCoreObjectStoragePlan **borrowed) {
+    if (fn == NULL || fn->type_context == NULL || shared == NULL ||
+        borrowed == NULL || shared->count != fn->object_count ||
+        (shared->count != 0U && shared->objects == NULL))
+        return false;
+    *borrowed = shared;
+    return true;
 }

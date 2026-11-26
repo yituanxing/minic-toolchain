@@ -30,8 +30,7 @@ typedef struct MinicX86Frame {
      * live Core values still use their original ABI-safe frame slots. */
     const size_t *function_value_use_counts;
     size_t *object_offsets;
-    MinicCoreObjectStoragePlan object_storage;
-    bool borrows_object_storage;
+    const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
     MinicX86ArgumentPlan incoming_arguments;
     MinicX86OutgoingCallPlans outgoing_call_plans;
     /* Borrowed for the duration of this function emission. Target machine

@@ -65,9 +65,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
             fn, facts->call_index,
             &frame->outgoing_call_plans))
         return x86_frame_preflight_reject(fn, "outgoing-abi");
-    if (!minic_core_object_storage_plan_acquire(
-            fn, storage,
-            &frame->object_storage, &frame->borrows_object_storage))
+    if (!minic_core_object_storage_plan_borrow(
+            fn, storage, &frame->object_storage))
         return x86_frame_preflight_reject(fn, "object-storage");
     frame->varargs_count = facts->variadic_address_count;
     frame->value_count = fn->value_count;
@@ -211,7 +210,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
      * Above 16, a separate %rsp-relative, dynamically aligned object base
      * is needed.  An offset aligned relative to %rbp is NOT enough. */
     for (i = 0U; i < fn->object_count; ++i) {
-        const size_t alignment = frame->object_storage.objects[i].alignment;
+        const size_t alignment = frame->object_storage->objects[i].alignment;
         /* SysV frame offsets are constrained to signed 32-bit displacements. */
         if (alignment > (size_t)INT32_MAX) return false;
         if (alignment > maximum_alignment) maximum_alignment = alignment;
@@ -234,8 +233,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
          * crypto stay within the 16KiB kernel stack without weakening
          * address identity for other (potentially escaping) objects. */
         for (i = 0U; valid && i < fn->object_count; ++i) {
-            const size_t size = frame->object_storage.objects[i].extent;
-            const size_t alignment = frame->object_storage.objects[i].alignment;
+            const size_t size = frame->object_storage->objects[i].extent;
+            const size_t alignment = frame->object_storage->objects[i].alignment;
             size_t slot, peak;
             bool reusable;
             valid = minic_core_object_reuse_plan_get(
@@ -271,8 +270,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         if (!valid) return false;
     } else {
         for (i = 0U; i < fn->object_count; ++i) {
-            const size_t size = frame->object_storage.objects[i].extent;
-            const size_t alignment = frame->object_storage.objects[i].alignment;
+            const size_t size = frame->object_storage->objects[i].extent;
+            const size_t alignment = frame->object_storage->objects[i].alignment;
             /* Positive offsets from dynamically aligned %rsp denote START. */
             if (!minic_core_frame_align_up(pos, alignment, &pos) ||
                 pos > SIZE_MAX - size) return false;
@@ -314,8 +313,6 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
     minic_x86_64_outgoing_call_plans_destroy(&frame->outgoing_call_plans);
-    minic_core_object_storage_plan_release(
-        &frame->object_storage, frame->borrows_object_storage);
     free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }

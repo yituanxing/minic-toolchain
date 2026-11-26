@@ -40,8 +40,7 @@ typedef struct Rv32Frame {
     size_t asm_saved_gpr_count;
     size_t *object_offsets;
     size_t *value_offsets;
-    MinicCoreObjectStoragePlan object_storage;
-    bool borrows_object_storage;
+    const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
     size_t object_count;
     size_t value_count;
     /* ABI is planned before frame allocation; outgoing area size and every

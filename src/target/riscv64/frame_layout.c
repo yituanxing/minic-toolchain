@@ -114,14 +114,12 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     frame->has_return_abi_value = false;
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
-    frame->object_storage = (MinicCoreObjectStoragePlan){0};
-    frame->borrows_object_storage = false;
+    frame->object_storage = NULL;
     frame->object_reuse = (MinicCoreObjectReusePlan){0};
     frame->semantic_calls = NULL;
     frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
-    if (!minic_core_object_storage_plan_acquire(
-            function, storage,
-            &frame->object_storage, &frame->borrows_object_storage))
+    if (!minic_core_object_storage_plan_borrow(
+            function, storage, &frame->object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
@@ -156,7 +154,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     }
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
         const MinicCoreObjectStorage *object =
-            &frame->object_storage.objects[object_index];
+            &frame->object_storage->objects[object_index];
         const size_t object_size = object->extent;
         const size_t object_alignment = object->alignment;
         if (object_size == 0U &&
@@ -360,7 +358,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         cached_offset = frame->outgoing_argument_size;
         for (cached_index = 0U; cached_index < function->object_count; ++cached_index) {
             const MinicCoreObjectStorage *object =
-                &frame->object_storage.objects[cached_index];
+                &frame->object_storage->objects[cached_index];
             const size_t object_size = object->extent;
             const size_t object_alignment = object->alignment;
             if (cached_index <= UINT32_MAX) {
@@ -464,7 +462,6 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
-    minic_core_object_storage_plan_release(
-        &frame->object_storage, frame->borrows_object_storage);
+    frame->object_storage = NULL;
     frame->reachable_blocks = NULL;
 }

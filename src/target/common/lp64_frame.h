@@ -29,8 +29,7 @@ typedef struct MinicLP64FramePlan {
     size_t *object_offsets;
     size_t *value_offsets;
     size_t *wide_offsets;
-    MinicCoreObjectStoragePlan object_storage;
-    bool borrows_object_storage;
+    const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
 } MinicLP64FramePlan;
 
 bool minic_lp64_frame_plan_objects_with_storage(

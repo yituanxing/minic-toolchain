@@ -29,14 +29,10 @@ bool minic_core_object_storage_plan_build(
 void minic_core_object_storage_plan_destroy(
     MinicCoreObjectStoragePlan *);
 
-/* A uniform five-target ownership boundary: borrow Common's immutable
- * object layout or build a checked standalone snapshot. Physical frame
- * offsets, ABI alignment and spill lifetimes remain target-owned.
- * Acquire only into a zero-initialized (unowned) plan; always release. */
-bool minic_core_object_storage_plan_acquire(
-    const MinicCoreFunction *, const MinicCoreObjectStoragePlan *shared,
-    MinicCoreObjectStoragePlan *result, bool *borrowed);
-void minic_core_object_storage_plan_release(
-    MinicCoreObjectStoragePlan *, bool borrowed);
+/* Checked immutable borrow from the one prepared Common FunctionPlan.
+ * Frame offsets, ABI register placement and stack directions remain target-owned. */
+bool minic_core_object_storage_plan_borrow(
+    const MinicCoreFunction *, const MinicCoreObjectStoragePlan *,
+    const MinicCoreObjectStoragePlan **borrowed);
 
 #endif
