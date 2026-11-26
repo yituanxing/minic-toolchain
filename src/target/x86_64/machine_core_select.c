@@ -11585,15 +11585,9 @@ static bool x86_core_instruction(X86CoreSelector *sel,
                 return false;
         }
         return x86_result(sel, ins);
-    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS: {
-        MinicMachineOperand slot;
-        MinicCoreObjectId object = ins->value.object_id;
-        if (!x86_object_slot(sel, object, &slot) ||
-            !x86_2(sel, sel->frame->objects_from_aligned_rsp ?
-                MINIC_X86_MI_LEA64_FRSP_R : MINIC_X86_MI_LEA64_FRBP_R,
-                slot, x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-        return x86_result(sel, ins);
-    }
+    case MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS:
+        return x86_object_address(sel, ins->value.object_id,
+            MINIC_X86_REG_RAX) && x86_result(sel, ins);
     case MINIC_CORE_INSTRUCTION_FIELD_ADDRESS: {
         size_t displacement = ins->value.field_address.byte_offset;
         if (ins->value.field_address.base >= sel->core->value_count ||
