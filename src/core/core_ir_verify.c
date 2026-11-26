@@ -625,6 +625,69 @@ static bool core_extended_float_call_contract(
     return false;
 }
 
+/* Both call opcodes use the same signature/result contract. Indirect calls
+ * retain their scalar-only variadic tail admission rule. */
+static bool verify_call_signature(const MinicCoreFunction *function,
+                                  const MinicCoreInstruction *instruction,
+                                  const bool *available_values,
+                                  const MinicCoreType *signature,
+                                  size_t argument_begin, size_t argument_count,
+                                  MinicCoreObjectId result_object,
+                                  bool allow_variadic_record) {
+    const MinicCoreTypeId return_type = signature->value.function.return_type;
+    const MinicCoreTypeId *parameters = signature->value.function.parameters;
+    const size_t parameter_count = signature->value.function.parameter_count;
+    const bool is_variadic = signature->value.function.is_variadic;
+    size_t index;
+
+    if ((!is_variadic && argument_count != parameter_count) ||
+        (is_variadic && argument_count < parameter_count) ||
+        !ct_equal(instruction->core_type_id, return_type))
+        return false;
+    if (ct_is_void(return_type)) {
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            result_object != MINIC_CORE_OBJECT_INVALID)
+            return false;
+    } else if (ct_is_record(return_type)) {
+        if (instruction->result != MINIC_CORE_VALUE_INVALID ||
+            result_object >= function->object_count ||
+            !core_record_storage_matches(function,
+                function->objects[result_object].core_type_id, return_type))
+            return false;
+    } else if (!ct_call_scalar_type(return_type) ||
+               result_object != MINIC_CORE_OBJECT_INVALID ||
+               !instruction_result_is_valid(function, instruction)) {
+        return false;
+    }
+    for (index = 0U; index < argument_count; ++index) {
+        const MinicCoreCallArgument *argument = &function->call_arguments[argument_begin + index];
+        const bool variadic_tail = index >= parameter_count;
+        if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
+            const MinicCoreValueId value = argument->value.value_id;
+            if (value >= function->value_count || !available_values[value] ||
+                !ct_call_scalar_type(function->values[value].core_type_id))
+                return false;
+            if (!variadic_tail && (!ct_call_scalar_type(parameters[index]) ||
+                !ct_equal(function->values[value].core_type_id, parameters[index])))
+                return false;
+        } else if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
+            const MinicCoreObjectId object = argument->value.object_id;
+            if (object >= function->object_count) return false;
+            if (variadic_tail) {
+                if (!allow_variadic_record ||
+                    !ct_is_record(function->objects[object].core_type_id)) return false;
+            } else if (!ct_is_record(parameters[index]) ||
+                       !core_record_storage_matches(function,
+                           function->objects[object].core_type_id, parameters[index])) {
+                return false;
+            }
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool instruction_is_valid(const MinicCoreFunction *function,
                                  const MinicCoreInstruction *instruction,
                                  const bool *available_values) {
@@ -1468,9 +1531,6 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
         MinicCoreTypeId return_type;
         size_t parameter_count;
         bool is_variadic;
-        size_t argument_index;
-        size_t argument_end;
-        bool returns_void;
 
         if (instruction->value.call.callee_id >= function->callee_count ||
             instruction->value.call.argument_begin > function->call_argument_count ||
@@ -1508,106 +1568,15 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
                   minic_core_function_base_type(function, parameters[1])->size != 16U)))
                 return false;
         }
-        if ((!is_variadic &&
-             instruction->value.call.argument_count != parameter_count) ||
-            (is_variadic &&
-             instruction->value.call.argument_count < parameter_count) ||
-            !ct_equal(instruction->core_type_id, return_type)) {
-            return false;
-        }
-        returns_void = ct_is_void(return_type);
-        if (returns_void) {
-            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-                instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID) {
-                return false;
-            }
-        } else if (ct_is_record(return_type)) {
-            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-                instruction->value.call.result_object >= function->object_count ||
-                !core_record_storage_matches(function,
-                    function->objects[instruction->value.call.result_object].core_type_id,
-                    return_type)) {
-                return false;
-            }
-        } else if (!ct_call_scalar_type(return_type) ||
-                   instruction->value.call.result_object != MINIC_CORE_OBJECT_INVALID ||
-                   !instruction_result_is_valid(function, instruction)) {
-            return false;
-        }
-        argument_end =
-            instruction->value.call.argument_begin + instruction->value.call.argument_count;
-        for (argument_index = instruction->value.call.argument_begin; argument_index < argument_end;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument;
-            size_t parameter_index;
-
-            argument = &function->call_arguments[argument_index];
-            parameter_index = argument_index - instruction->value.call.argument_begin;
-            if (parameter_index >= parameter_count) {
-                if (!is_variadic) {
-                    return false;
-                }
-                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                    MinicCoreValueId value_id = argument->value.value_id;
-
-                    if (value_id >= function->value_count || !available_values[value_id] ||
-                        !ct_call_scalar_type(function->values[value_id].core_type_id)) {
-                        return false;
-                    }
-                    continue;
-                }
-                if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                    MinicCoreObjectId object_id = argument->value.object_id;
-
-                    if (object_id >= function->object_count ||
-                        !ct_is_record(function->objects[object_id].core_type_id)) {
-                        return false;
-                    }
-                    continue;
-                }
-                return false;
-            }
-            {
-                MinicCoreTypeId parameter_type = parameters[parameter_index];
-
-                if (ct_call_scalar_type(parameter_type)) {
-                    MinicCoreValueId value_id;
-
-                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                        return false;
-                    }
-                    value_id = argument->value.value_id;
-                    if (value_id >= function->value_count || !available_values[value_id] ||
-                        !ct_equal(function->values[value_id].core_type_id, parameter_type)) {
-                        return false;
-                    }
-                } else if (ct_is_record(parameter_type)) {
-                    MinicCoreObjectId object_id;
-
-                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                        return false;
-                    }
-                    object_id = argument->value.object_id;
-                    if (object_id >= function->object_count ||
-                        !core_record_storage_matches(function,
-                            function->objects[object_id].core_type_id, parameter_type)) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-        return true;
+        return verify_call_signature(function, instruction, available_values, signature,
+            instruction->value.call.argument_begin, instruction->value.call.argument_count,
+            instruction->value.call.result_object, true);
     }
     case MINIC_CORE_INSTRUCTION_INDIRECT_CALL: {
         const MinicCoreCallSignature *signature;
         const MinicCoreType *signature_type;
         MinicCoreValueId callee_value;
         MinicCoreTypeId function_type;
-        size_t argument_index;
-        size_t argument_end;
-        bool returns_void;
 
         callee_value = instruction->value.indirect_call.callee;
         if (instruction->value.indirect_call.signature_id >= function->call_signature_count ||
@@ -1623,93 +1592,11 @@ static bool instruction_is_valid(const MinicCoreFunction *function,
             &function->call_signatures[instruction->value.indirect_call.signature_id];
         signature_type = core_snapshot_indirect_signature_type(function, signature);
         if (signature_type == NULL) return false;
-        if (!core_equal_unqualified(function, function_type,
-                                    signature->core_function_type_id) ||
-            (!signature_type->value.function.is_variadic &&
-             instruction->value.indirect_call.argument_count !=
-                 signature_type->value.function.parameter_count) ||
-            (signature_type->value.function.is_variadic &&
-             instruction->value.indirect_call.argument_count <
-                 signature_type->value.function.parameter_count) ||
-            !ct_equal(instruction->core_type_id,
-                signature_type->value.function.return_type)) {
-            return false;
-        }
-        returns_void = ct_is_void(signature_type->value.function.return_type);
-        if (returns_void) {
-            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-                instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID)
-                return false;
-        } else if (ct_is_record(signature_type->value.function.return_type)) {
-            if (instruction->result != MINIC_CORE_VALUE_INVALID ||
-                instruction->value.indirect_call.result_object >= function->object_count ||
-                !core_record_storage_matches(function,
-                    function->objects[instruction->value.indirect_call.result_object].core_type_id,
-                    signature_type->value.function.return_type))
-                return false;
-        } else if (!ct_call_scalar_type(signature_type->value.function.return_type) ||
-                   instruction->value.indirect_call.result_object != MINIC_CORE_OBJECT_INVALID ||
-                   !instruction_result_is_valid(function, instruction)) {
-            return false;
-        }
-        argument_end = instruction->value.indirect_call.argument_begin +
-                       instruction->value.indirect_call.argument_count;
-        for (argument_index = instruction->value.indirect_call.argument_begin;
-             argument_index < argument_end;
-             ++argument_index) {
-            const MinicCoreCallArgument *argument;
-            size_t parameter_index;
-
-            argument = &function->call_arguments[argument_index];
-            parameter_index =
-                argument_index - instruction->value.indirect_call.argument_begin;
-            if (parameter_index >= signature_type->value.function.parameter_count) {
-                MinicCoreValueId value_id;
-
-                if (!signature_type->value.function.is_variadic ||
-                    argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                    return false;
-                }
-                value_id = argument->value.value_id;
-                if (value_id >= function->value_count || !available_values[value_id] ||
-                    !ct_call_scalar_type(function->values[value_id].core_type_id)) {
-                    return false;
-                }
-                continue;
-            }
-            {
-                MinicCoreTypeId parameter_type =
-                    signature_type->value.function.parameters[parameter_index];
-
-                if (ct_call_scalar_type(parameter_type)) {
-                    MinicCoreValueId value_id;
-
-                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE) {
-                        return false;
-                    }
-                    value_id = argument->value.value_id;
-                    if (value_id >= function->value_count || !available_values[value_id] ||
-                        !ct_equal(function->values[value_id].core_type_id, parameter_type)) {
-                        return false;
-                    }
-                } else if (ct_is_record(parameter_type)) {
-                    MinicCoreObjectId object_id;
-
-                    if (argument->kind != MINIC_CORE_CALL_ARGUMENT_OBJECT) {
-                        return false;
-                    }
-                    object_id = argument->value.object_id;
-                    if (object_id >= function->object_count ||
-                        !core_record_storage_matches(function,
-                            function->objects[object_id].core_type_id, parameter_type)) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-        }
-        return true;
+        return core_equal_unqualified(function, function_type, signature->core_function_type_id) &&
+               verify_call_signature(function, instruction, available_values, signature_type,
+                   instruction->value.indirect_call.argument_begin,
+                   instruction->value.indirect_call.argument_count,
+                   instruction->value.indirect_call.result_object, false);
     }
     }
     return false;
