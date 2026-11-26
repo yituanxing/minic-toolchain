@@ -4864,25 +4864,30 @@ static bool x86_source_legacy_memory_contract(
     const bool fx = id == MINIC_X86_MACHINE_ASM_FXSAVE;
     const bool verw = id == MINIC_X86_MACHINE_ASM_VERW_CLEAR;
     const bool tlb = id == MINIC_X86_MACHINE_ASM_TLB_CACHE;
+    const bool fnsave = id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE;
+    const bool named_fnsave = fnsave &&
+        strstr(ins->source_asm_template,"%[fp]") != NULL;
     unsigned int expected;
-    if ((!fx && !verw && !tlb) || ins->operand_count != 1U ||
+    if ((!fx && !verw && !tlb && !fnsave) || ins->operand_count != 1U ||
         ins->operands == NULL ||
         !minic_x86_64_typed_machine_form_matches_template(id,form,
             ins->source_asm_template,ins->source_asm_length)) return false;
     op = &ins->operands[0];
     if ((fx && (form < 1U || form > 2U)) ||
         (verw && form != 1U) ||
-        (tlb && (form < 1U || form > 2U))) return false;
+        (tlb && (form < 1U || form > 2U)) ||
+        (fnsave && form != 0U)) return false;
     expected = MINIC_MACHINE_EFFECT_SOURCE_ASM |
         MINIC_MACHINE_EFFECT_VOLATILE;
     /* A write-only FXSAVE destination is a store; a +m transfer or
      * compiler-clobbered state also carries the source ordering barrier. */
-    if (!(fx && form == 2U))
+    if (!(fx && form == 2U) && !fnsave)
         expected |= MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
     if (tlb && form == 1U) expected |=
         MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
         MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE;
-    else if (fx && form == 2U) expected |= MINIC_MACHINE_EFFECT_MEMORY_WRITE;
+    else if (fnsave || (fx && form == 2U))
+        expected |= MINIC_MACHINE_EFFECT_MEMORY_WRITE;
     else if (verw) expected |= MINIC_MACHINE_EFFECT_MEMORY_READ;
     else expected |= MINIC_MACHINE_EFFECT_MEMORY_READ |
         MINIC_MACHINE_EFFECT_MEMORY_WRITE;
@@ -4896,9 +4901,13 @@ static bool x86_source_legacy_memory_contract(
     } else if (ins->implicit_count != 0U || ins->implicit != NULL)
         return false;
     if (op->asm_constraint == NULL ||
-        strcmp(op->asm_constraint,fx ? form == 1U ? "+m" : "=m" :
+        strcmp(op->asm_constraint,fnsave ? "=m" :
+            fx ? form == 1U ? "+m" : "=m" :
             verw ? "m" : tlb && form == 1U ? "r" : "+m") != 0 ||
-        (fx && form == 2U ?
+        (fnsave ? (named_fnsave ?
+            op->asm_name == NULL || strcmp(op->asm_name,"fp") != 0 :
+            op->asm_name != NULL) :
+         fx && form == 2U ?
             op->asm_name == NULL || strcmp(op->asm_name,"fx") != 0 :
             verw ? op->asm_name == NULL || strcmp(op->asm_name,"ds") != 0 :
             op->asm_name != NULL)) return false;
@@ -6088,6 +6097,7 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LIDT)
         return x86_source_descriptor_table_contract(instruction);
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)
         return x86_source_legacy_memory_contract(instruction);
