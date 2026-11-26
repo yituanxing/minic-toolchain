@@ -33,21 +33,9 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
                     minic_core_function_parameter_types(fn)[i], MINIC_CORE_FLOAT_BINARY64))
                 return MINIC_DIRECT_LP64_PROFILE_VARIADIC_FIXED_FLOAT;
     }
-    /* The incoming ABI classifier is the source of truth for consumed
-     * register/stack slots. One fixed record can occupy two GARs, a fixed
-     * floating argument can occupy an FAR, and a hidden indirect result
-     * consumes the first LoongArch GAR. Counting C parameters as GARs
-     * would position va_start at the wrong byte address. */
-    for (i = 0U; i < minic_core_function_parameter_count(fn); ++i) {
-        size_t record_size, record_slots;
-        const MinicCoreTypeId id = minic_core_function_parameter_types(fn)[i];
-        if (!minic_lp64_core_valid_parameter_with_policy(fn->type_context, id, abi) &&
-            !minic_multi_empty_record_core(fn->type_context, id) &&
-            !minic_multi_gp_record_core(fn->type_context, id,
-                                        &record_size, &record_slots) &&
-            !abi->core_indirect_record(fn->type_context, id, &record_size))
-            return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
-    }
+    /* Incoming planning checks type validity and classifies each ABI
+     * parameter in one pass; only its completed locations define fixed
+     * GAR/FAR and stack consumption for a subsequent va_start. */
     if (!minic_lp64_plan_incoming_parameters(fn, abi, incoming))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE ||

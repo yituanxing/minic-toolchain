@@ -41,7 +41,13 @@ static bool minic_lp64_plan_types(
         const MinicCoreType *core = minic_core_type_base(core_types, core_ids[j]);
         const bool record = core != NULL && core->kind == MINIC_CORE_TYPE_RECORD;
         bool by_reference = false;
-        if (core == NULL) return false;
+        /* Validate at the ABI classifier itself, instead of a separate
+         * complete prepass through the same incoming parameters. Record
+         * shape is independently checked below by the target's ABI policy. */
+        if (core == NULL ||
+            (!record && !minic_lp64_core_valid_parameter_with_policy(
+                core_types, core_ids[j], abi)))
+            return false;
         loc->gp_first = loc->fp_first = loc->stack_first = SIZE_MAX;
         if (record) {
             if (minic_multi_empty_record_core(core_types, core_ids[j])) {
@@ -449,8 +455,8 @@ static bool minic_lp64_admit_call(
 /* One physical call-plan entry per actual Core CALL. The prepared Common
  * call index supplies only real, ordered CALL sites. This cache is shared by
  * AArch64 AAPCS64 and LoongArch64 LP64D; only their ABI classifier differs.
- * Standalone callers without a Common index still use a checked linear
- * fallback, but production work is O(CALL sites), not O(all instructions). */
+ * FunctionPlan owns the required immutable Core index; no secondary
+ * standalone CALL scan or per-cache duplicate index ownership remains. */
 bool minic_lp64_plan_function_calls(
     const MinicCoreFunction *fn, const MinicCoreCallIndex *semantic_calls,
     const MinicDirectLP64AbiPolicy *abi,
@@ -468,12 +474,11 @@ bool minic_lp64_plan_function_calls(
         failed_instruction == NULL ||
         failed_preflight == NULL || has_calls == NULL ||
         cache->sites != NULL || cache->call_count != 0U ||
-        cache->semantic_calls.index != NULL ||
-        abi->core_indirect_record == NULL || abi->core_indirect_return == NULL ||
-        !minic_core_call_index_handle_prepare(
-            fn, semantic_calls, &cache->semantic_calls))
+        cache->semantic_calls != NULL || semantic_calls == NULL ||
+        abi->core_indirect_record == NULL || abi->core_indirect_return == NULL)
         return false;
-    calls = cache->semantic_calls.index;
+    cache->semantic_calls = semantic_calls;
+    calls = cache->semantic_calls;
     if (calls->count > SIZE_MAX / sizeof(*cache->sites))
         goto failed;
     *has_calls = calls->count != 0U;
@@ -546,10 +551,10 @@ const MinicLP64PreparedCall *minic_lp64_function_call_plan(
     const MinicLP64CallPlanCache *cache, size_t instruction_id) {
     const MinicCoreCallIndex *calls;
     size_t ordinal;
-    if (cache == NULL || cache->semantic_calls.index == NULL ||
+    if (cache == NULL || cache->semantic_calls == NULL ||
         (cache->call_count != 0U && cache->sites == NULL))
         return NULL;
-    calls = cache->semantic_calls.index;
+    calls = cache->semantic_calls;
     if (calls->count != cache->call_count ||
         minic_core_call_index_find(calls, instruction_id, &ordinal) == NULL ||
         ordinal >= cache->call_count || cache->sites[ordinal] == NULL ||
@@ -564,6 +569,5 @@ void minic_lp64_call_plan_cache_destroy(MinicLP64CallPlanCache *cache) {
     for (i = 0U; i < cache->call_count; ++i)
         free(cache->sites[i]);
     free(cache->sites);
-    minic_core_call_index_handle_destroy(&cache->semantic_calls);
     (void)memset(cache, 0, sizeof(*cache));
 }
