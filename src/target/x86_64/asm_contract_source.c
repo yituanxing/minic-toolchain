@@ -414,6 +414,7 @@ static bool x86_linux_alt_reloc_selftest_source(const MinicTargetInvocation *inv
         src->output_count || src->input_count != 1U || !src->inputs ||
         src->label_count || src->clobber_count != 1U ||
         src->has_memory_clobber || src->register_clobber_count != 1U ||
+        src->register_clobbers == NULL ||
         !clobber_is(&src->register_clobbers[0], "rdi") ||
         !target_constraint_is(&src->inputs[0], "m")) return false;
     value = minic_c0_program_expression(program, src->inputs[0].expression);
@@ -766,6 +767,7 @@ static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invoca
         src->has_memory_clobber != (form != 4U) ||
         src->clobber_count != (form == 4U ? 0U : (form == 1U ? 5U : 2U)) ||
         src->register_clobber_count != (form == 4U ? 0U : (form == 1U ? 4U : 1U)) ||
+        (form != 4U && src->register_clobbers == NULL) ||
         !src->is_volatile) return false;
     if (form == 4U) {
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
@@ -806,6 +808,7 @@ static bool x86_linux_atomic_xchg_source(const MinicTargetInvocation *invocation
         src->is_goto || src->output_count != 2U || src->input_count ||
         !src->outputs || src->label_count || !src->has_memory_clobber ||
         src->clobber_count != 2U || src->register_clobber_count != 1U ||
+        src->register_clobbers == NULL ||
         !clobber_is(&src->register_clobbers[0], "cc") ||
         !target_constraint_is(&src->outputs[0], width == 1U ? "+q" : "+r") ||
         !target_constraint_is(&src->outputs[1], "+m")) return false;
