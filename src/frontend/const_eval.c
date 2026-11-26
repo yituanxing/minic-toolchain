@@ -808,65 +808,30 @@ static bool eval_integer_address_pointer_compare(const MinicC0Program *program,
     return true;
 }
 
-static bool eval_binary(const MinicC0Program *program,
-                        const MinicTargetInvocation *target,
-                        const MinicExpression *expression,
-                        unsigned int depth,
-                        MinicConstValue *value) {
-    MinicConstValue left;
-    MinicConstValue right;
+bool minic_const_eval_integer_binary_values(const MinicC0Program *program,
+                                            const MinicTargetInvocation *target,
+                                            MinicBinaryOperator operator_kind,
+                                            MinicType result_type,
+                                            MinicConstValue left,
+                                            MinicConstValue right,
+                                            MinicConstValue *value) {
     MinicConstValue converted_left;
     MinicConstValue converted_right;
     MinicType operation_type;
-    bool left_truthy;
-    bool right_truthy;
     uint64_t left_bits;
     uint64_t right_bits;
     unsigned int width;
 
-    if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
-        eval_null_based_pointer_difference(program, target, expression, depth, value)) {
-        return true;
-    }
-    if (eval_integer_address_pointer_compare(program, target, expression, depth, value)) {
-        return true;
-    }
-    if (!eval_expression(program, target, expression->value.binary.left, depth + 1U, &left)) {
+    if (program == NULL || target == NULL || value == NULL ||
+        !minic_type_is_integer(left.type) || !minic_type_is_integer(right.type))
         return false;
-    }
-    if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
-        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
-        if (!value_truthy(program, target, &left, &left_truthy)) {
-            return false;
-        }
-        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND && !left_truthy) {
-            value->type = minic_type_int();
-            value->bits = 0U;
-            return true;
-        }
-        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR && left_truthy) {
-            value->type = minic_type_int();
-            value->bits = 1U;
-            return true;
-        }
-        if (!eval_expression(program, target, expression->value.binary.right, depth + 1U, &right) ||
-            !value_truthy(program, target, &right, &right_truthy)) {
-            return false;
-        }
-        value->type = minic_type_int();
-        value->bits = right_truthy ? 1U : 0U;
-        return true;
-    }
-    if (!eval_expression(program, target, expression->value.binary.right, depth + 1U, &right)) {
-        return false;
-    }
 
-    if (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
-        expression->value.binary.operator_kind == MINIC_BINARY_NOT_EQUAL ||
-        expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
-        expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
-        expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
-        expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL) {
+    if (operator_kind == MINIC_BINARY_EQUAL ||
+        operator_kind == MINIC_BINARY_NOT_EQUAL ||
+        operator_kind == MINIC_BINARY_LESS ||
+        operator_kind == MINIC_BINARY_LESS_EQUAL ||
+        operator_kind == MINIC_BINARY_GREATER ||
+        operator_kind == MINIC_BINARY_GREATER_EQUAL) {
         bool comparison;
 
         if (!minic_target_info_integer_common_for_program(
@@ -883,7 +848,7 @@ static bool eval_binary(const MinicC0Program *program,
                 !value_signed(program, target, &converted_right, &signed_right)) {
                 return false;
             }
-            switch (expression->value.binary.operator_kind) {
+            switch (operator_kind) {
             case MINIC_BINARY_EQUAL:
                 comparison = signed_left == signed_right;
                 break;
@@ -908,7 +873,7 @@ static bool eval_binary(const MinicC0Program *program,
         } else {
             left_bits = converted_left.bits;
             right_bits = converted_right.bits;
-            if (!compare_unsigned_bits(expression->value.binary.operator_kind,
+            if (!compare_unsigned_bits(operator_kind,
                                        left_bits, right_bits, &comparison)) return false;
         }
         value->type = minic_type_int();
@@ -916,9 +881,9 @@ static bool eval_binary(const MinicC0Program *program,
         return true;
     }
 
-    operation_type = expression->type;
-    if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
-        expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
+    operation_type = result_type;
+    if (operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+        operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
         if (!minic_target_info_integer_common_for_program(
                 target, program, left.type, left.type, &operation_type)) {
             return false;
@@ -930,8 +895,8 @@ static bool eval_binary(const MinicC0Program *program,
         return false;
     }
 
-    if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
-        expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
+    if (operator_kind == MINIC_BINARY_SHIFT_LEFT ||
+        operator_kind == MINIC_BINARY_SHIFT_RIGHT) {
         int64_t signed_count;
         uint64_t count;
 
@@ -948,7 +913,7 @@ static bool eval_binary(const MinicC0Program *program,
         }
         left_bits = converted_left.bits;
         value->type = operation_type;
-        if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT) {
+        if (operator_kind == MINIC_BINARY_SHIFT_LEFT) {
             if (minic_c0_integer_type_is_signed(program, operation_type)) {
                 int64_t signed_left;
 
@@ -985,7 +950,7 @@ static bool eval_binary(const MinicC0Program *program,
     value->type = operation_type;
 
     if (minic_type_is_unsigned_integer(operation_type)) {
-        switch (expression->value.binary.operator_kind) {
+        switch (operator_kind) {
         case MINIC_BINARY_ADD:
             left_bits += right_bits;
             break;
@@ -1032,7 +997,7 @@ static bool eval_binary(const MinicC0Program *program,
             !signed_range(program, target, operation_type, &minimum, &maximum)) {
             return false;
         }
-        switch (expression->value.binary.operator_kind) {
+        switch (operator_kind) {
         case MINIC_BINARY_ADD:
             if (!signed_add(signed_left, signed_right, minimum, maximum, &signed_result))
                 return false;
@@ -1070,6 +1035,58 @@ static bool eval_binary(const MinicC0Program *program,
         return normalize_bits(
             program, target, operation_type, (uint64_t)signed_result, &value->bits);
     }
+}
+
+static bool eval_binary(const MinicC0Program *program,
+                        const MinicTargetInvocation *target,
+                        const MinicExpression *expression,
+                        unsigned int depth,
+                        MinicConstValue *value) {
+    MinicConstValue left;
+    MinicConstValue right;
+    bool left_truthy;
+    bool right_truthy;
+
+    if (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT &&
+        eval_null_based_pointer_difference(program, target, expression, depth, value)) {
+        return true;
+    }
+    if (eval_integer_address_pointer_compare(program, target, expression, depth, value)) {
+        return true;
+    }
+    if (!eval_expression(program, target, expression->value.binary.left, depth + 1U, &left)) {
+        return false;
+    }
+    if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND ||
+        expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR) {
+        if (!value_truthy(program, target, &left, &left_truthy)) {
+            return false;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND && !left_truthy) {
+            value->type = minic_type_int();
+            value->bits = 0U;
+            return true;
+        }
+        if (expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR && left_truthy) {
+            value->type = minic_type_int();
+            value->bits = 1U;
+            return true;
+        }
+        if (!eval_expression(program, target, expression->value.binary.right, depth + 1U, &right) ||
+            !value_truthy(program, target, &right, &right_truthy)) {
+            return false;
+        }
+        value->type = minic_type_int();
+        value->bits = right_truthy ? 1U : 0U;
+        return true;
+    }
+    if (!eval_expression(program, target, expression->value.binary.right, depth + 1U, &right)) {
+        return false;
+    }
+
+    return minic_const_eval_integer_binary_values(
+        program, target, expression->value.binary.operator_kind,
+        expression->type, left, right, value);
 }
 
 static bool eval_expression(const MinicC0Program *program,

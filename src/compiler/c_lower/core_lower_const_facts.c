@@ -2394,183 +2394,27 @@ statement_expression_done:
         return true;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_SUBTRACT ||
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||
          expression->value.binary.operator_kind == MINIC_BINARY_REMAINDER ||
          expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
          expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_RIGHT ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
          expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
         MinicConstValue left;
         MinicConstValue right;
-        MinicConstValue left_common;
-        MinicConstValue right_common;
-        MinicType common_type;
-        uint64_t result_bits;
-        unsigned int width;
 
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !minic_type_is_integer(left_expression->type) ||
-            !minic_type_is_integer(right_expression->type) ||
-            !core_const_eval_integer_with_locals(context,
-                                                expression->value.binary.left,
-                                                &left) ||
-            !core_const_eval_integer_with_locals(context,
-                                                expression->value.binary.right,
-                                                &right) ||
-            !minic_target_info_integer_common_for_program(context->target,
-                                                          context->body->program,
-                                                          left_expression->type,
-                                                          right_expression->type,
-                                                          &common_type) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &left,
-                                               common_type,
-                                               &left_common) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &right,
-                                               common_type,
-                                               &right_common) ||
-            !minic_target_info_integer_width(context->target,
-                                             context->body->program,
-                                             common_type,
-                                             &width) ||
-            width == 0U || width > 64U) {
-            return false;
-        }
-        switch (expression->value.binary.operator_kind) {
-        case MINIC_BINARY_SUBTRACT:
-            result_bits = left_common.bits - right_common.bits;
-            break;
-        case MINIC_BINARY_MULTIPLY:
-            result_bits = left_common.bits * right_common.bits;
-            break;
-        case MINIC_BINARY_DIVIDE:
-        case MINIC_BINARY_REMAINDER:
-            if (minic_type_is_signed_integer(common_type)) {
-                int64_t ls;
-                int64_t rs;
-                int64_t minimum;
-                if (!core_const_signed_value(context, &left_common, &ls) ||
-                    !core_const_signed_value(context, &right_common, &rs) || rs == 0) {
-                    return false;
-                }
-                minimum = width == 64U ? INT64_MIN : -(INT64_C(1) << (width - 1U));
-                if (ls == minimum && rs == -1) {
-                    return false;
-                }
-                result_bits = (uint64_t)(
-                    expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE
-                        ? ls / rs
-                        : ls % rs);
-            } else {
-                if (right_common.bits == 0U) {
-                    return false;
-                }
-                result_bits = expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE
-                                  ? left_common.bits / right_common.bits
-                                  : left_common.bits % right_common.bits;
-            }
-            break;
-        case MINIC_BINARY_SHIFT_LEFT:
-        case MINIC_BINARY_SHIFT_RIGHT: {
-            uint64_t shift = right_common.bits;
-            if (shift >= width) {
-                return false;
-            }
-            if (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT) {
-                result_bits = left_common.bits << (unsigned int)shift;
-            } else if (minic_type_is_signed_integer(common_type)) {
-                int64_t ls;
-                if (!core_const_signed_value(context, &left_common, &ls)) {
-                    return false;
-                }
-                result_bits = (uint64_t)(ls >> (unsigned int)shift);
-            } else {
-                result_bits = left_common.bits >> (unsigned int)shift;
-            }
-            break;
-        }
-        case MINIC_BINARY_BITWISE_XOR:
-            result_bits = left_common.bits ^ right_common.bits;
-            break;
-        case MINIC_BINARY_BITWISE_OR:
-            result_bits = left_common.bits | right_common.bits;
-            break;
-        default:
-            return false;
-        }
-        left_common.type = common_type;
-        if (!core_cfg_normalize_integer(context,
-                                        common_type,
-                                        result_bits,
-                                        &left_common.bits)) {
-            return false;
-        }
-        return minic_const_value_convert_integer(context->body->program,
-                                                 context->target,
-                                                 &left_common,
-                                                 expression->type,
-                                                 value);
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
-         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
-        MinicConstValue left;
-        MinicConstValue right;
-        MinicConstValue left_common;
-        MinicConstValue right_common;
-        MinicConstValue result_common;
-        MinicType common_type;
-
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !minic_type_is_integer(left_expression->type) ||
-            !minic_type_is_integer(right_expression->type) ||
-            !core_const_eval_integer_with_locals(
-                context, expression->value.binary.left, &left) ||
-            !core_const_eval_integer_with_locals(
-                context, expression->value.binary.right, &right) ||
-            !minic_target_info_integer_common_for_program(context->target,
-                                                          context->body->program,
-                                                          left_expression->type,
-                                                          right_expression->type,
-                                                          &common_type) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &left,
-                                               common_type,
-                                               &left_common) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &right,
-                                               common_type,
-                                               &right_common)) {
-            return false;
-        }
-        result_common.type = common_type;
-        result_common.bits = expression->value.binary.operator_kind == MINIC_BINARY_ADD
-                                 ? left_common.bits + right_common.bits
-                                 : left_common.bits & right_common.bits;
-        return minic_const_value_convert_integer(context->body->program,
-                                                 context->target,
-                                                 &result_common,
-                                                 expression->type,
-                                                 value);
+        return core_const_eval_integer_with_locals(
+                   context, expression->value.binary.left, &left) &&
+               core_const_eval_integer_with_locals(
+                   context, expression->value.binary.right, &right) &&
+               minic_const_eval_integer_binary_values(
+                   context->body->program, context->target,
+                   expression->value.binary.operator_kind,
+                   expression->type, left, right, value);
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
         (expression->value.unary.operator_kind == MINIC_UNARY_PLUS ||
