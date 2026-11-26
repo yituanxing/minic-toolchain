@@ -20,3 +20,53 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+  temporary_all_tools_gc_audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Find linker-unreachable production functions in every tool
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/gc-sweep
+          if ! make -j4 MODE=debug BUILD_DIR=build/gc-sweep CFLAGS="-Werror -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" all >build/gc-sweep/make.log 2>&1; then
+            tail -100 build/gc-sweep/make.log
+            exit 1
+          fi
+          python3 - <<'PY'
+          import re, subprocess
+          from collections import Counter,defaultdict
+          from pathlib import Path
+          log=Path("build/gc-sweep/make.log").read_text(errors="replace")
+          # GNU ld --print-gc-sections, no binary names required to detect a
+          # function whose section is discarded in any final production link.
+          pattern=re.compile(r"removing unused section ['\u2018]([^'\u2019]+)['\u2019] in file ['\u2018]([^'\u2019]+)['\u2019]")
+          found=set()
+          for m in pattern.finditer(log):
+              section,obj=m.groups()
+              if not section.startswith(".text.") or not obj.startswith("build/gc-sweep/obj/") or not obj.endswith(".o"):continue
+              symbol=section[6:]
+              source=obj.replace("build/gc-sweep/obj/","",1)[:-2]+".c"
+              if source.startswith("third_party/"):continue
+              found.add((source,symbol))
+          source_files=subprocess.check_output(["git","ls-files","-z","--","*.c","*.h"]).decode().split("\0")
+          data={}
+          for name in source_files:
+              if name and not name.startswith("third_party/"):
+                  data[name]=Path(name).read_text(errors="replace")
+          # Restrict reference checks to the small set of discovered symbols.
+          names={name for src,name in found}
+          refs=defaultdict(list)
+          for path,body in data.items():
+              for sym in names:
+                  count=len(re.findall(r"\b"+re.escape(sym)+r"\b",body))
+                  if count:refs[sym].append((path,count))
+          print("GC_SCAN production_object_functions",len(found),"unique_names",len(names),"source_files",len(data),flush=True)
+          for src,n in Counter(s for s,_ in found).most_common(100):
+              print("GC_FILE",n,src,flush=True)
+          for src,symbol in sorted(found):
+              sites=refs[symbol]
+              tests=[x for x,n in sites if x.startswith("tests/")]
+              print("GC_CANDIDATE",src,symbol,"refs",sum(n for _,n in sites),"testrefs",len(tests),"sites",";".join(f"{p}:{n}" for p,n in sites[:12]),flush=True)
+          PY
