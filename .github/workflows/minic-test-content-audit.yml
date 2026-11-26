@@ -72,4 +72,24 @@ jobs:
               print("DUPLICATE",sum(end-start+1 for p,start,end,n in group),"lines",len(group),"members",";".join(f"{p}:{st}-{en}:{n}" for p,st,en,n in group),flush=True)
           for path,st,en,name,target in sorted(forwards,key=lambda t:t[2]-t[1],reverse=True)[:120]:
               print("FORWARD",en-st+1,f"{path}:{st}-{en}",name,"TO",target,flush=True)
+          import subprocess
+          tracked=subprocess.check_output(["git","ls-files","-z","--","*.c","*.h"]).decode().split("\0")
+          wanted={name for path,st,en,name,target in forwards}
+          references=defaultdict(list)
+          if wanted:
+              findname=re.compile(r"\b(?:"+"|".join(re.escape(n) for n in sorted(wanted,key=len,reverse=True))+r")\b")
+              for filepath in tracked:
+                  if not filepath or filepath.startswith("third_party/"):continue
+                  data=Path(filepath).read_text(errors="replace")
+                  matches=Counter(m.group(0) for m in findname.finditer(data))
+                  for name,number in matches.items():references[name].append((filepath,number))
+          for path,st,en,name,target in sorted(forwards,key=lambda z:z[2]-z[1],reverse=True):
+              refs=references[name]
+              actual=sum(n for f,n in refs)
+              test_refs=sum(n for f,n in refs if f.startswith("tests/"))
+              h_refs=sum(n for f,n in refs if f.endswith(".h"))
+              if actual>5 or test_refs or h_refs:continue
+              print("WRAPPER_LOWUSE",en-st+1,f"{path}:{st}-{en}",name,
+                    "TO",target,"mentions",actual,
+                    "sites",";".join(f"{f}:{n}" for f,n in refs),flush=True)
           PY
