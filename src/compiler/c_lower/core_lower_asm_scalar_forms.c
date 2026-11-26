@@ -240,20 +240,6 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
@@ -483,20 +469,6 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
@@ -686,20 +658,6 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
