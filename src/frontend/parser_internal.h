@@ -252,7 +252,7 @@ void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value);
-bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);
+
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
                                                  MinicIntegerLiteralBase *base,

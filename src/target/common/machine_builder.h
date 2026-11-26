@@ -23,8 +23,7 @@ bool minic_machine_builder_create_block(MinicMachineBuilder *,
 bool minic_machine_builder_mark_core_block(MinicMachineBuilder *,
     size_t core_block_id);
 bool minic_machine_builder_position_at(MinicMachineBuilder *, size_t block_id);
-bool minic_machine_builder_add_alias_label(MinicMachineBuilder *,
-    const char *alias_label);
+
 void minic_machine_builder_set_origin(MinicMachineBuilder *,
     size_t core_block_id, size_t core_instruction_id);
 void minic_machine_builder_clear_origin(MinicMachineBuilder *);
@@ -54,30 +53,6 @@ bool minic_machine_builder_seal_selected_source_asm(MinicMachineBuilder *,
 /* A Core-origin compiler barrier has no physical bytes. It is deliberately
  * distinct from both ISA fences and user-authored empty source ASM. */
 bool minic_machine_builder_emit_compiler_barrier(MinicMachineBuilder *);
-
-/* A position marker between two actual selected instructions. Local labels
- * must use symbolic names and are uniqueness-checked function-wide. */
-bool minic_machine_builder_emit_local_label(MinicMachineBuilder *,
-    const char *name);
-
-bool minic_machine_builder_emit_section_push(MinicMachineBuilder *,
-    const char *section_name, unsigned int section_flags,
-    MinicMachineDirectiveSectionType section_type,
-    const char *link_order_symbol);
-bool minic_machine_builder_emit_section_pop(MinicMachineBuilder *);
-/* DATA accepts 1 or 2 already-typed operands: lhs [ - rhs ], where rhs may
- * be CURRENT_LOCATION; unlike a branch BLOCK fixup carries no CFG edge. */
-bool minic_machine_builder_emit_data(MinicMachineBuilder *,
-    unsigned int width_bytes, const MinicMachineOperand *operands,
-    size_t operand_count);
-
-/* This is ONLY for source-proven inline ASM; never use it to smuggle selected
- * instruction strings past target opcode, feature, and effect verification. */
-bool minic_machine_builder_emit_source_asm(MinicMachineBuilder *,
-    const char *source_bytes, size_t byte_length, unsigned int effects,
-    const MinicMachineOperand *bindings, size_t binding_count,
-    const MinicMachineRegisterEffect *implicit, size_t implicit_count,
-    bool terminates_block, bool permits_fallthrough);
 
 typedef struct MinicMachineSourceAsmInput {
     const char *source_bytes;
