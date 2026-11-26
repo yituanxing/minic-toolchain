@@ -3065,15 +3065,11 @@ static bool x86_source_real_mode_far_jump(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     if (src->target_machine_form_id != MINIC_X86_MACHINE_ASM_REAL_MODE_FAR_JUMP ||
         src->target_machine_form_variant != 0U ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !src->is_volatile || src->is_goto || !src->has_memory_clobber ||
         src->explicit_memory_clobber || !src->implicit_memory_effect ||
         src->register_clobber_count ||
-        src->resolved_immediate_count || src->source_asm_unique_id == 0U ||
-        src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id, 0U,
-            src->template_text, src->template_length) ||
+        src->resolved_immediate_count || src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
+        !x86_source_provenance_sealed(src) ||
         roles[0].operand_index != 0U ||
         roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
         roles[1].operand_index != 1U ||
@@ -3124,13 +3120,9 @@ static bool x86_source_patchable_flags_alt(X86CoreSelector *sel,
             MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE) return false;
     form = src->target_machine_form_variant;
     if (!src->is_volatile || src->is_goto || !src->has_memory_clobber ||
-        !src->implicit_memory_effect || src->source_asm_unique_id == 0U ||
-        src->resolved_immediate_count ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
+        !src->implicit_memory_effect || src->resolved_immediate_count ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id, form,
-            src->template_text, src->template_length) ||
+        !x86_source_provenance_sealed(src) ||
         (smap ? (form < 1U || form > 4U ||
             src->register_clobber_count != (form <= 2U ? 0U : 1U)) :
             (form != 1U || src->register_clobber_count != 0U)) ||
@@ -3283,15 +3275,12 @@ static bool x86_source_zstd_cpuid(X86CoreSelector *sel,
     count = ins->value.structured_inline_asm.operand_count;
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_ZSTD_CPUID ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->has_memory_clobber ||
         source->implicit_memory_effect ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length) || !roles)
+        !x86_source_provenance_sealed(source) || !roles)
         return false;
     for (form=0U;form<3U;++form)
         if (count == output_counts[form]+input_counts[form] &&
@@ -3371,16 +3360,13 @@ static bool x86_source_via_xstore(X86CoreSelector *sel,
     if (!roles || source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_VIA_XSTORE ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for(i=0U;i<4U;++i) {
         if(roles[i].operand_index != i ||
             roles[i].value >= sel->core->value_count ||
@@ -4516,16 +4502,12 @@ static bool x86_source_pci_mmconfig(X86CoreSelector *sel,
             MINIC_X86_MACHINE_ASM_PCI_MMCONFIG ||
         (width != 1U && width != 2U && width != 4U) ||
         source->target_machine_form_variant != width ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->register_clobber_count != 0U ||
         source->explicit_memory_clobber != !reading ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text, source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         roles == NULL ||
         roles[0].operand_index != 0U ||
         roles[1].operand_index != 1U ||
@@ -4625,17 +4607,13 @@ static bool x86_source_rep_stos(X86CoreSelector *sel,
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_REP_STOS ||
         (width != 2U && width != 4U && width != 8U) ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->explicit_memory_clobber ||
         !source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text, source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         roles == NULL) return false;
     for (i = 0U; i < 5U; ++i) {
         if (roles[i].operand_index != i ||
@@ -5418,15 +5396,11 @@ static bool x86_scalar_source_base(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     if (source->target_machine_form_id != form_id ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || source->is_goto ||
+        source->is_goto ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text,source->template_length))
+        !x86_source_provenance_sealed(source))
         return false;
     *source_out = source;
     *roles_out = ins->value.structured_inline_asm.operands;
@@ -6460,18 +6434,13 @@ static bool x86_source_fpu_user_frame(X86CoreSelector *sel,
     if (!roles || form < 1U || form > (safe ? 2U : 6U) ||
         (safe ? variant != 0U :
             (variant != form && variant != (form | 0x100U))) ||
-        source->operand_plan_owner !=
-            MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,variant,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < 4U; ++i) {
         const MinicCoreStructuredInlineAsmOperandKind kind = i == 0U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT : i == 1U ?
@@ -6707,8 +6676,7 @@ static bool x86_source_apic_amd_alt(X86CoreSelector *sel,
     if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_APIC_AMD_ALT ||
         (form != 1U && form != 2U) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto ||
         source->has_memory_clobber != (form == 1U) ||
         source->explicit_memory_clobber ||
@@ -6718,9 +6686,7 @@ static bool x86_source_apic_amd_alt(X86CoreSelector *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         roles == NULL || ins->value.structured_inline_asm.operand_count !=
             (form == 1U ? 5U : 3U) ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,form,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < (form == 1U ? 5U : 3U); ++i)
         if (roles[i].operand_index != i ||
             roles[i].has_fixed_register_binding || roles[i].early_clobber ||
@@ -6798,15 +6764,12 @@ static bool x86_source_xsetbv(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_XSETBV ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < 3U; ++i) {
         if (roles[i].operand_index != i ||
             roles[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
@@ -6844,17 +6807,14 @@ static bool x86_source_kexec_load_segments(X86CoreSelector *sel,
     if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_KEXEC_LOAD_SEGMENTS ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     role = ins->value.structured_inline_asm.operands;
     if (role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
@@ -7016,16 +6976,13 @@ static bool x86_source_fsgsbase(X86CoreSelector *sel,
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_FSGSBASE ||
         variant == 0U || variant > 4U ||
         source->target_machine_form_variant != variant ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,variant,
-            source->template_text,source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         !x86_scalar_role(role,0U,reading ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
@@ -7069,16 +7026,13 @@ static bool x86_source_crash_segment_snapshot(X86CoreSelector *sel,
             MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT ||
         variant == 0U || variant > 6U ||
         source->target_machine_form_variant != variant ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->has_memory_clobber ||
         source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,variant,
-            source->template_text,source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         !x86_scalar_role(role,0U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         role->physical_read_write || role->has_tied_output ||
@@ -7114,16 +7068,13 @@ static bool x86_source_cache_flush_alt(X86CoreSelector *sel,
             MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT) return false;
     roles = ins->value.structured_inline_asm.operands;
     if (!roles || source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         source->explicit_memory_clobber || !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id, 0U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     if (roles[0].operand_index != 0U ||
         roles[0].kind != (idle ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
@@ -7199,15 +7150,12 @@ static bool x86_source_preempt_gs_dec(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         !x86_scalar_role(&roles[0],0U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
         !x86_scalar_role(&roles[1],1U,
@@ -7274,17 +7222,14 @@ static bool x86_source_rep_uaccess_alternative(X86CoreSelector *sel,
     if ((!movsb && source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE) ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->implicit_memory_effect ||
         !source->has_memory_clobber ||
         source->explicit_memory_clobber != movsb ||
         source->register_clobber_count != (movsb ? 1U : 0U) ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id, 0U,
-            source->template_text, source->template_length) || !roles)
+        !x86_source_provenance_sealed(source) || !roles)
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool fixed = i == (movsb ? 3U : 2U);
@@ -8132,17 +8077,13 @@ static bool x86_source_percpu_gs(X86CoreSelector *sel,
         source->template_text,source->template_length);
     stable = stable_width != 0U;
     if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PERCPU_GS ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->target_machine_form_variant != 0U ||
-        source->source_asm_unique_id == 0U || source->is_goto ||
+        source->is_goto ||
         source->explicit_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text,source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         !minic_x86_64_linux_percpu_form(source->template_text,
             source->template_length,&operation,&width)) return false;
     count = operation == 2U || operation == 3U ? 1U : 2U;
@@ -8834,8 +8775,7 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
         roles == NULL ||
         ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || source->is_goto ||
+        source->is_goto ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->register_clobber_count != 0U ||
@@ -8844,10 +8784,7 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
              !source->explicit_memory_clobber)) ||
         (cmp && (!source->has_memory_clobber ||
                  !source->explicit_memory_clobber)) ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text,source->template_length))
+        !x86_source_provenance_sealed(source))
         return false;
     for (i = 0U; i < count; ++i) {
         const bool memory = i == 1U;
@@ -9001,17 +8938,14 @@ static bool x86_source_xstate_fault(X86CoreSelector *sel,
     if (!roles || form < 1U || form > 4U ||
         source->target_machine_form_id != MINIC_X86_MACHINE_ASM_XSTATE_FAULT ||
         source->target_machine_form_variant != form ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id, form,
-            source->template_text, source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < 5U; ++i) {
         const MinicCoreStructuredInlineAsmOperand *r = &roles[i];
         const unsigned int expected = i == 0U ?
@@ -9100,14 +9034,11 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
         minic_x86_64_linux_tlb_cache_form(
             source->template_text,source->template_length);
     if (form == 0U || source->target_machine_form_variant != form ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || source->is_goto ||
+        source->is_goto ||
         !source->is_volatile ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,form,
-            source->template_text,source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         role->operand_index != 0U || role->has_fixed_register_binding ||
         role->early_clobber || role->physical_early_clobber ||
         role->has_tied_output ||
@@ -9192,12 +9123,9 @@ static bool x86_source_delay_mul(X86CoreSelector *sel,
         return false;
     roles = ins->value.structured_inline_asm.operands;
     if (src->target_machine_form_variant != 1U ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !src->is_volatile || src->is_goto || src->has_memory_clobber ||
-        src->register_clobber_count != 0U || src->source_asm_unique_id == 0U ||
-        src->resolved_immediate_count != 0U ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id,1U,src->template_text,src->template_length))
+        src->register_clobber_count != 0U || src->resolved_immediate_count != 0U ||
+        !x86_source_provenance_sealed(src))
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool output = i < 2U;
@@ -9348,8 +9276,7 @@ static bool x86_source_kvm_hypercall(X86CoreSelector *sel,
     if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_KVM_HYPERCALL_ALT ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
@@ -9357,9 +9284,7 @@ static bool x86_source_kvm_hypercall(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         count < 2U || count > (alt ? 6U : 5U) || !roles ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,0U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < count; ++i) {
         const bool output = i == 0U;
         if (roles[i].operand_index != i ||
@@ -9419,13 +9344,10 @@ static bool x86_source_pvclock_scale(X86CoreSelector *sel,
     if (src->target_machine_form_id != MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE)
         return false;
     if (src->target_machine_form_variant != 1U ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !src->is_volatile || src->is_goto || src->has_memory_clobber ||
-        src->register_clobber_count != 0U || src->source_asm_unique_id == 0U ||
-        src->resolved_immediate_count != 0U ||
+        src->register_clobber_count != 0U || src->resolved_immediate_count != 0U ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id,1U,src->template_text,src->template_length))
+        !x86_source_provenance_sealed(src))
         return false;
     roles = ins->value.structured_inline_asm.operands;
     if (roles == NULL) return false;
@@ -9478,15 +9400,13 @@ static bool x86_source_vdso_syscall(X86CoreSelector *sel,
         return false;
     clock_form = ins->value.structured_inline_asm.operand_count == 5U;
     if ((clock_form ? 5U : 4U) != ins->value.structured_inline_asm.operand_count ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         src->target_machine_form_variant != 1U || !src->is_volatile ||
         src->is_goto || !src->has_memory_clobber ||
         src->explicit_memory_clobber == clock_form ||
         src->register_clobber_count != (clock_form ? 2U : 0U) ||
-        src->source_asm_unique_id == 0U || src->resolved_immediate_count != 0U ||
+        src->resolved_immediate_count != 0U ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id,1U,src->template_text,src->template_length))
+        !x86_source_provenance_sealed(src))
         return false;
     roles = ins->value.structured_inline_asm.operands;
     if (!roles) return false;
@@ -9583,13 +9503,10 @@ static bool x86_source_delay_wait(X86CoreSelector *sel,
     form = minic_x86_64_linux_delay_wait_form(src->template_text,src->template_length);
     if ((form != 1U && form != 2U) ||
         src->target_machine_form_variant != form ||
-        src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         !src->is_volatile || src->is_goto || src->has_memory_clobber ||
-        src->register_clobber_count != 0U || src->source_asm_unique_id == 0U ||
-        src->resolved_immediate_count != 0U ||
+        src->register_clobber_count != 0U || src->resolved_immediate_count != 0U ||
         ins->value.structured_inline_asm.operand_count != (form == 1U ? 1U : 3U) ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id,form,src->template_text,src->template_length))
+        !x86_source_provenance_sealed(src))
         return false;
     if (form == 1U) {
         if (roles[0].operand_index != 0U ||
@@ -10004,13 +9921,9 @@ static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     if (roles == NULL ||
         source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || source->is_goto ||
+        source->is_goto ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     count = ins->value.structured_inline_asm.operand_count;
     if (source->target_machine_form_variant != 0U || count < 7U ||
         count > 11U || !source->is_volatile || !source->has_memory_clobber ||
@@ -10547,11 +10460,8 @@ static bool x86_source_boot_bit(X86CoreSelector *sel,
     if (src->target_machine_form_id != MINIC_X86_MACHINE_ASM_BOOT_FLAGS ||
         src->target_machine_form_variant != 2U) return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (src->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !src->is_volatile || src->is_goto || src->register_clobber_count != 0U ||
-        src->source_asm_unique_id == 0U ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            src->target_machine_form_id,2U,src->template_text,src->template_length) ||
+    if (!src->is_volatile || src->is_goto || src->register_clobber_count != 0U ||
+        !x86_source_provenance_sealed(src) ||
         roles[0].operand_index != 0U ||
         roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
         roles[1].operand_index != 1U ||
@@ -10601,13 +10511,10 @@ static bool x86_source_legacy_scalar(X86CoreSelector *sel,
     count = lar ? 2U : 1U;
     if (ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 1U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,1U,
-            source->template_text,source->template_length)) return false;
+        !x86_source_provenance_sealed(source)) return false;
     if (lar) {
         if (source->has_memory_clobber ||
             source->register_clobber_count != 0U ||
@@ -11066,8 +10973,7 @@ static bool x86_source_single_integer_immediate(
     if (roles == NULL ||
         source->target_machine_form_id != form_id ||
         source->target_machine_form_variant != 1U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
+        !source->is_volatile ||
         source->is_goto || source->has_memory_clobber ||
         source->explicit_memory_clobber ||
         source->register_clobber_count != 0U ||
@@ -11076,9 +10982,7 @@ static bool x86_source_single_integer_immediate(
         !x86_scalar_role(&roles[0], 0U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id, source->target_machine_form_variant,
-            source->template_text, source->template_length))
+        !x86_source_provenance_sealed(source))
         return false;
     *source_out = source;
     *immediate_out = &source->resolved_immediates[0];
@@ -11147,18 +11051,13 @@ static bool x86_source_accumulator_math(X86CoreSelector *sel,
         MINIC_X86_MACHINE_ASM_MULDIV_U64;
     if (!muldiv && source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_KASLR_MUL) return false;
-    if (source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+    if (!source->is_volatile || source->is_goto ||
         source->has_memory_clobber || source->explicit_memory_clobber ||
-        source->source_asm_unique_id == 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->deferred_immediate_symbol != NULL ||
         source->template_text == NULL ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,
-            source->target_machine_form_variant,
-            source->template_text, source->template_length) ||
+        !x86_source_provenance_sealed(source) ||
         source->register_clobber_count != (muldiv ? 1U : 0U) ||
         (muldiv && (source->register_clobbers == NULL ||
             source->register_clobbers[0].name == NULL ||
