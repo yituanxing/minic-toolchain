@@ -11,4 +11,8 @@ bool minic_inline_spec_add_variant(
     MinicC0Program *program, MinicFunctionId source_id,
     const MinicFunction *caller, const MinicInlineSpecializationKey *key,
     unsigned int fact_mask, size_t ordinal, MinicFunctionId *specialized_id);
+bool minic_inline_spec_resolve_call(
+    const MinicInlineCallPlan *plan, MinicExpressionId expression_id,
+    size_t source_limit, MinicFunctionId *current_id, MinicFunctionId *source_id,
+    MinicFunction *current, MinicFunction *source);
 #endif

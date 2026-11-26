@@ -270,6 +270,30 @@ bool minic_inline_spec_add_variant(
     return true;
 }
 
+bool minic_inline_spec_resolve_call(
+    const MinicInlineCallPlan *plan, MinicExpressionId expression_id,
+    size_t source_limit, MinicFunctionId *current_id, MinicFunctionId *source_id,
+    MinicFunction *current, MinicFunction *source) {
+    const MinicC0Program *program;
+    const MinicExpression *call;
+    if (plan == NULL || (program = plan->program) == NULL ||
+        current_id == NULL || source_id == NULL || current == NULL || source == NULL ||
+        source_limit > program->function_count)
+        return false;
+    *current_id = minic_inline_call_plan_get(plan, expression_id);
+    if (*current_id >= program->function_count) return false;
+    *current = program->functions[*current_id];
+    *source_id = current->is_integer_specialization
+        ? current->specialization_source : *current_id;
+    if (*source_id >= source_limit) return false;
+    *source = program->functions[*source_id];
+    call = &program->expressions[expression_id];
+    return source->is_defined && source->is_internal && source->is_inline &&
+           !source->is_variadic && source->alias_target == MINIC_FUNCTION_INVALID &&
+           source->parameter_count != 0U &&
+           source->parameter_count == call->value.call.argument_count;
+}
+
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key) {
     size_t i;
     if (key == NULL) return;

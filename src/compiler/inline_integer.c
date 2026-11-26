@@ -667,34 +667,10 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 bool needs_section_clone;
                 size_t parameter_index;
 
-                if (nested->kind != MINIC_EXPRESSION_CALL) {
+                if (!minic_inline_spec_resolve_call(
+                        call_plan, nested_expression_index, original_function_count,
+                        &current_callee_id, &nested_source_id, &current_callee, &nested_source))
                     continue;
-                }
-                current_callee_id = minic_inline_call_plan_get(
-                    call_plan, nested_expression_index);
-                if (current_callee_id >= program->function_count) {
-                    continue;
-                }
-                current_callee = program->functions[current_callee_id];
-                if (current_callee.is_integer_specialization) {
-                    if (current_callee.specialization_source >= original_function_count) {
-                        continue;
-                    }
-                    nested_source_id = current_callee.specialization_source;
-                } else {
-                    if (current_callee_id >= original_function_count) {
-                        continue;
-                    }
-                    nested_source_id = current_callee_id;
-                }
-                nested_source = program->functions[nested_source_id];
-                if (!nested_source.is_defined || !nested_source.is_internal ||
-                    !nested_source.is_inline || nested_source.is_variadic ||
-                    nested_source.alias_target != MINIC_FUNCTION_INVALID ||
-                    nested_source.parameter_count == 0U ||
-                    nested_source.parameter_count != nested->value.call.argument_count) {
-                    continue;
-                }
                 needs_section_clone = current_callee.is_integer_specialization &&
                     !minic_inline_spec_section_matches(
                         &current_callee, &nested_source, &caller);
@@ -767,8 +743,8 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                         return false;
                     }
                     if (!minic_inline_spec_add_variant(
-                    program, nested_source_id, &caller, &nested_key, MINIC_INLINE_SPEC_FACT_INTEGER,
-                    specialization_count, &refined_id)) {
+                            program, nested_source_id, &caller, &nested_key,
+                            MINIC_INLINE_SPEC_FACT_INTEGER, specialization_count, &refined_id)) {
                         (void)fprintf(stderr,
                                       "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_ADD_FAILED count=%zu functions=%zu source=%zu\n",
                                       specialization_count,

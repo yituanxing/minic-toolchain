@@ -651,21 +651,10 @@ bool minic_specialize_inline_symbolic_calls(
         bool adds_symbol = false;
         size_t i;
 
-        if (call->kind != MINIC_EXPRESSION_CALL) {
+        if (!minic_inline_spec_resolve_call(
+                call_plan, expression_index, program->function_count,
+                &current_id, &source_id, &current, &source))
             continue;
-        }
-        current_id = minic_inline_call_plan_get(call_plan, expression_index);
-        if (current_id >= program->function_count) {
-            continue;
-        }
-        current = program->functions[current_id];
-        source_id = current.is_integer_specialization
-                        ? current.specialization_source
-                        : current_id;
-        if (source_id >= program->function_count) {
-            continue;
-        }
-        source = program->functions[source_id];
         {
             MinicFunctionId owner = minic_inline_initial_owners_get(
                 &initial_owners, expression_index);
@@ -674,12 +663,6 @@ bool minic_specialize_inline_symbolic_calls(
         }
         if (caller == NULL && current.is_integer_specialization)
             caller = &program->functions[current_id];
-        if (!source.is_defined || !source.is_internal || !source.is_inline ||
-            source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
-            source.parameter_count == 0U ||
-            source.parameter_count != call->value.call.argument_count) {
-            continue;
-        }
         if (!minic_inline_spec_key_from_function(
                 &key, &current, source.parameter_count)) {
             minic_inline_initial_owners_destroy(&initial_owners);
@@ -777,28 +760,10 @@ bool minic_specialize_inline_symbolic_calls(
                 bool needs_section_clone;
                 size_t i;
 
-                if (nested->kind != MINIC_EXPRESSION_CALL) {
+                if (!minic_inline_spec_resolve_call(
+                        call_plan, nested_expression_index, program->function_count,
+                        &current_id, &source_id, &current, &source))
                     continue;
-                }
-                current_id = minic_inline_call_plan_get(
-                    call_plan, nested_expression_index);
-                if (current_id >= program->function_count) {
-                    continue;
-                }
-                current = program->functions[current_id];
-                source_id = current.is_integer_specialization
-                                ? current.specialization_source
-                                : current_id;
-                if (source_id >= program->function_count) {
-                    continue;
-                }
-                source = program->functions[source_id];
-                if (!source.is_defined || !source.is_internal || !source.is_inline ||
-                    source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
-                    source.parameter_count == 0U ||
-                    source.parameter_count != nested->value.call.argument_count) {
-                    continue;
-                }
                 needs_section_clone = current.is_integer_specialization &&
                     !minic_inline_spec_section_matches(&current, &source, &caller);
                 if (!minic_inline_spec_key_from_function(
@@ -854,9 +819,9 @@ bool minic_specialize_inline_symbolic_calls(
                     0U);
                 if (variant_id == MINIC_FUNCTION_INVALID) {
                     if (!minic_inline_spec_add_variant(
-                    program, source_id, &caller, &key,
-                    MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC,
-                    program->function_count, &variant_id)) {
+                            program, source_id, &caller, &key,
+                            MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC,
+                            program->function_count, &variant_id)) {
                         minic_inline_call_worklist_destroy(&worklist);
                         free(stable_locals);
                         return false;
