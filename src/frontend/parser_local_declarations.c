@@ -712,22 +712,6 @@ parse_local_declarator(MinicParser *parser,
             minic_parser_error(parser, "out of memory while adding local");
             return false;
         }
-        if (has_fixed_register_binding) {
-            MinicFixedRegisterBindingId binding_id;
-
-            if (!minic_c0_program_add_local_fixed_register_binding(
-                    parser->program,
-                    local_id,
-                    parser->source + local.name_span.begin.offset,
-                    minic_parser_span_length(local.name_span),
-                    fixed_register_name,
-                    fixed_register_name_length,
-                    &binding_id)) {
-                minic_parser_error(parser, "cannot record local fixed register binding");
-                return false;
-            }
-            (void)binding_id;
-        }
         if (!minic_parser_bind_local(parser, local.name_span, local_id)) {
             return false;
         }

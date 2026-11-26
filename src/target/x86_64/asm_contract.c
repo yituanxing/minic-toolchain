@@ -1435,15 +1435,10 @@ unsigned int minic_x86_64_linux_control_register_form(
         "mov%0,%%cr2", "mov%0,%%cr3", "mov%0,%%cr0", "mov%0,%%cr4"
     };
     char compact[64];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || ch == ';' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(names) / sizeof(names[0]); ++i)
         if (strcmp(compact, names[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -1508,15 +1503,10 @@ bool minic_x86_64_linux_alternative_wrmsr_form(
 bool minic_x86_64_asm_nospec_template(const char *text, size_t len) {
     static const char exact[] = "cmp%1,%2;sbb%0,%0";
     char compact[96];
-    size_t i, n = 0U;
+    
     if (!text || !len || len >= sizeof(compact)) return false;
-    for (i = 0U; i < len; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return false;
     /* Original GNU Linux 6.6.143 barrier.h ends SBB with a semicolon.
      * Permit exactly one trailing delimiter, not extra machine opcodes. */
     return strcmp(compact, exact) == 0 ||
@@ -1785,15 +1775,10 @@ bool minic_x86_64_ip_fast_csum_template(const char *text, size_t length) {
         "movl(%1),%0subl$4,%2jbe2faddl4(%1),%0adcl8(%1),%0"
         "adcl12(%1),%01:adcl16(%1),%0lea4(%1),%1decl%2jne1b"
         "adcl$0,%0movl%0,%2shrl$16,%0addw%w2,%w0adcl$0,%0notl%02:";
-    char compact[256]; size_t i, n = 0U;
+    char compact[256]; 
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i=0U;i<length;++i) {
-        const char c=text[i];
-        if (c==' ' || c=='\n' || c=='\t' || c=='\r') continue;
-        if (n+1U>=sizeof(compact)) return false;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected)==0;
 }
 
@@ -1803,15 +1788,10 @@ bool minic_x86_64_ip_fast_csum_template(const char *text, size_t length) {
  * indivisible. This strict ISA contract handles the function family. */
 bool minic_x86_64_checksum_fold_template(const char *text,size_t len){
     static const char *const expected="addl%1,%0adcl$0xffff,%0";
-    char compact[80];size_t i,n=0U;
+    char compact[80];
     if(!text||!len||len>=sizeof(compact))return false;
-    for(i=0U;i<len;++i){
-        const char c=text[i];
-        if(c==' '||c==9||c==10||c==13)continue;
-        if(c==';'||n+1U>=sizeof(compact))return false;
-        compact[n++]=c;
-    }
-    compact[n]=0;
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return false;
     return strcmp(compact,expected)==0;
 }
 
@@ -2071,15 +2051,10 @@ MinicX86TryCas minic_x86_64_trycas_form(const char *text,size_t len) {
     static const char smp[]=
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
     char compact[256],expected[256];
-    size_t i,n=0U,mode,variant;
+    size_t mode, variant;
     if(!text||!len||len>=sizeof(compact))return MINIC_X86_TRYCAS_NONE;
-    for(i=0U;i<len;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\n'||c=='\r')continue;
-        if(n+1U>=sizeof(compact))return MINIC_X86_TRYCAS_NONE;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return MINIC_X86_TRYCAS_NONE;
     for(mode=0U;mode<sizeof(x86_trycas_forms)/sizeof(x86_trycas_forms[0]);++mode)
         for(variant=0U;variant<2U;++variant) {
             const MinicX86TryCasDesc *d=&x86_trycas_forms[mode];
@@ -2103,16 +2078,11 @@ MinicX86TryCas minic_x86_64_raw_cmpxchg_form(
     static const char smp[] =
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
     char compact[256], expected[256];
-    size_t i, n = 0U, form;
+    size_t form;
     if (text == NULL || length == 0U || length >= sizeof(compact))
         return MINIC_X86_TRYCAS_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (n + 1U >= sizeof(compact)) return MINIC_X86_TRYCAS_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return MINIC_X86_TRYCAS_NONE;
     for (form = 0U; form < sizeof(x86_trycas_forms) /
                             sizeof(x86_trycas_forms[0]); ++form) {
         const MinicX86TryCasDesc *d = &x86_trycas_forms[form];
@@ -2233,15 +2203,10 @@ static size_t x86_linux_smp_xadd_width(const char *text,size_t len) {
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:"
         "lock;xaddq%q0,%1"
     };
-    char compact[256]; size_t i,n=0U;
+    char compact[256]; size_t i;
     if(!text||!len||len>=sizeof(compact))return 0U;
-    for(i=0U;i<len;++i) {
-        const char c=text[i];
-        if(c==' '||c=='\n'||c=='\t'||c=='\r')continue;
-        if(n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return 0U;
     for(i=0U;i<4U;++i)
         if(strcmp(compact,forms[i])==0)return (size_t)1U<<i;
     return 0U;
@@ -2254,15 +2219,10 @@ static size_t x86_linux_smp_xadd_width(const char *text,size_t len) {
  * This target-owned ISA contract must never widen into generic ASM text. */
 static size_t x86_linux_local_xadd_width(const char *text, size_t len) {
     char compact[64];
-    size_t i, n = 0U;
+    
     if (text == NULL || len == 0U || len >= sizeof(compact)) return 0U;
-    for (i = 0U; i < len; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return 0U;
     if (strcmp(compact, "xaddq%0,%1;") == 0) return 8U;
     if (strcmp(compact, "xaddl%0,%1;") == 0) return 4U;
     return 0U;
@@ -2507,16 +2467,11 @@ MinicX86AtomicCC minic_x86_64_atomic_cc_form(const char *text, size_t len) {
     static const char prefix[] =
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
     char compact[256], expected[256];
-    size_t i, n = 0U, id, variant, lock_variant;
+    size_t id, variant, lock_variant;
     if (!text || len == 0U || len >= sizeof(compact))
         return MINIC_X86_ATOMIC_CC_NONE;
-    for (i = 0U; i < len; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (n + 1U >= sizeof(compact)) return MINIC_X86_ATOMIC_CC_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return MINIC_X86_ATOMIC_CC_NONE;
     for (id = 0U; id < sizeof(x86_atomic_cc_forms) /
                        sizeof(x86_atomic_cc_forms[0]); ++id) {
         const MinicX86AtomicCCDesc *d = &x86_atomic_cc_forms[id].desc;
@@ -2560,15 +2515,10 @@ unsigned int minic_x86_64_linux_lock_bitcc_form(
     static const char prefix[] =
         ".pushsection.smp_locks,\"a\".balign4.long671f-..popsection671:lock;";
     char compact[256];
-    size_t i, n = 0U;
+    
     if (!text || !len || len >= sizeof(compact)) return 0U;
-    for (i = 0U; i < len; ++i) {
-        if (text[i] == ' ' || text[i] == '\t' ||
-            text[i] == '\n' || text[i] == '\r') continue;
-        if (n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = text[i];
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, len, compact, sizeof(compact))) return 0U;
     if (strncmp(compact, prefix, sizeof(prefix)-1U) != 0) return 0U;
     if (strcmp(compact + sizeof(prefix)-1U,
         "btsl%[val],%[var]/*outputconditioncodec*/") == 0 ||
@@ -2622,15 +2572,10 @@ bool minic_x86_64_linux_vdso_cpunode_form(
         "6651:.popsection";
     char *expected;
     char compact[640];
-    size_t i,n=0U;
+    
     if (!text || !length || length>=sizeof(compact)) return false;
-    for (i=0U;i<length;++i) {
-        if (text[i]==' ' || text[i]=='\t' ||
-            text[i]=='\r' || text[i]=='\n') continue;
-        if (n+1U>=sizeof(compact)) return false;
-        compact[n++]=text[i];
-    }
-    compact[n]='\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     if (strncmp(compact,prefix,strlen(prefix))!=0) return false;
     expected=compact+strlen(prefix);
     if (strncmp(expected,"lsl%[seg],%[p]",strlen("lsl%[seg],%[p]"))==0)
@@ -3753,17 +3698,10 @@ unsigned int minic_x86_64_linux_get_user_call_form(
         "call__get_user_nocheck_%c4"
     };
     char compact[96];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r')
-            continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(names)/sizeof(names[0]); ++i)
         if (strcmp(compact, names[i]) == 0)
             return (unsigned int)i + 1U;
@@ -3867,16 +3805,11 @@ unsigned int minic_x86_64_linux_futex_extable_form(
     static const char middle[] = ")-..long(";
     static const char before_macro[] = ")-.";
     char compact[1900], expected[1900];
-    size_t i, n = 0U;
+    size_t i;
     if (text == NULL || length == 0U || length >= sizeof(compact))
         return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(prefix)/sizeof(prefix[0]); ++i) {
         const bool loop = i >= 3U;
         const char *reg = i == 0U ? "%0" : "%1";
@@ -3919,16 +3852,10 @@ bool minic_x86_64_linux_verw_clear_form(
     const char *text, size_t length) {
     static const char *const forms[] = {"verw%[ds]", "verw%0"};
     char compact[64];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return true;
     return false;
@@ -3945,16 +3872,10 @@ unsigned int minic_x86_64_linux_debug_register_form(
     static const unsigned int names[] = {0U, 1U, 2U, 3U, 6U, 7U};
     char compact[64];
     char expected[64];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < 6U; ++i) {
         int count = snprintf(expected, sizeof(expected),
             "mov%%%%db%u,%%0", names[i]);
