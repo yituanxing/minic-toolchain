@@ -5396,6 +5396,121 @@ static bool x86_source_testcc(X86CoreSelector *sel,
         x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_R9,1U);
 }
 
+/* A GS-relative BT is not a C pointer read: the segment override and the
+ * carry flag are part of its physical contract. Keep SETC adjacent to BT. */
+static bool x86_source_gs_testcc(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand operands[3];
+    MinicMachineRegisterEffect flags = x86_scalar_flags_clobber();
+    size_t index_bytes;
+    bool signed_index, bool_index;
+    unsigned int form;
+    if (!x86_scalar_source_base(sel, ins,
+            MINIC_X86_MACHINE_ASM_GS_TESTCC, &source, &roles) ||
+        ins->value.structured_inline_asm.operand_count != 3U ||
+        !source->has_memory_clobber || source->explicit_memory_clobber ||
+        !source->implicit_memory_effect ||
+        source->target_machine_form_variant != 0U ||
+        !x86_scalar_role(&roles[0],
+            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[1],
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        !x86_scalar_role(&roles[2],
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_read_write || roles[1].physical_read_write ||
+        roles[2].physical_read_write ||
+        roles[0].has_tied_output || roles[1].has_tied_output ||
+        roles[2].has_tied_output ||
+        !x86_asm_bool_lvalue(sel, roles[0].value))
+        return false;
+    form = minic_x86_64_linux_gs_testcc_form(
+        source->template_text, source->template_length);
+    if ((form != 1U && form != 2U) ||
+        !x86_asm_gp_lvalue_width(sel, roles[1].value,
+            form == 1U ? 4U : 8U) ||
+        roles[2].value >= sel->core->value_count ||
+        !x86_scalar_shape(sel,
+            sel->core->values[roles[2].value].core_type_id,
+            &index_bytes, &signed_index, &bool_index) ||
+        !x86_core_load(sel, roles[1].value, MINIC_X86_REG_R10) ||
+        !x86_core_load(sel, roles[2].value, MINIC_X86_REG_R11))
+        return false;
+    operands[0] = x86_reg(0U, 64U);
+    operands[0].value.physical.reg.bank = MINIC_MACHINE_REGISTER_FLAGS;
+    operands[0].value.physical.access = MINIC_MACHINE_REGISTER_WRITE;
+    operands[0].asm_constraint = "=@ccc";
+    operands[1] = x86_addr(MINIC_X86_REG_R10, 0);
+    operands[1].value.address.has_segment = true;
+    operands[1].value.address.segment = (MinicMachineRegister){
+        MINIC_X86_SEG_GS, 16U, MINIC_MACHINE_REGISTER_SYSTEM};
+    operands[1].asm_constraint = "m";
+    operands[2] = x86_reg(MINIC_X86_REG_R11, form == 1U ? 32U : 64U);
+    operands[2].asm_constraint = "Ir";
+    operands[2].value.physical.access = MINIC_MACHINE_REGISTER_READ;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+            source, MINIC_MACHINE_EFFECT_MEMORY_READ,
+            operands, 3U, &flags, 1U, false, false) &&
+        x86_1(sel, MINIC_X86_MI_SETC8_R,
+            x86_reg(MINIC_X86_REG_R9, 8U)) &&
+        x86_scalar_output_store(sel, roles[0].value,
+            MINIC_X86_REG_R9, 1U);
+}
+
+/* KVM's fixed-register MOVDQA transports one storage-only vector object.
+ * The vector bank is an explicit physical MachineIR effect; it is never
+ * an untyped C scalar value or a second 128-bit storage-copy routine. */
+static bool x86_source_kvm_movdqa(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    const MinicCoreType *vector;
+    MinicCoreTypeId pointee;
+    MinicMachineOperand memory;
+    MinicMachineRegisterEffect xmm = {0};
+    unsigned int form, reg;
+    bool read;
+    if (!x86_scalar_source_base(sel, ins,
+            MINIC_X86_MACHINE_ASM_KVM_MOVDQA, &source, &roles) ||
+        ins->value.structured_inline_asm.operand_count != 1U ||
+        source->explicit_memory_clobber)
+        return false;
+    form = minic_x86_64_kvm_movdqa_form(
+        source->template_text, source->template_length);
+    read = form >= 1U && form <= 16U;
+    if (form == 0U || form > 32U ||
+        source->target_machine_form_variant != form ||
+        source->implicit_memory_effect != !read ||
+        source->has_memory_clobber != !read ||
+        !x86_scalar_role(&roles[0], read ?
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output ||
+        roles[0].value >= sel->core->value_count ||
+        !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            sel->core->values[roles[0].value].core_type_id, &pointee) ||
+        (vector = x86_type(sel, pointee)) == NULL ||
+        vector->kind != MINIC_CORE_TYPE_VECTOR ||
+        vector->value.vector.representation !=
+            MINIC_CORE_VECTOR_STORAGE_ONLY ||
+        !vector->has_layout || vector->size != 16U ||
+        vector->alignment != 16U ||
+        !x86_core_load(sel, roles[0].value, MINIC_X86_REG_R10))
+        return false;
+    reg = read ? form - 1U : form - 17U;
+    memory = x86_addr(MINIC_X86_REG_R10, 0);
+    memory.asm_constraint = read ? "m" : "=m";
+    xmm.reg = (MinicMachineRegister){
+        reg, 128U, MINIC_MACHINE_REGISTER_VECTOR};
+    xmm.access = read ? MINIC_MACHINE_REGISTER_WRITE :
+        MINIC_MACHINE_REGISTER_READ;
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, read ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        &memory, 1U, &xmm, 1U, false, false);
+}
+
 static bool x86_source_scalar_bitops(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -10530,6 +10645,8 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         [MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS] = x86_source_boot_segments,
         [MINIC_X86_MACHINE_ASM_LIDT] = x86_source_descriptor_table,
         [MINIC_X86_MACHINE_ASM_TESTCC] = x86_source_testcc,
+        [MINIC_X86_MACHINE_ASM_GS_TESTCC] = x86_source_gs_testcc,
+        [MINIC_X86_MACHINE_ASM_KVM_MOVDQA] = x86_source_kvm_movdqa,
         [MINIC_X86_MACHINE_ASM_PREFETCHW_ALT] = x86_source_prefetchw_alt,
         [MINIC_X86_MACHINE_ASM_APIC_AMD_ALT] = x86_source_apic_amd_alt,
         [MINIC_X86_MACHINE_ASM_GS_TIED_ALU] = x86_source_gs_tied_alu,
