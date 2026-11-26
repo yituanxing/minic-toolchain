@@ -260,7 +260,10 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||
          expression->value.binary.operator_kind == MINIC_BINARY_REMAINDER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR) &&
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
+         expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR) &&
         minic_type_is_integer(expression->type)) {
         *handled = true;
         MinicCoreValueId left;
@@ -290,6 +293,15 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
             break;
         case MINIC_BINARY_BITWISE_XOR:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR;
+            break;
+        case MINIC_BINARY_ADD:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+            break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            break;
+        case MINIC_BINARY_BITWISE_OR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
             break;
         default:
             return MINIC_CORE_LOWER_ERROR;
@@ -384,86 +396,15 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* The frontend has already handled vector and floating ADD above.
+     * Preserve the original unsupported result for other non-integer
+     * ADD/AND/OR expressions rather than letting later probes handle them. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
         *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
-        *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR) {
-        *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||
