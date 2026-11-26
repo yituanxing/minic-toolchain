@@ -29,7 +29,7 @@ bool minic_core_function_plan_build(
     /* The sole backend-boundary canonical Core verification; every physical
      * target then performs only its own capability and ABI checks. */
     if (!minic_core_function_verify(function) ||
-        !minic_core_function_facts_analyze_collect(
+        !minic_core_function_facts_analyze(
             function, &plan->facts, &plan->variadic_results) ||
         plan->facts.direct_call_count >
             SIZE_MAX - plan->facts.indirect_call_count ||

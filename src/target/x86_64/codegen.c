@@ -1143,18 +1143,14 @@ static bool x86_emit_function(FILE *out,
     const bool is_weak = module_decl->is_weak;
     const bool is_constructor = module_decl->is_constructor;
     const bool *reachable = NULL;
-    bool *owned_reachable = NULL;
     bool *head_direct_data_globals = NULL;
     MinicCoreGlobalId *head_vma_cast_globals = NULL;
     MinicCoreGlobalId *head_memory_rebase_globals = NULL;
     const size_t *function_value_use_counts = NULL;
-    size_t *owned_value_use_counts = NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
-        const bool verified = named &&
-            (minic_core_function_facts_verified(facts, fn) ||
-             minic_core_function_verify(fn));
+        const bool verified = named && minic_core_function_facts_verified(facts, fn);
         const bool planned = verified &&
             minic_x86_64_frame_init_with_storage(
                 target, fn, facts, storage, &frame);
@@ -1177,17 +1173,10 @@ static bool x86_emit_function(FILE *out,
         }
     }
     frame.module = module;
-    if (minic_core_function_facts_verified(facts, fn)) {
-        reachable = facts->reachable_blocks;
-        function_value_use_counts = facts->value_use_counts;
-    } else {
-        owned_reachable = calloc(fn->block_count == 0U ? 1U : fn->block_count,
-                                 sizeof(*owned_reachable));
-        if (owned_reachable != NULL &&
-            minic_core_function_mark_reachable_blocks(
-                fn, owned_reachable, fn->block_count))
-            reachable = owned_reachable;
-    }
+    /* Production always arrives through the prepared Program Visitor.
+     * Borrow its verified CFG and SSA census, never rebuild a parallel copy. */
+    reachable = facts->reachable_blocks;
+    function_value_use_counts = facts->value_use_counts;
     if (reachable == NULL) {
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
@@ -1199,20 +1188,8 @@ static bool x86_emit_function(FILE *out,
         goto done;
     }
     if (function_value_use_counts == NULL) {
-        if (fn->value_count > SIZE_MAX / sizeof(*owned_value_use_counts) ||
-            (owned_value_use_counts = calloc(
-                fn->value_count == 0U ? 1U : fn->value_count,
-                sizeof(*owned_value_use_counts))) == NULL) {
-            x86_error(diag, path, "x86-64 cannot allocate Core value-use census");
-            goto done;
-        }
-        /* Standalone function entry is not owned by ProgramVisitor. */
-        if (!minic_core_function_value_use_counts(
-                fn, owned_value_use_counts, fn->value_count)) {
-            x86_error(diag, path, "x86-64 cannot count Core function SSA uses");
-            goto done;
-        }
-        function_value_use_counts = owned_value_use_counts;
+        x86_error(diag, path, "x86-64 prepared Core value-use census missing");
+        goto done;
     }
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
@@ -1340,8 +1317,6 @@ done:
     free(head_direct_data_globals);
     free(head_vma_cast_globals);
     free(head_memory_rebase_globals);
-    free(owned_value_use_counts);
-    free(owned_reachable);
     minic_x86_64_frame_destroy(&frame);
     return success;
 }
