@@ -323,13 +323,11 @@ static bool x86_direct_object_pair(X86CoreSelector *sel,
  * field/index offsets by subtracting the link symbol before adding its
  * physical RIP-relative address. The base is a typed 32S absolute relocation,
  * not a textual assembler escape or a truncated ABS64 symbol. */
-static bool x86_record_pointer(X86CoreSelector *sel,
-    MinicCoreValueId value, unsigned int reg) {
+static bool x86_record_pointer_scratch(X86CoreSelector *sel,
+    MinicCoreValueId value, unsigned int reg, unsigned int scratch) {
     MinicCoreGlobalId global = MINIC_CORE_GLOBAL_INVALID;
     const char *symbol;
-    const unsigned int scratch = reg == MINIC_X86_REG_RAX ?
-        MINIC_X86_REG_R11 : MINIC_X86_REG_RAX;
-    if (value >= sel->core->value_count) return false;
+    if (reg == scratch || value >= sel->core->value_count) return false;
     if (sel->frame->kernel_head_link_addresses &&
         sel->frame->kernel_head_memory_rebase_globals != NULL)
         global = sel->frame->kernel_head_memory_rebase_globals[value];
@@ -347,6 +345,15 @@ static bool x86_record_pointer(X86CoreSelector *sel,
             x86_symbol(symbol, MINIC_X86_MACHINE_RELOC_PC32),
             x86_reg(scratch, 64U)) &&
         x86_rr(sel, MINIC_X86_MI_ADD64_RR, 64U, scratch, reg);
+}
+
+/* Most address materializations have no live RAX result; let those keep
+ * their original scratch policy. Overflow-result stores must explicitly
+ * preserve the arithmetic result in RAX during early-head VMA rebasing. */
+static bool x86_record_pointer(X86CoreSelector *sel,
+    MinicCoreValueId value, unsigned int reg) {
+    return x86_record_pointer_scratch(sel,value,reg,
+        reg == MINIC_X86_REG_RAX ? MINIC_X86_REG_R11 : MINIC_X86_REG_RAX);
 }
 
 /* This byte transporter is migrated from the old x86_emit_record_move_bytes:
@@ -2385,7 +2392,11 @@ static bool x86_overflow_result_memory(X86CoreSelector *sel,
     case 8U: opcode = MINIC_X86_MI_MOV64_RA; break;
     default: return false;
     }
-    return x86_record_pointer(sel, pointer, MINIC_X86_REG_R10) &&
+    /* A head-address VMA rebase may need a symbol scratch: RAX holds the
+     * overflow value, R11 holds the matched flag and R8 the mixed high limb.
+     * R9 is dead at this point in both overflow selectors. */
+    return x86_record_pointer_scratch(sel, pointer,
+            MINIC_X86_REG_R10, MINIC_X86_REG_R9) &&
         x86_2(sel, opcode,
             x86_reg(MINIC_X86_REG_RAX, (unsigned int)(width * 8U)),
             x86_addr(MINIC_X86_REG_R10, 0));
