@@ -10,6 +10,7 @@
 static bool x86_linux_jump_label_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract);
+static bool x86_linux_is_u64_type(MinicType type);
 
 static bool target_constraint_is(const MinicInlineAsmOperand *, const char *);
 static bool clobber_is(const MinicInlineAsmRegisterClobber *, const char *);
@@ -879,7 +880,7 @@ static bool x86_linux_pvclock_scale_source(const MinicTargetInvocation *invocati
         expressions[i + 2U] = minic_c0_program_expression(program, src->inputs[i].expression);
     }
     for (i = 0U; i < 4U; ++i)
-        if (!expressions[i] || !minic_type_is_integer(expressions[i]->type) ||
+        if (!expressions[i] || !x86_linux_is_u64_type(expressions[i]->type) ||
             (i < 2U && expressions[i]->value_category != MINIC_VALUE_LVALUE)) return false;
     contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -3946,7 +3947,6 @@ static bool qualified(const MinicC0Program *program,
 static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     static const char *const regs_acd[] = {"a", "c", "d"};
     static const char *const regs_abc[] = {"a", "b", "c"};
     const unsigned int form = source ? minic_x86_64_linux_monitor_wait_form(
@@ -3954,7 +3954,7 @@ static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocatio
     const size_t count = form == 1U || form == 2U || form == 4U ? 3U : 2U;
     const char *const *regs = form == 4U ? regs_abc : regs_acd;
     size_t i;
-    if (!program || !source || !contract || !form ||
+    if (!invocation || !program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto || source->output_count ||
         source->input_count != count || !source->inputs ||
         source->label_count || source->clobber_count ||
@@ -3965,10 +3965,16 @@ static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocatio
         const MinicExpression *value = minic_c0_program_expression(
             program, op->expression);
         MinicType plain;
+        size_t bytes, alignment;
         if (!target_constraint_is(op, regs[i]) || !value ||
             !minic_type_unqualified(value->type, &plain) ||
             (!minic_type_is_pointer(plain) &&
-             !minic_type_is_integer(plain)))
+             !minic_type_is_integer(plain)) ||
+            minic_type_is_bool_integer(plain) ||
+            !minic_data_layout_type(invocation, program, plain,
+                &bytes, &alignment) ||
+            (bytes != 4U && bytes != 8U) ||
+            (i == 0U && form <= 2U && bytes != 8U))
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
