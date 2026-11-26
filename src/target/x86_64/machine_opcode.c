@@ -3337,6 +3337,80 @@ static bool x86_source_scalar_cmpxchg_contract(
 
 /* ZF from the exact Linux testb immediate is carried as one sealed FLAGS
  * output; the memory operand must remain a byte at an actual GP address. */
+/* GS-relative bit test must carry the real GS segment and CF result.
+ * Neither a normal memory operand nor an unsealed flag output is sufficient. */
+static bool x86_source_gs_testcc_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const unsigned int form = minic_x86_64_linux_gs_testcc_form(
+        ins->source_asm_template, ins->source_asm_length);
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    const MinicMachineOperand *memory;
+    const MinicMachineAddress *address;
+    if ((form != 1U && form != 2U) ||
+        !x86_scalar_machine_base(ins, MINIC_X86_MACHINE_ASM_GS_TESTCC,
+            0U, effects, 3U, true) ||
+        !x86_scalar_machine_cc(&ins->operands[0], "=@ccc") ||
+        !x86_scalar_machine_gp(&ins->operands[2],
+            MINIC_X86_REG_R11, form == 1U ? 32U : 64U,
+            MINIC_MACHINE_REGISTER_READ, "Ir", NULL))
+        return false;
+    memory = &ins->operands[1];
+    if (memory->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
+        memory->asm_constraint == NULL ||
+        strcmp(memory->asm_constraint, "m") != 0 ||
+        memory->asm_name != NULL)
+        return false;
+    address = &memory->value.address;
+    return minic_x86_64_machine_validate_address(target, address, NULL) &&
+        address->has_base &&
+        address->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+        address->base.number == MINIC_X86_REG_R10 &&
+        address->base.width_bits == 64U &&
+        address->has_segment &&
+        address->segment.bank == MINIC_MACHINE_REGISTER_SYSTEM &&
+        address->segment.number == MINIC_X86_SEG_GS &&
+        address->segment.width_bits == 16U &&
+        !address->has_index && !address->has_symbol &&
+        address->displacement == 0;
+}
+
+/* A KVM MOVDQA uses a single memory address and one architecturally fixed
+ * XMM register. Its vector effect is independent of the Source template. */
+static bool x86_source_kvm_movdqa_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    const unsigned int form = minic_x86_64_kvm_movdqa_form(
+        ins->source_asm_template, ins->source_asm_length);
+    const bool read = form >= 1U && form <= 16U;
+    const unsigned int reg = read ? form - 1U : form - 17U;
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        (read ? MINIC_MACHINE_EFFECT_MEMORY_READ :
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+            MINIC_MACHINE_EFFECT_COMPILER_BARRIER);
+    const MinicMachineRegisterEffect *xmm;
+    if (form == 0U || form > 32U ||
+        ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_KVM_MOVDQA ||
+        ins->source_asm_machine_form_variant != form ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects || ins->operand_count != 1U ||
+        ins->operands == NULL || ins->implicit_count != 1U ||
+        (xmm = ins->implicit) == NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            MINIC_X86_MACHINE_ASM_KVM_MOVDQA, form,
+            ins->source_asm_template, ins->source_asm_length) ||
+        !x86_scalar_machine_mem(target, &ins->operands[0],
+            MINIC_X86_REG_R10, read ? "m" : "=m", NULL))
+        return false;
+    return xmm->reg.bank == MINIC_MACHINE_REGISTER_VECTOR &&
+        xmm->reg.number == reg && xmm->reg.width_bits == 128U &&
+        xmm->access == (read ? MINIC_MACHINE_REGISTER_WRITE :
+            MINIC_MACHINE_REGISTER_READ);
+}
+
 static bool x86_source_testcc_contract(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
     const unsigned int form = minic_x86_64_linux_testcc_form(
@@ -6374,6 +6448,12 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_TESTCC)
         return x86_source_testcc_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_TESTCC)
+        return x86_source_gs_testcc_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KVM_MOVDQA)
+        return x86_source_kvm_movdqa_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ATOMIC_CC)
         return x86_source_scalar_atomic_cc_contract(target,instruction);
