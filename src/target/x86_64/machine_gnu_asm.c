@@ -881,6 +881,42 @@ static bool x86_emit_scalar_smp_lock(FILE *out) {
         "  lock; ",out) != EOF;
 }
 
+/* Render only the already-validated finite RAID6 ISA grammar. Extended
+ * GNU "%%" names collapse to physical "%" registers; positional %0..%7
+ * are independently verified MachineIR addresses, never raw substitutions. */
+static bool x86_emit_address(FILE *, const MinicMachineAddress *);
+
+static bool x86_emit_raid6_source(FILE *out,
+    const MinicMachineInstruction *ins) {
+    size_t i;
+    if (out == NULL || ins == NULL || ins->source_asm_template == NULL)
+        return false;
+    for (i = 0U; i < ins->source_asm_length; ++i) {
+        const char ch = ins->source_asm_template[i];
+        if (ch == '%' && i + 1U < ins->source_asm_length) {
+            const char next = ins->source_asm_template[i + 1U];
+            if (next == '%') {
+                if (fputc('%', out) == EOF) return false;
+                ++i;
+                continue;
+            }
+            if (next >= '0' && next <= '7') {
+                const size_t index = (size_t)(next - '0');
+                if (index >= ins->operand_count || ins->operands == NULL ||
+                    ins->operands[index].kind !=
+                        MINIC_MACHINE_OPERAND_ADDRESS ||
+                    !x86_emit_address(out,
+                        &ins->operands[index].value.address))
+                    return false;
+                ++i;
+                continue;
+            }
+        }
+        if (fputc(ch, out) == EOF) return false;
+    }
+    return fputc('\n', out) != EOF;
+}
+
 static bool x86_emit_source_asm(FILE *out,
     const MinicMachineFunction *function,
     const MinicMachineInstruction *instruction,
@@ -2002,6 +2038,9 @@ static bool x86_emit_source_asm(FILE *out,
             "  btl %r11d, %gs:(%r10)\n" :
             "  btq %r11, %gs:(%r10)\n", out) != EOF;
     }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RAID6_SIMD)
+        return x86_emit_raid6_source(out, instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_KVM_MOVDQA) {
         const unsigned int form = instruction->source_asm_machine_form_variant;
