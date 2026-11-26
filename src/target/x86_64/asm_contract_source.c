@@ -4216,55 +4216,37 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
     return true;
 }
 
-static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocation,
+/* Both FPU user-frame and FXRSTOR-safe forms transport the same four
+ * GNU operands. Only the error register's constraint/qualifier differs. */
+static bool x86_linux_fpu_frame_operands_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
-    MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
-    const MinicExpression *error, *output, *input, *zero;
-    const unsigned int form = source ?
-        minic_x86_64_linux_fpu_user_frame_form(
-            source->template_text, source->template_length) : 0U;
+    MinicTargetInlineAsmContract *contract,
+    const char *error_constraint, bool allow_qualified_error) {
+    const MinicExpression *error, *output, *zero, *input;
     MinicType plain;
-    const bool named = source && source->template_text &&
-        memchr(source->template_text,'[',
-        source->template_length) != NULL;
-    const bool named_output = source && source->output_count >= 2U &&
-        source->outputs &&
-        source->outputs[1].name_length == 2U &&
-        source->outputs[1].name &&
-        memcmp(source->outputs[1].name,"fx",2U) == 0;
-    const bool named_input = source && source->input_count >= 2U &&
-        source->inputs &&
-        source->inputs[1].name_length == 2U &&
-        source->inputs[1].name &&
-        memcmp(source->inputs[1].name,"fx",2U) == 0;
-    if (!program || !source || !contract || !form ||
+    if (!program || !source || !contract ||
         !source->is_volatile || source->is_goto ||
         source->output_count != 2U || !source->outputs ||
         source->input_count != 2U || !source->inputs ||
         source->label_count || source->clobber_count ||
         source->register_clobber_count || source->has_memory_clobber ||
-        !target_constraint_is(&source->outputs[0], "=a") ||
+        !target_constraint_is(&source->outputs[0], error_constraint) ||
         !target_constraint_is(&source->outputs[1], "=m") ||
         !target_constraint_is(&source->inputs[0], "0") ||
-        !target_constraint_is(&source->inputs[1], "m") ||
-        (named && named_output == named_input))
+        !target_constraint_is(&source->inputs[1], "m"))
         return false;
-    error = minic_c0_program_expression(
-        program, source->outputs[0].expression);
-    output = minic_c0_program_expression(
-        program, source->outputs[1].expression);
-    zero = minic_c0_program_expression(
-        program, source->inputs[0].expression);
-    input = minic_c0_program_expression(
-        program, source->inputs[1].expression);
+    error = minic_c0_program_expression(program, source->outputs[0].expression);
+    output = minic_c0_program_expression(program, source->outputs[1].expression);
+    zero = minic_c0_program_expression(program, source->inputs[0].expression);
+    input = minic_c0_program_expression(program, source->inputs[1].expression);
     if (!error || !output || !zero || !input ||
         error->value_category != MINIC_VALUE_LVALUE ||
         output->value_category != MINIC_VALUE_LVALUE ||
         input->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(error->type) ||
         !minic_type_unqualified(error->type, &plain) ||
-        !minic_type_equal(plain, minic_type_int()) ||
+        !(allow_qualified_error ? minic_type_equal(plain, minic_type_int()) :
+                                  minic_type_equal(error->type, minic_type_int())) ||
         !minic_type_is_record(output->type) ||
         !minic_type_equal(output->type, input->type) ||
         !minic_type_is_integer(zero->type))
@@ -4274,11 +4256,33 @@ static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocat
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
-    /* Source-only GNU symbolic-name resolution does not belong in Core IR.
-     * Carry the normalized single `fx` owner in the opaque target variant,
-     * so the physical selector can honor both `%[fx]` output and input. */
-    contract->target_machine_form_variant = form |
-        (named && named_input ? 0x100U : 0U);
+    return true;
+}
+
+static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ?
+        minic_x86_64_linux_fpu_user_frame_form(
+            source->template_text, source->template_length) : 0U;
+    const bool named = source && source->template_text &&
+        memchr(source->template_text,'[', source->template_length) != NULL;
+    const bool named_output = source && source->output_count >= 2U &&
+        source->outputs && source->outputs[1].name &&
+        source->outputs[1].name_length == 2U &&
+        memcmp(source->outputs[1].name,"fx",2U) == 0;
+    const bool named_input = source && source->input_count >= 2U &&
+        source->inputs && source->inputs[1].name &&
+        source->inputs[1].name_length == 2U &&
+        memcmp(source->inputs[1].name,"fx",2U) == 0;
+    (void)invocation;
+    if (!form || (named && named_output == named_input) ||
+        !x86_linux_fpu_frame_operands_source(
+            program, source, contract, "=a", true))
+        return false;
+    /* The normalized template binds %[fx] to exactly one side. */
+    contract->target_machine_form_variant =
+        form | (named && named_input ? 0x100U : 0U);
     return true;
 }
 /* Previously the two MXCSR memory forms were claimed by Core's generic
@@ -4450,44 +4454,10 @@ static bool x86_linux_fxrstor_safe_source(const MinicTargetInvocation *invocatio
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     (void)invocation;
-    const MinicExpression *error, *memory, *zero, *input;
-    if (!program || !source || !contract ||
-        !minic_x86_64_linux_fxrstor_safe_form(
-            source->template_text, source->template_length) ||
-        !source->is_volatile || source->is_goto ||
-        source->output_count != 2U || !source->outputs ||
-        source->input_count != 2U || !source->inputs ||
-        source->label_count || source->clobber_count ||
-        source->has_memory_clobber || source->register_clobber_count ||
-        !target_constraint_is(&source->outputs[0], "=r") ||
-        !target_constraint_is(&source->outputs[1], "=m") ||
-        !target_constraint_is(&source->inputs[0], "0") ||
-        !target_constraint_is(&source->inputs[1], "m"))
-        return false;
-    error = minic_c0_program_expression(
-        program, source->outputs[0].expression);
-    memory = minic_c0_program_expression(
-        program, source->outputs[1].expression);
-    zero = minic_c0_program_expression(
-        program, source->inputs[0].expression);
-    input = minic_c0_program_expression(
-        program, source->inputs[1].expression);
-    if (!error || !memory || !zero || !input ||
-        error->value_category != MINIC_VALUE_LVALUE ||
-        memory->value_category != MINIC_VALUE_LVALUE ||
-        input->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(error->type) ||
-        !minic_type_equal(error->type, minic_type_int()) ||
-        !minic_type_is_record(memory->type) ||
-        !minic_type_equal(memory->type, input->type) ||
-        !minic_type_is_integer(zero->type))
-        return false;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    contract->implicit_memory_effect = true;
-    return true;
+    return source && minic_x86_64_linux_fxrstor_safe_form(
+        source->template_text, source->template_length) &&
+        x86_linux_fpu_frame_operands_source(
+            program, source, contract, "=r", false);
 }
 
 /* All three xstate forms use the same D/m/a/d C-side address contract.
