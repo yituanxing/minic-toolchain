@@ -20,3 +20,56 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+  temporary_function_clone_audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect exact function-body duplicates and forwarding wrappers only in MiniC
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq universal-ctags
+          ctags --version | head -1
+          ctags -R --output-format=json --fields=+ne --languages=C -f /tmp/minic-ctags.json src
+          python3 - <<'PY'
+          from pathlib import Path
+          from collections import defaultdict,Counter
+          import json,re
+          tags=[]
+          for row in Path("/tmp/minic-ctags.json").read_text().splitlines():
+              try:tag=json.loads(row)
+              except ValueError:continue
+              if tag.get("_type")!="tag" or tag.get("kind") not in ("function", "prototype"):continue
+              if tag.get("kind")!="function" or not str(tag.get("path","")).endswith(".c"):continue
+              if not isinstance(tag.get("end"),int):continue
+              tags.append(tag)
+          files={}
+          def source(path):
+              if path not in files:files[path]=Path(path).read_text(errors="replace").splitlines()
+              return files[path]
+          groups=defaultdict(list)
+          forwards=[]
+          for tag in tags:
+              name=tag["name"];path=tag["path"];line=tag.get("line",0);end=tag.get("end",0)
+              if not isinstance(line,int) or end<line or end-line>1000:continue
+              block="\n".join(source(path)[line-1:end])
+              start=block.find("{");finish=block.rfind("}")
+              if start<0 or finish<start:continue
+              body=block[start+1:finish]
+              body=re.sub(r"/\*.*?\*/|//[^\n]*","",body,flags=re.S)
+              tokens=re.findall(r"[A-Za-z_]\w*|(?:0x[0-9a-fA-F]+|\d+)|[^\s]",body)
+              span=end-line+1
+              if span>=8 and len(tokens)>=18:
+                  groups[" ".join(tokens)].append((path,line,end,name))
+              compact=re.sub(r"\s+","",body)
+              m=re.fullmatch(r"(?:return)?([A-Za-z_]\w*)\(([^;{}]*)\);",compact)
+              if m and m.group(1)!=name:forwards.append((path,line,end,name,m.group(1)))
+          clones=sorted((v for v in groups.values() if len(v)>1),key=lambda group:sum(end-start+1 for p,start,end,n in group),reverse=True)
+          print("CLONE_AUDIT",len(tags),"definitions",len(clones),"exact_clone_groups",len(forwards),"forwarding_functions",flush=True)
+          for group in clones[:95]:
+              print("DUPLICATE",sum(end-start+1 for p,start,end,n in group),"lines",len(group),"members",";".join(f"{p}:{st}-{en}:{n}" for p,st,en,n in group),flush=True)
+          for path,st,en,name,target in sorted(forwards,key=lambda t:t[2]-t[1],reverse=True)[:120]:
+              print("FORWARD",en-st+1,f"{path}:{st}-{en}",name,"TO",target,flush=True)
+          PY
