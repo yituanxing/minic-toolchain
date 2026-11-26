@@ -2700,7 +2700,7 @@ static bool x86_source_provenance_sealed(const MinicCoreInlineAsm *source) {
 }
 
 static bool x86_scalar_role(const MinicCoreStructuredInlineAsmOperand *,
-    size_t, MinicCoreStructuredInlineAsmOperandKind);
+    MinicCoreStructuredInlineAsmOperandKind);
 
 /* Basic Source metadata is shared by zero-immediate, zero-clobber forms.
  * Keep each selector's physical operand and memory-effect checks separate. */
@@ -2966,9 +2966,7 @@ static bool x86_source_real_mode_far_jump(X86CoreSelector *sel,
         src->register_clobber_count ||
         src->resolved_immediate_count ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        roles[0].operand_index != 0U ||
         roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
-        roles[1].operand_index != 1U ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         roles[0].has_fixed_register_binding ||
         roles[1].has_fixed_register_binding ||
@@ -3026,8 +3024,7 @@ static bool x86_source_patchable_flags_alt(X86CoreSelector *sel,
             (form != 1U || src->register_clobber_count != 0U)) ||
         count != (smap && form >= 3U ? 1U : 0U)) return false;
     if (smap && form >= 3U) {
-        if (roles == NULL || roles[0].operand_index != 0U ||
-            roles[0].kind != (form == 3U ?
+        if (roles == NULL || roles[0].kind != (form == 3U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[0].has_fixed_register_binding || roles[0].has_tied_output ||
@@ -3083,10 +3080,9 @@ static bool x86_source_cpuid_matched(X86CoreSelector *sel,
         const bool output = i < 4U;
         const size_t reg_index = output ? i :
             (count == 6U && i == 5U ? 2U : i - 4U);
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output != !output ||
             (!output && roles[i].tied_output_index != reg_index) ||
@@ -3175,9 +3171,7 @@ static bool x86_source_zstd_cpuid(X86CoreSelector *sel,
         const char *const constraint = output ?
             output_constraints[form][index] : input_constraints[form][index];
         const MinicCoreStructuredInlineAsmOperand *role=&roles[i];
-        if (role->operand_index != i ||
-            role->value >= sel->core->value_count ||
-            role->kind != (output ?
+        if (role->kind != (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             role->has_fixed_register_binding || role->early_clobber ||
@@ -3238,8 +3232,7 @@ static bool x86_source_via_xstore(X86CoreSelector *sel,
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source)) return false;
     for(i=0U;i<4U;++i) {
-        if(!x86_scalar_role(&roles[i], i, kinds[i]) ||
-            roles[i].value >= sel->core->value_count ||
+        if(!x86_scalar_role(&roles[i], kinds[i]) ||
             roles[i].has_tied_output ||
             roles[i].physical_read_write != (i>=2U)) return false;
     }
@@ -3313,11 +3306,10 @@ static bool x86_source_mulacc_matched(X86CoreSelector *sel,
     }
     for (i = 0U; i < 8U; ++i) {
         const bool output = i < 3U, tied = i >= 3U && i < 6U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 i == 7U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output != tied ||
             (tied && roles[i].tied_output_index != i - 3U)) return false;
@@ -3429,10 +3421,9 @@ static bool x86_source_matched_memory(X86CoreSelector *sel,
         const bool output = i < outputs;
         bool narrow = false;
         const size_t reg_index = output ? i : i - outputs;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output != !output ||
             (!output && roles[i].tied_output_index != reg_index) ||
@@ -3499,11 +3490,10 @@ static bool x86_source_bitscan_matched(X86CoreSelector *sel,
         const bool readwrite = output &&
             form == MINIC_X86_BIT_SCAN_BSR64_READWRITE;
         const bool tie = i == 2U;
-        if (!x86_scalar_role(&roles[i], i, (output ? readwrite ?
+        if (!x86_scalar_role(&roles[i], (output ? readwrite ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write != readwrite ||
             roles[i].has_tied_output != tie ||
             (tie && roles[i].tied_output_index != 0U)) return false;
@@ -3574,9 +3564,7 @@ static bool x86_source_prefetchw_alt(X86CoreSelector *sel,
         !source->is_volatile ||
         source->has_memory_clobber ||
         !x86_source_without_extra_operands(source) ||
-        roles[0].operand_index != 0U ||
         roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-        roles[1].operand_index != 1U ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
         roles[0].has_fixed_register_binding ||
         roles[1].has_fixed_register_binding ||
@@ -3586,8 +3574,6 @@ static bool x86_source_prefetchw_alt(X86CoreSelector *sel,
         roles[1].physical_read_write ||
         roles[0].has_tied_output ||
         roles[1].has_tied_output ||
-        roles[0].value >= sel->core->value_count ||
-        roles[1].value >= sel->core->value_count ||
         !minic_core_function_value_is_kind(sel->core,
             roles[0].value, MINIC_CORE_TYPE_INTEGER) ||
         !minic_core_function_value_is_kind(sel->core,
@@ -3652,8 +3638,7 @@ static bool x86_source_cmpxchg128(X86CoreSelector *sel,
             i == at + 1U || i == at + 2U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i], i, kind) ||
-            roles[i].value >= sel->core->value_count ||
+        if (!x86_scalar_role(&roles[i], kind) ||
             roles[i].physical_read_write != readwrite ||
             roles[i].has_tied_output) return false;
         if (i == at) {
@@ -3773,9 +3758,7 @@ static bool x86_source_gen_endbr(X86CoreSelector *sel,
         !source->is_volatile ||
         source->has_memory_clobber ||
         !x86_source_without_extra_operands(source) ||
-        role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
-        role->value >= sel->core->value_count ||
         role->has_fixed_register_binding ||
         role->early_clobber ||
         !role->physical_early_clobber ||
@@ -3824,8 +3807,6 @@ static bool x86_source_crash_register(X86CoreSelector *sel,
         (memory_output && !source->is_volatile) ||
         source->has_memory_clobber != (variant == 19U) ||
         !x86_source_without_extra_operands(source) ||
-        role->operand_index != 0U ||
-        role->value >= sel->core->value_count ||
         role->kind != (memory_output ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
@@ -3907,9 +3888,7 @@ static bool x86_source_futex_extable(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (roles[i].operand_index != i ||
-            roles[i].value >= sel->core->value_count ||
-            roles[i].kind != kind ||
+        if (roles[i].kind != kind ||
             roles[i].has_fixed_register_binding ||
             roles[i].early_clobber ||
             roles[i].physical_early_clobber != early ||
@@ -4064,10 +4043,9 @@ static bool x86_source_hweight(X86CoreSelector *sel,
         !x86_asm_gp_input_width(sel,roles[1].value,bytes))
         return false;
     for (i = 0U; i < 2U; ++i)
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output)
             return false;
@@ -4137,7 +4115,7 @@ static bool x86_source_mmio_or_xchg(X86CoreSelector *sel,
         const bool address = reading || exchange || (writing && i == 1U);
         const MinicCoreType *type;
         MinicCoreTypeId type_id;
-        if (!x86_scalar_role(&roles[i], i, (exchange ?
+        if (!x86_scalar_role(&roles[i], (exchange ?
                 (i == 0U ?
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                     MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) :
@@ -4148,7 +4126,6 @@ static bool x86_source_mmio_or_xchg(X86CoreSelector *sel,
                     (i == 0U ?
                         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT)))) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].has_tied_output)
             return false;
         if (address) {
@@ -4243,12 +4220,10 @@ static bool x86_source_pci_mmconfig(X86CoreSelector *sel,
         !source->is_volatile ||
         !x86_source_without_extra_operands(source) ||
         source->explicit_memory_clobber != !reading ||
-        !x86_scalar_role(&roles[0], 0U, (reading ?
+        !x86_scalar_role(&roles[0], (reading ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-        !x86_scalar_role(&roles[1], 1U, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        roles[0].value >= sel->core->value_count ||
-        roles[1].value >= sel->core->value_count ||
+        !x86_scalar_role(&roles[1], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output ||
         roles[1].has_tied_output)
         return false;
@@ -4332,9 +4307,7 @@ static bool x86_source_rep_stos(X86CoreSelector *sel,
         !source->has_memory_clobber ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 5U; ++i) {
-        if (roles[i].operand_index != i ||
-            roles[i].value >= sel->core->value_count ||
-            roles[i].kind != kinds[i] ||
+        if (roles[i].kind != kinds[i] ||
             roles[i].has_fixed_register_binding)
             return false;
         if (i < 2U) {
@@ -4403,11 +4376,11 @@ static bool x86_source_rep_string_io(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         !roles[0].physical_read_write ||
         !roles[1].physical_read_write ||
@@ -4496,9 +4469,7 @@ static bool x86_source_iomem_copy(X86CoreSelector *sel,
         !x86_source_without_extra_operands(source) ||
         ins->value.structured_inline_asm.operand_count != count ) return false;
     for (i = 0U; i < count; ++i) {
-        if (roles[i].operand_index != i ||
-            roles[i].value >= sel->core->value_count ||
-            roles[i].has_fixed_register_binding ||
+        if (roles[i].has_fixed_register_binding ||
             roles[i].kind != (i < outputs ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
@@ -4583,14 +4554,13 @@ static bool x86_source_wc_fixed_copy(X86CoreSelector *sel,
     for (i = 0U; i < 2U; ++i) {
         MinicCoreTypeId pointee;
         const MinicCoreType *object;
-        if (!x86_scalar_role(&roles[i], i, (alternative && i == 0U ?
+        if (!x86_scalar_role(&roles[i], (alternative && i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].has_tied_output ||
             roles[i].physical_read_write != (alternative && i == 0U)) return false;
         if (alternative && i == 0U) {
-            if (roles[i].value >= sel->core->value_count ||
-                !minic_lp64_core_pointer_pointee(sel->core->type_context,
+            if (!minic_lp64_core_pointer_pointee(sel->core->type_context,
                     sel->core->values[roles[i].value].core_type_id,&pointee) ||
                 (object = x86_type(sel,pointee)) == NULL ||
                 object->kind != MINIC_CORE_TYPE_RECORD ||
@@ -4667,10 +4637,9 @@ static bool x86_source_counter(X86CoreSelector *sel,
     width = x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ? 64U : 32U;
     for (i = 0U; i < count; ++i) {
         const bool output = i < 2U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !(output ?
@@ -4770,7 +4739,7 @@ static bool x86_source_fdiv_bug(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 3U)
         return false;
     for (i = 0U; i < 3U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT)) ||
             roles[i].physical_read_write ||
@@ -4813,7 +4782,7 @@ static bool x86_source_x87_probe(X86CoreSelector *sel,
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 2U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
             !roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !x86_asm_gp_lvalue_width(sel,roles[i].value,2U) ||
@@ -4855,14 +4824,12 @@ static bool x86_source_x87_fild_prepare(X86CoreSelector *sel,
         source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source) ||
-        role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
         role->has_fixed_register_binding ||
         role->early_clobber ||
         role->physical_early_clobber ||
         role->physical_read_write ||
         role->has_tied_output ||
-        role->value >= sel->core->value_count ||
         !minic_lp64_core_pointer_pointee(sel->core->type_context,
             sel->core->values[role->value].core_type_id,&pointee) ||
         (record = x86_type(sel,pointee)) == NULL ||
@@ -4911,10 +4878,9 @@ static bool x86_source_fpu_kernel_restore(X86CoreSelector *sel,
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 2U; ++i)
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !minic_lp64_core_pointer_pointee(sel->core->type_context,
@@ -4960,7 +4926,7 @@ static bool x86_source_random_seed(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 2U)
         return false;
     for (i = 0U; i < 2U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output)
             return false;
@@ -5025,8 +4991,8 @@ static bool x86_scalar_source_base(X86CoreSelector *sel,
 }
 
 static bool x86_scalar_role(const MinicCoreStructuredInlineAsmOperand *role,
-    size_t index, MinicCoreStructuredInlineAsmOperandKind kind) {
-    return role->operand_index == index && role->kind == kind &&
+    MinicCoreStructuredInlineAsmOperandKind kind) {
+    return role->kind == kind &&
         !role->has_fixed_register_binding && !role->early_clobber &&
         !role->physical_early_clobber;
 }
@@ -5047,14 +5013,13 @@ static bool x86_source_efi_kernel_transfer(X86CoreSelector *sel,
         src->has_memory_clobber || src->explicit_memory_clobber ||
         src->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        !x86_scalar_role(&roles[0], 0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        !x86_scalar_role(&roles[1], 1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[1].physical_read_write ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         !x86_asm_gp_input_width(sel,roles[0].value,8U) ||
-        roles[1].value >= sel->core->value_count ||
         (boot_type = x86_type(sel,
             sel->core->values[roles[1].value].core_type_id)) == NULL ||
         !boot_type->has_layout || boot_type->size != 8U ||
@@ -5123,11 +5088,11 @@ static bool x86_source_nospec(X86CoreSelector *sel,
     clobber = &source->register_clobbers[0];
     if (clobber->name == NULL || clobber->name_length != 2U ||
         memcmp(clobber->name, "cc", 2U) != 0 ||
-        !x86_scalar_role(&roles[0], 0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1], 1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        !x86_scalar_role(&roles[2], 2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[1].physical_read_write ||
         roles[2].physical_read_write ||
@@ -5168,10 +5133,10 @@ static bool x86_source_scalar_port_io(X86CoreSelector *sel,
         !source->is_volatile || source->has_memory_clobber ||
         source->explicit_memory_clobber ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        !x86_scalar_role(&roles[0],0U,desc->is_input ?
+        !x86_scalar_role(&roles[0],desc->is_input ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         roles[0].physical_read_write || roles[1].physical_read_write ||
@@ -5225,19 +5190,19 @@ static bool x86_source_scalar_atomic_rmw(X86CoreSelector *sel,
         (legacy && (!desc->locked || desc->width != 8U ||
             (!desc->unary && strcmp(desc->opcode,"addq") != 0 &&
              strcmp(desc->opcode,"subq") != 0))) ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
         roles[0].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,desc->width))
         return false;
     if (!desc->unary &&
-        (!x86_scalar_role(&roles[1],1U,
+        (!x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
          roles[1].has_tied_output ||
          !x86_asm_gp_input_width(sel,roles[1].value,desc->width)))
         return false;
     if (legacy &&
-        (!x86_scalar_role(&roles[count-1U],count-1U,
+        (!x86_scalar_role(&roles[count-1U],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
          roles[count-1U].has_tied_output ||
          !x86_asm_gp_lvalue_width(sel,
@@ -5326,7 +5291,7 @@ static bool x86_source_scalar_cmpxchg(X86CoreSelector *sel,
             i == 0U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
                       MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i],i,expected) ||
+        if (!x86_scalar_role(&roles[i],expected) ||
             roles[i].has_tied_output != (!trycas && i == 3U) ||
             (!trycas && i == 3U && roles[i].tied_output_index != 0U))
             return false;
@@ -5404,17 +5369,16 @@ static bool x86_source_testcc(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         !source->explicit_memory_clobber || !source->implicit_memory_effect ||
         source->target_machine_form_variant != 0U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         roles[2].has_tied_output ||
         !x86_asm_bool_lvalue(sel,roles[0].value) ||
         !x86_asm_gp_lvalue_width(sel,roles[1].value,1U) ||
-        roles[2].value >= sel->core->value_count ||
         sel->core->values[roles[2].value].definition >=
             sel->core->instruction_count) return false;
     form = minic_x86_64_linux_testcc_form(
@@ -5487,7 +5451,7 @@ static bool x86_source_scalar_bitops(X86CoreSelector *sel,
             i == flag_index ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i],i,kind) ||
+        if (!x86_scalar_role(&roles[i],kind) ||
             roles[i].has_tied_output)
             return false;
     }
@@ -5559,16 +5523,16 @@ static bool x86_source_scalar_atomic_cc(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         ins->value.structured_inline_asm.operand_count != count ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,desc->width) ||
         !x86_asm_bool_lvalue(sel,roles[1].value))
         return false;
     if (desc->has_value &&
-        (!x86_scalar_role(&roles[2],2U,
+        (!x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
          roles[2].has_tied_output ||
          !x86_asm_gp_input_width(sel,roles[2].value,desc->width)))
@@ -5625,11 +5589,11 @@ static bool x86_source_linux_lock_bitcc_sign(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         roles[2].has_tied_output ||
@@ -5678,18 +5642,17 @@ static bool x86_source_linux_lock_bitcc(X86CoreSelector *sel,
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output || roles[1].has_tied_output ||
         roles[2].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,4U) ||
         !x86_asm_bool_lvalue(sel,roles[1].value) ||
         !x86_asm_gp_input_width(sel,roles[2].value,4U) ||
-        roles[2].value >= sel->core->value_count ||
         sel->core->values[roles[2].value].definition >=
             sel->core->instruction_count) return false;
     constant = &sel->core->instructions[
@@ -5739,7 +5702,7 @@ static bool x86_source_mxcsr(X86CoreSelector *sel,
         !x86_source_without_extra_operands(source) ||
         ins->value.structured_inline_asm.operand_count != 1U)
         return false;
-    if (!x86_scalar_role(&roles[0], 0U, (reading_memory ?
+    if (!x86_scalar_role(&roles[0], (reading_memory ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT)) ||
         roles[0].physical_read_write ||
@@ -5781,7 +5744,7 @@ static bool x86_source_unwind_context(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 3U)
         return false;
     for (i = 0U; i < 3U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !x86_asm_u64_lvalue(sel,roles[i].value))
@@ -5839,7 +5802,7 @@ static bool x86_source_pkru(X86CoreSelector *sel,
     constraints = form == 1U ? read_constraints : write_constraints;
     for (i = 0U; i < 3U; ++i) {
         const bool output = i < outputs;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -5897,10 +5860,9 @@ static bool x86_source_alternative_wrmsr(X86CoreSelector *sel,
         !source->has_memory_clobber ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 4U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
-            roles[i].value >= sel->core->value_count ||
             (i < 3U && !x86_asm_gp_input_width(sel,roles[i].value,4U)))
             return false;
     }
@@ -5993,8 +5955,7 @@ static bool x86_source_fpu_user_frame(X86CoreSelector *sel,
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT : i == 2U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-        if (!x86_scalar_role(&roles[i], i, kind) ||
-            roles[i].value >= sel->core->value_count ||
+        if (!x86_scalar_role(&roles[i], kind) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output != (i == 2U) ||
             (i == 2U && roles[i].tied_output_index != 0U))
@@ -6070,8 +6031,7 @@ static bool x86_source_xsave_triple_alt(X86CoreSelector *sel,
             i == offset + 1U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i], i, kind) ||
-            roles[i].value >= sel->core->value_count ||
+        if (!x86_scalar_role(&roles[i], kind) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output)
             return false;
@@ -6149,10 +6109,9 @@ static bool x86_source_task_size_alt(X86CoreSelector *sel,
         source->explicit_memory_clobber ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 4U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
-            roles[i].value >= sel->core->value_count ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             (i == 0U ? !x86_asm_u64_lvalue(sel,roles[i].value) :
@@ -6197,8 +6156,7 @@ static bool x86_source_apic_amd_alt(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count !=
             (form == 1U ? 5U : 3U)) return false;
     for (i = 0U; i < (form == 1U ? 5U : 3U); ++i)
-        if (roles[i].operand_index != i ||
-            roles[i].has_fixed_register_binding || roles[i].early_clobber ||
+        if (roles[i].has_fixed_register_binding || roles[i].early_clobber ||
             roles[i].physical_early_clobber || roles[i].physical_read_write ||
             roles[i].has_tied_output != (form == 1U && i == 3U) ||
             (form == 1U && i == 3U && roles[i].tied_output_index != 0U))
@@ -6270,7 +6228,7 @@ static bool x86_source_xsetbv(X86CoreSelector *sel,
         source->has_memory_clobber ||
         !x86_source_without_extra_operands(source)) return false;
     for (i = 0U; i < 3U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !x86_asm_gp_input_width(sel,roles[i].value,4U) ||
@@ -6303,8 +6261,7 @@ static bool x86_source_kexec_load_segments(X86CoreSelector *sel,
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source)) return false;
     role = ins->value.structured_inline_asm.operands;
-    if (role->operand_index != 0U ||
-        role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
+    if (role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         role->has_fixed_register_binding || role->has_tied_output ||
         role->physical_read_write || role->early_clobber ||
         role->physical_early_clobber ||
@@ -6360,7 +6317,7 @@ static bool x86_source_monitor_wait(X86CoreSelector *sel,
             x86_reg(MINIC_X86_REG_RBX,64U))) return false;
     for (i = 0U; i < count; ++i) {
         const bool full = x86_asm_gp_input_width(sel,roles[i].value,8U);
-        if (!x86_scalar_role(&roles[i],i,
+        if (!x86_scalar_role(&roles[i],
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write || roles[i].has_tied_output ||
             (!full && ((i == 0U && variant <= 2U) ||
@@ -6402,7 +6359,7 @@ static bool x86_source_segment_read(X86CoreSelector *sel,
         !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source) ||
-        !x86_scalar_role(role,0U,
+        !x86_scalar_role(role,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         role->physical_read_write ||
         role->has_tied_output ||
@@ -6445,7 +6402,7 @@ static bool x86_source_fsgsbase(X86CoreSelector *sel,
         !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source) ||
-        !x86_scalar_role(role,0U,reading ?
+        !x86_scalar_role(role,reading ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         role->physical_read_write ||
@@ -6488,7 +6445,7 @@ static bool x86_source_crash_segment_snapshot(X86CoreSelector *sel,
         source->has_memory_clobber ||
         source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source) ||
-        !x86_scalar_role(role,0U,
+        !x86_scalar_role(role,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         role->physical_read_write ||
         role->has_tied_output ||
@@ -6531,10 +6488,10 @@ static bool x86_source_cache_flush_alt(X86CoreSelector *sel,
         source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         !x86_source_without_extra_operands(source)) return false;
-    if (!x86_scalar_role(&roles[0], 0U, (idle ?
+    if (!x86_scalar_role(&roles[0], (idle ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)) ||
-        !x86_scalar_role(&roles[1], 1U, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        !x86_scalar_role(&roles[1], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output ||
         roles[1].has_tied_output ||
         roles[0].physical_read_write != !idle ||
@@ -6596,9 +6553,9 @@ static bool x86_source_preempt_gs_dec(X86CoreSelector *sel,
         !source->is_volatile ||
         !source->has_memory_clobber ||
         !x86_source_without_extra_operands(source) ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].has_tied_output ||
         roles[1].has_tied_output ||
@@ -6668,9 +6625,7 @@ static bool x86_source_rep_uaccess_alternative(X86CoreSelector *sel,
         const bool fixed = i == (movsb ? 3U : 2U);
         const bool scalar = !movsb && i == 3U;
         const MinicCoreStructuredInlineAsmOperand *role = &roles[i];
-        if (role->operand_index != i ||
-            role->value >= sel->core->value_count ||
-            role->kind != (fixed ?
+        if (role->kind != (fixed ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
                 scalar ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
@@ -6779,12 +6734,12 @@ static bool x86_source_boot_cmpsb(X86CoreSelector *sel,
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 4U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         !x86_asm_bool_lvalue(sel,roles[0].value)) return false;
     for (i = 1U; i < 4U; ++i) {
-        if (!x86_scalar_role(&roles[i],i,
+        if (!x86_scalar_role(&roles[i],
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
             !roles[i].physical_read_write || roles[i].has_tied_output ||
             !x86_asm_gp_lvalue_width(sel,roles[i].value,8U)) return false;
@@ -6842,7 +6797,7 @@ static bool x86_source_boot_divl(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 5U) return false;
     for (i = 0U; i < 5U; ++i) {
         const bool output = i < 2U;
-        if (!x86_scalar_role(&roles[i],i,output ?
+        if (!x86_scalar_role(&roles[i],output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write ||
@@ -6892,8 +6847,7 @@ static bool x86_source_boot_movs(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 7U) return false;
     for (i = 0U; i < 7U; ++i) {
         const bool output = i < 3U;
-        if (roles[i].operand_index != i ||
-            roles[i].kind != (output ?
+        if (roles[i].kind != (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].has_fixed_register_binding ||
@@ -6956,7 +6910,7 @@ static bool x86_source_control_register(X86CoreSelector *sel,
             (form == 5U || form == 6U || tied_write) ||
         ins->value.structured_inline_asm.operand_count !=
             (dummy ? 2U : 1U) ||
-        !x86_scalar_role(&roles[0],0U,read ?
+        !x86_scalar_role(&roles[0],read ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT : tied_write ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
@@ -6966,10 +6920,9 @@ static bool x86_source_control_register(X86CoreSelector *sel,
             !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) :
             !x86_asm_gp_input_width(sel,roles[0].value,8U))) return false;
     if (dummy) {
-        if (!x86_scalar_role(&roles[1],1U,
+        if (!x86_scalar_role(&roles[1],
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
             roles[1].physical_read_write || roles[1].has_tied_output ||
-            roles[1].value >= sel->core->value_count ||
             !minic_lp64_core_pointer_pointee(sel->core->type_context,
                 sel->core->values[roles[1].value].core_type_id,&pointee) ||
             (fake_type = x86_type(sel,pointee)) == NULL ||
@@ -7016,7 +6969,7 @@ static bool x86_source_boot_segments(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         (!x86_asm_gp_input_width(sel,roles[0].value,2U) &&
@@ -7053,7 +7006,7 @@ static bool x86_source_segment_load_extable(X86CoreSelector *sel,
         !source->has_memory_clobber || !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         !x86_asm_gp_input_width(sel,roles[0].value,2U) ||
@@ -7084,9 +7037,9 @@ static bool x86_source_load_unaligned_zeropad(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         source->explicit_memory_clobber || !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         roles[1].physical_read_write || roles[1].has_tied_output ||
@@ -7130,7 +7083,7 @@ static bool x86_source_segment_register_extable(X86CoreSelector *sel,
         !source->has_memory_clobber || !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
         !roles[0].physical_read_write || roles[0].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,2U) ||
@@ -7161,7 +7114,7 @@ static bool x86_source_lkgs_extable(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         source->explicit_memory_clobber || !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) ||
         !roles[0].physical_read_write || roles[0].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,2U) ||
@@ -7206,7 +7159,7 @@ static bool x86_source_debug_register(X86CoreSelector *sel,
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != (dr7 ? 2U : 1U) ||
-        !x86_scalar_role(&roles[0],0U,read ?
+        !x86_scalar_role(&roles[0],read ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
@@ -7214,10 +7167,9 @@ static bool x86_source_debug_register(X86CoreSelector *sel,
             !x86_asm_gp_input_width(sel,roles[0].value,8U)))
         return false;
     if (dr7) {
-        if (!x86_scalar_role(&roles[1],1U,
+        if (!x86_scalar_role(&roles[1],
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
             roles[1].physical_read_write || roles[1].has_tied_output ||
-            roles[1].value >= sel->core->value_count ||
             !minic_lp64_core_pointer_pointee(sel->core->type_context,
                 sel->core->values[roles[1].value].core_type_id,&pointee) ||
             (fake_type = x86_type(sel,pointee)) == NULL ||
@@ -7263,7 +7215,7 @@ static bool x86_source_task_control(X86CoreSelector *sel,
         source->has_memory_clobber || source->explicit_memory_clobber ||
         source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,form == 1U ?
+        !x86_scalar_role(&roles[0],form == 1U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output)
@@ -7308,11 +7260,11 @@ static bool x86_source_vdso_cpunode(X86CoreSelector *sel,
         !source->is_volatile || !source->has_memory_clobber ||
         source->explicit_memory_clobber || !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         roles[1].physical_read_write || roles[1].has_tied_output ||
@@ -7322,7 +7274,6 @@ static bool x86_source_vdso_cpunode(X86CoreSelector *sel,
         (!x86_asm_gp_input_width(sel,roles[2].value,2U) &&
          !x86_asm_gp_input_width(sel,roles[2].value,4U) &&
          !x86_asm_gp_input_width(sel,roles[2].value,8U)) ||
-        roles[1].value >= sel->core->value_count ||
         sel->core->values[roles[1].value].definition >=
             sel->core->instruction_count) return false;
     zero = &sel->core->instructions[
@@ -7416,7 +7367,7 @@ static bool x86_source_msr(X86CoreSelector *sel,
     for (i = 0U; i < count; ++i) {
         const bool output = i < outputs;
         const bool tied = safe && !read && i == 2U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -7498,14 +7449,13 @@ static bool x86_source_percpu_gs(X86CoreSelector *sel,
     count = operation == 2U || operation == 3U ? 1U : 2U;
     if (source->has_memory_clobber != (operation != 0U)) return false;
     if (ins->value.structured_inline_asm.operand_count != count ||
-        !x86_scalar_role(&roles[0], 0U, (operation == 0U ?
+        !x86_scalar_role(&roles[0], (operation == 0U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)) ||
         (operation == 0U && roles[0].physical_read_write) ||
         roles[0].has_tied_output ||
         !x86_percpu_scalar_shape(sel,roles[0].value,width,true)) return false;
-    if (count == 2U && (roles[1].operand_index != 1U ||
-        roles[1].kind != (operation == 0U && !stable ?
+    if (count == 2U && (roles[1].kind != (operation == 0U && !stable ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[1].has_fixed_register_binding || roles[1].early_clobber ||
@@ -7579,13 +7529,13 @@ static bool x86_source_gs_tied_alu(X86CoreSelector *sel,
         source->has_memory_clobber ||
         source->explicit_memory_clobber ||
         !x86_source_without_extra_operands(source) ||
-        !x86_scalar_role(&roles[0], 0U, MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[0], MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].physical_read_write ||
         roles[0].has_tied_output ||
-        !x86_scalar_role(&roles[1], 1U, MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        !x86_scalar_role(&roles[1], MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
         roles[1].physical_read_write ||
         roles[1].has_tied_output ||
-        !x86_scalar_role(&roles[2], 2U, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        !x86_scalar_role(&roles[2], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[2].physical_read_write ||
         !roles[2].has_tied_output ||
         roles[2].tied_output_index != 0U)
@@ -7704,7 +7654,7 @@ static bool x86_source_pm_trace(X86CoreSelector *sel,
             &bound_filename) ||
         roles[1].value >= sel->core->value_count) return false;
     for (i = 0U; i < 3U; ++i)
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -7774,7 +7724,7 @@ static bool x86_source_ipv6_checksum(X86CoreSelector *sel,
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool tied = i == 1U;
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -7866,7 +7816,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
                 memory ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i], i, expected) ||
+        if (!x86_scalar_role(&roles[i], expected) ||
             (i == 0U && roles[i].physical_read_write != is_partial) ||
             (i > 0U && roles[i].physical_read_write) ||
             roles[i].has_tied_output != tied ||
@@ -7966,7 +7916,7 @@ static bool x86_source_ip_fast_csum(X86CoreSelector *sel,
     for (i = 0U; i < 5U; ++i) {
         const bool output = i < 3U;
         const bool tied = i >= 3U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -8033,7 +7983,7 @@ static bool x86_source_smp_xadd(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID) return false;
     for (i = 0U; i < 2U; ++i) {
-        if (!x86_scalar_role(&roles[i], i, (i == 0U ?
+        if (!x86_scalar_role(&roles[i], (i == 0U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE)) ||
             roles[i].has_tied_output ||
@@ -8118,7 +8068,7 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (roles[i].operand_index != i || roles[i].kind != expected ||
+        if (roles[i].kind != expected ||
             roles[i].early_clobber ||
             roles[i].physical_early_clobber != (i == 0U && retry) ||
             roles[i].has_fixed_register_binding || roles[i].has_tied_output ||
@@ -8198,11 +8148,9 @@ static bool x86_source_descriptor_table(X86CoreSelector *sel,
         !source->is_volatile ||
         !x86_source_without_extra_operands(source) ||
         !source->implicit_memory_effect ||
-        role->operand_index != 0U ||
         role->kind != (form <= 2U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT) ||
-        role->value >= sel->core->value_count ||
         role->has_fixed_register_binding ||
         role->has_tied_output ||
         role->early_clobber ||
@@ -8258,8 +8206,7 @@ static bool x86_source_xstate_fault(X86CoreSelector *sel,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             i == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (r->operand_index != i || r->kind != expected ||
-            r->value >= sel->core->value_count ||
+        if (r->kind != expected ||
             r->has_fixed_register_binding || r->early_clobber ||
             r->physical_early_clobber || r->physical_read_write ||
             r->has_tied_output) return false;
@@ -8347,7 +8294,7 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
         !source->is_volatile ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        role->operand_index != 0U || role->has_fixed_register_binding ||
+        role->has_fixed_register_binding ||
         role->early_clobber || role->physical_early_clobber ||
         role->has_tied_output ||
         role->value >= sel->core->value_count)
@@ -8435,8 +8382,7 @@ static bool x86_source_delay_mul(X86CoreSelector *sel,
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool output = i < 2U;
-        if (roles[i].operand_index != i ||
-            roles[i].kind != (output ?
+        if (roles[i].kind != (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].has_fixed_register_binding ||
@@ -8511,7 +8457,7 @@ static bool x86_source_vmware(X86CoreSelector *sel,
         const unsigned int reg = alt ? (output ?
             (i == 0U ? MINIC_X86_REG_RAX : MINIC_X86_REG_RCX) :
             alt_regs[j]) : hypercall_regs[j];
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -8578,7 +8524,7 @@ static bool x86_source_kvm_hypercall(X86CoreSelector *sel,
         count > (alt ? 6U : 5U)) return false;
     for (i = 0U; i < count; ++i) {
         const bool output = i == 0U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -8639,7 +8585,7 @@ static bool x86_source_pvclock_scale(X86CoreSelector *sel,
     
     for (i = 0U; i < 4U; ++i) {
         const bool output = i < 2U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -8691,7 +8637,7 @@ static bool x86_source_vdso_syscall(X86CoreSelector *sel,
             clock_form && i == 1U ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (!x86_scalar_role(&roles[i], i, expected) ||
+        if (!x86_scalar_role(&roles[i], expected) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output != (i == number_index) ||
             (i == number_index && roles[i].tied_output_index != 0U))
@@ -8705,8 +8651,7 @@ static bool x86_source_vdso_syscall(X86CoreSelector *sel,
         return false;
     if (clock_form) {
         (void)memset(implicit,0,sizeof(implicit));
-        if (roles[1].value >= sel->core->value_count ||
-            (memory_pointer = x86_type(sel,
+        if ((memory_pointer = x86_type(sel,
                 sel->core->values[roles[1].value].core_type_id)) == NULL ||
             memory_pointer->kind != MINIC_CORE_TYPE_POINTER ||
             src->register_clobbers == NULL ||
@@ -8776,8 +8721,7 @@ static bool x86_source_delay_wait(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != (form == 1U ? 1U : 3U))
         return false;
     if (form == 1U) {
-        if (roles[0].operand_index != 0U ||
-            roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
+        if (roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
             !x86_asm_u64_lvalue(sel,roles[0].value) ||
             !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R11)) return false;
         /* Core carries the lvalue address. Read its old scalar value before
@@ -8793,9 +8737,7 @@ static bool x86_source_delay_wait(X86CoreSelector *sel,
             x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_RAX,8U);
     }
     for (i = 0U; i < 3U; ++i) {
-        if (roles[i].operand_index != i ||
-            roles[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-            roles[i].value >= sel->core->value_count ||
+        if (roles[i].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
             !x86_core_load(sel,roles[i].value,regs[i])) return false;
         binding[i] = x86_reg(regs[i],32U);
         binding[i].asm_constraint = constraints[i];
@@ -8830,7 +8772,6 @@ static bool x86_source_preempt_static_call(X86CoreSelector *sel,
         src->explicit_memory_clobber ||
         !src->implicit_memory_effect ||
         !x86_source_without_extra_operands(src) ||
-        role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE ||
         !role->physical_read_write ||
         role->early_clobber ||
@@ -8914,8 +8855,7 @@ static bool x86_source_exception_stack_call(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE) :
             i == 1U ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (op->operand_index != i || op->value >= sel->core->value_count ||
-            op->kind != expected || op->early_clobber ||
+        if (op->kind != expected || op->early_clobber ||
             op->physical_early_clobber || op->has_tied_output ||
             (i < 2U && !op->physical_read_write) ||
             (i >= 2U && op->physical_read_write)) return false;
@@ -9017,9 +8957,6 @@ static bool x86_source_iret_int3(X86CoreSelector *sel,
         (iret && (!source->register_clobbers ||
             !source->register_clobbers[0].name ||
             strcmp(source->register_clobbers[0].name,"cc") != 0)) ||
-        roles[0].operand_index != 0U || roles[1].operand_index != 1U ||
-        roles[0].value >= sel->core->value_count ||
-        roles[1].value >= sel->core->value_count ||
         roles[0].kind != (iret ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE) ||
@@ -9099,9 +9036,7 @@ static bool x86_source_alt_reloc_selftest(X86CoreSelector *sel,
         !source->register_clobbers ||
         !source->register_clobbers[0].name ||
         strcmp(source->register_clobbers[0].name,"rdi") != 0 ||
-        role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
-        role->value >= sel->core->value_count ||
         role->has_fixed_register_binding ||
         role->has_tied_output ||
         role->early_clobber ||
@@ -9186,8 +9121,7 @@ static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
             i == 4U ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
             i == 6U ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-        if (role->operand_index != i || role->kind != kind ||
-            role->value >= sel->core->value_count ||
+        if (role->kind != kind ||
             role->early_clobber || role->physical_early_clobber ||
             role->has_tied_output ||
             role->physical_read_write != (i == 4U) ||
@@ -9289,11 +9223,10 @@ static bool x86_source_three_call_alternative(X86CoreSelector *sel,
         src->register_clobber_count != 3U ||
         src->resolved_immediate_count != 0U ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_scalar_role(&roles[0], 0U, MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[0], MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
         roles[0].physical_read_write ||
         roles[0].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ||
-        roles[1].operand_index != 1U ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE ||
         !roles[1].has_fixed_register_binding ||
         !roles[1].physical_read_write ||
@@ -9321,7 +9254,7 @@ static bool x86_source_three_call_alternative(X86CoreSelector *sel,
         MinicCoreInstructionId definition;
         MinicCoreFunctionSymbolId symbol_id;
         const char *name;
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             !x86_asm_gp_input_width(sel,value,8U) ||
@@ -9337,7 +9270,7 @@ static bool x86_source_three_call_alternative(X86CoreSelector *sel,
         bindings[i] = x86_symbol(name,MINIC_X86_MACHINE_RELOC_PLT32);
         bindings[i].asm_constraint = "i";
     }
-    if (!x86_scalar_role(&roles[5], 5U, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+    if (!x86_scalar_role(&roles[5], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[5].physical_read_write ||
         !roles[5].has_tied_output ||
         roles[5].tied_output_index != 0U ||
@@ -9401,7 +9334,7 @@ static bool x86_source_lowlevel_descriptor(X86CoreSelector *sel,
         !src->has_memory_clobber ||
         ins->value.structured_inline_asm.operand_count !=
             (form == 2U ? 1U : 2U) ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             form == 2U ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output)
@@ -9418,7 +9351,7 @@ static bool x86_source_lowlevel_descriptor(X86CoreSelector *sel,
         return minic_machine_builder_emit_core_source_asm(&sel->builder,
             src,0U,bindings,1U,NULL,0U,false,false);
     }
-    if (!x86_scalar_role(&roles[1],1U,
+    if (!x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[1].physical_read_write || roles[1].has_tied_output ||
         !minic_lp64_core_pointer_pointee(sel->core->type_context,
@@ -9454,7 +9387,7 @@ static bool x86_source_lowlevel_segment(X86CoreSelector *sel,
         !src->implicit_memory_effect ||
         (form == 4U && !src->is_volatile) ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        !x86_scalar_role(&roles[0],0U,form == 3U ?
+        !x86_scalar_role(&roles[0],form == 3U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output)
@@ -9505,15 +9438,12 @@ static bool x86_source_movnti(X86CoreSelector *sel,
         return false;
     bits = form == 7U ? 32U : 64U;
     
-    if (roles[0].operand_index != 0U ||
-        roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
-        roles[1].operand_index != 1U ||
+    if (roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         !minic_lp64_core_pointer_pointee(sel->core->type_context,
             sel->core->values[roles[0].value].core_type_id,&pointee) ||
         (mem = x86_type(sel,pointee)) == NULL || !mem->has_layout ||
         mem->kind != MINIC_CORE_TYPE_INTEGER || mem->size != bits / 8U ||
-        roles[1].value >= sel->core->value_count ||
         (mem = x86_type(sel,sel->core->values[roles[1].value].core_type_id)) == NULL ||
         mem->kind != MINIC_CORE_TYPE_INTEGER || !mem->has_layout ||
         (mem->size != bits / 8U && !(bits == 32U && mem->size == 8U)) ||
@@ -9547,9 +9477,9 @@ static bool x86_source_lowlevel_btcq(X86CoreSelector *sel,
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         roles[1].physical_read_write || roles[1].has_tied_output ||
@@ -9585,11 +9515,11 @@ static bool x86_source_boot_test_bit(X86CoreSelector *sel,
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        !x86_scalar_role(&roles[0],0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1],1U,
+        !x86_scalar_role(&roles[1],
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
-        !x86_scalar_role(&roles[2],2U,
+        !x86_scalar_role(&roles[2],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output ||
         roles[1].has_tied_output || roles[2].has_tied_output ||
@@ -9636,8 +9566,7 @@ static bool x86_source_boot_eflags(X86CoreSelector *sel,
         ins->value.structured_inline_asm.operand_count != 3U) return false;
     for (i = 0U; i < 3U; ++i) {
         const bool output = i < 2U;
-        if (roles[i].operand_index != i ||
-            roles[i].kind != (output ?
+        if (roles[i].kind != (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].has_fixed_register_binding ||
@@ -9677,16 +9606,13 @@ static bool x86_source_boot_bit(X86CoreSelector *sel,
         src->target_machine_form_variant != 2U) return false;
     
     if (!src->is_volatile ||  src->register_clobber_count != 0U ||
-        roles[0].operand_index != 0U ||
         roles[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE ||
-        roles[1].operand_index != 1U ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         !minic_lp64_core_pointer_pointee(sel->core->type_context,
             sel->core->values[roles[0].value].core_type_id,&pointee) ||
         (type = x86_type(sel,pointee)) == NULL ||
         type->kind != MINIC_CORE_TYPE_INTEGER || !type->has_layout ||
-        type->size != 4U || roles[1].value >= sel->core->value_count ||
-        (type = x86_type(sel,sel->core->values[roles[1].value].core_type_id)) == NULL ||
+        type->size != 4U || (type = x86_type(sel,sel->core->values[roles[1].value].core_type_id)) == NULL ||
         type->kind != MINIC_CORE_TYPE_INTEGER || !type->has_layout ||
         type->size != 4U ||
         !x86_core_load(sel,roles[0].value,MINIC_X86_REG_R10) ||
@@ -9730,12 +9656,11 @@ static bool x86_source_legacy_scalar(X86CoreSelector *sel,
     if (lar) {
         if (source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
-        !x86_scalar_role(&roles[0], 0U, MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
-        !x86_scalar_role(&roles[1], 1U, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        !x86_scalar_role(&roles[0], MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) ||
+        !x86_scalar_role(&roles[1], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].has_tied_output ||
         roles[1].has_tied_output ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,4U) ||
-        roles[1].value >= sel->core->value_count ||
         (type = x86_type(sel,
                 sel->core->values[roles[1].value].core_type_id)) == NULL ||
         type->kind != MINIC_CORE_TYPE_INTEGER ||
@@ -9760,9 +9685,8 @@ static bool x86_source_legacy_scalar(X86CoreSelector *sel,
         source->register_clobbers[0].name == NULL ||
         source->register_clobbers[0].name_length != 2U ||
         memcmp(source->register_clobbers[0].name,"r9",2U) != 0 ||
-        !x86_scalar_role(&roles[0], 0U, MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+        !x86_scalar_role(&roles[0], MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
         roles[0].has_tied_output ||
-        roles[0].value >= sel->core->value_count ||
         !minic_lp64_core_pointer_pointee(sel->core->type_context,
             sel->core->values[roles[0].value].core_type_id,&pointee) ||
         (type = x86_type(sel,pointee)) == NULL ||
@@ -9797,7 +9721,6 @@ static bool x86_source_ip_here(X86CoreSelector *sel,
         source->has_memory_clobber ||
         source->explicit_memory_clobber ||
         !x86_source_without_extra_operands(source) ||
-        role->operand_index != 0U ||
         role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         role->has_fixed_register_binding ||
         role->early_clobber ||
@@ -9941,11 +9864,9 @@ static bool x86_source_kernel_nofault_goto(X86CoreSelector *sel,
         !sel->reachable[source->goto_target] ||
         sel->blocks[source->goto_target] == SIZE_MAX ||
         source->goto_label_names[0] != NULL ||
-        roles[0].operand_index != 0U ||
         roles[0].kind != (load ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
-        roles[1].operand_index != 1U ||
         roles[1].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT ||
         roles[0].has_fixed_register_binding ||
         roles[1].has_fixed_register_binding ||
@@ -10108,7 +10029,7 @@ static bool x86_source_bug_table_c(X86CoreSelector *sel,
     for (i = 0U; i < 4U; ++i) {
         const MinicCoreInlineAsmImmediate *immediate =
             &source->resolved_immediates[i];
-        if (!x86_scalar_role(&roles[i], i, MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        if (!x86_scalar_role(&roles[i], MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].physical_read_write ||
             roles[i].has_tied_output ||
             (variant != 2U ? immediate->asm_name != NULL :
@@ -10161,7 +10082,7 @@ static bool x86_source_single_integer_immediate(
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 1U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_scalar_role(&roles[0], 0U,
+        !x86_scalar_role(&roles[0],
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
         roles[0].physical_read_write || roles[0].has_tied_output)
         return false;
@@ -10241,7 +10162,7 @@ static bool x86_source_accumulator_math(X86CoreSelector *sel,
                 "rdx", 3U) != 0))) return false;
     for (i = 0U; i < 4U; ++i) {
         bool output = muldiv ? i == 0U : i < 2U;
-        if (!x86_scalar_role(&roles[i], i, (output ?
+        if (!x86_scalar_role(&roles[i], (output ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT)) ||
             roles[i].physical_read_write ||
@@ -10374,9 +10295,7 @@ static bool x86_uaccess_call(X86CoreSelector *sel,
         const bool stack_binding = i == (put ? 1U : 2U);
         const bool bound = put ? (i == 1U || i == 3U) :
             (i == 1U || i == 2U);
-        if (bindings[i].operand_index != i ||
-            bindings[i].value >= sel->core->value_count ||
-            bindings[i].early_clobber ||
+        if (bindings[i].early_clobber ||
             bindings[i].kind != (stack_binding ?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
                 output ?
@@ -10644,12 +10563,23 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         id = ins->value.structured_inline_asm.inline_asm_id;
     else return false;
     if (sel->core->inline_asms == NULL ||
-        id >= sel->core->inline_asm_count ||
-        (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
-         ins->value.structured_inline_asm.operand_count >
-             sizeof(ins->value.structured_inline_asm.operands) /
-             sizeof(ins->value.structured_inline_asm.operands[0])))
+        id >= sel->core->inline_asm_count)
         return false;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
+        const size_t count = ins->value.structured_inline_asm.operand_count;
+        size_t i;
+        if (count > sizeof(ins->value.structured_inline_asm.operands) /
+                sizeof(ins->value.structured_inline_asm.operands[0]) ||
+            (count != 0U && sel->core->values == NULL))
+            return false;
+        for (i = 0U; i < count; ++i) {
+            const MinicCoreStructuredInlineAsmOperand *role =
+                &ins->value.structured_inline_asm.operands[i];
+            if (role->operand_index != i ||
+                role->value >= sel->core->value_count)
+                return false;
+        }
+    }
     source = &sel->core->inline_asms[id];
     form = source->target_machine_form_id;
     variant = source->target_machine_form_variant;
