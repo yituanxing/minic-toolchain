@@ -879,7 +879,8 @@ static bool x86_frame_encodable(const MinicMachineFunction *function,
     int64_t base,delta,effective;
     if (function == NULL || operand == NULL ||
         operand->kind != MINIC_MACHINE_OPERAND_FRAME ||
-        operand->value.frame.index >= function->frame_object_count)
+        operand->value.frame.index >= function->frame_object_count ||
+        function->frame_objects == NULL)
         return false;
     obj = &function->frame_objects[operand->value.frame.index];
     if ((opcode->frame_base == 1U &&
@@ -892,8 +893,7 @@ static bool x86_frame_encodable(const MinicMachineFunction *function,
     delta = operand->value.frame.displacement;
     if (delta < 0 || (uint64_t)delta > obj->size_bytes ||
         access_bytes > obj->size_bytes - (size_t)delta ||
-        (delta > 0 && base > INT64_MAX - delta) ||
-        (delta < 0 && base < INT64_MIN - delta)) return false;
+        (delta > 0 && base > INT64_MAX - delta)) return false;
     effective = base + delta;
     return effective >= INT32_MIN && effective <= INT32_MAX;
 }
@@ -908,6 +908,7 @@ bool minic_x86_64_machine_validate_selected(const MinicMachineFunction *function
         (target=function->target) == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         instruction == NULL ||
+        (instruction->operand_count != 0U && instruction->operands == NULL) ||
         (info=minic_x86_64_machine_opcode_info(instruction->opcode)) == NULL)
         return false;
     first = instruction->operand_count>0U ? &instruction->operands[0] : NULL;
@@ -2376,7 +2377,7 @@ static bool x86_source_mmio_or_xchg_contract(
              ins->effects != (effects | MINIC_MACHINE_EFFECT_COMPILER_BARRIER))) ||
         ins->operand_count != 2U || ins->operands == NULL ||
         ins->implicit_count != (exchange ? 1U : 0U) ||
-        (!exchange && ins->implicit != NULL) ||
+        (exchange ? ins->implicit == NULL : ins->implicit != NULL) ||
         !minic_x86_64_typed_machine_form_matches_template(
             form_id,ins->source_asm_machine_form_variant,
             ins->source_asm_template,ins->source_asm_length))
@@ -3197,10 +3198,7 @@ static bool x86_scalar_machine_mem(const MinicTargetInfo *target,
         return false;
     addr = &op->value.address;
     return minic_x86_64_machine_validate_address(target,addr,NULL) &&
-        addr->has_base &&
-        addr->base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         addr->base.number == base &&
-        addr->base.width_bits == 64U &&
         !addr->has_index && !addr->has_segment &&
         !addr->has_symbol && addr->displacement == 0;
 }
