@@ -2065,8 +2065,9 @@ static bool x86_parameter_object(X86CoreSelector *sel,
      * never requires a fictitious frame allocation or physical transfer. */
     if (loc->kind == MINIC_X86_ARG_RECORD_EMPTY)
         return record->size == 0U && payload == 0U;
-    if (sel->frame->object_storage.objects == NULL ||
-        record->size > sel->frame->object_storage.objects[object].extent)
+    if (sel->frame->object_storage == NULL ||
+        sel->frame->object_storage->objects == NULL ||
+        record->size > sel->frame->object_storage->objects[object].extent)
         return false;
     if (payload != record->size || payload == 0U ||
         (loc->kind != MINIC_X86_ARG_RECORD_ONE_GP &&
@@ -2149,8 +2150,9 @@ static bool x86_record_load(X86CoreSelector *sel,
     if (!minic_multi_direct_record_load_extent(sel->core, ins,
             &plan, &source, &offset, &bytes)) return false;
     if (bytes == 0U) return true;
-    if (sel->frame->object_storage.objects == NULL ||
-        bytes > sel->frame->object_storage.objects[destination].extent ||
+    if (sel->frame->object_storage == NULL ||
+        sel->frame->object_storage->objects == NULL ||
+        bytes > sel->frame->object_storage->objects[destination].extent ||
         !x86_record_pointer(sel, source, MINIC_X86_REG_R11) ||
         !x86_object_address(sel, destination, MINIC_X86_REG_R10))
         return false;
