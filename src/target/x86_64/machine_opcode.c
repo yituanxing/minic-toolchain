@@ -4,8 +4,6 @@
 #include "target/x86_64/asm_contract.h"
 
 #include <limits.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* Common physical-register checks for exact source-assembly contracts.
@@ -2872,57 +2870,6 @@ static bool x86_source_fdiv_bug_contract(const MinicTargetInfo *target,
         MINIC_X86_REG_R10, MINIC_X86_REG_R11, MINIC_X86_REG_RAX
     };
     size_t i;
-    if (ins->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FDIV_BUG &&
-        getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL) {
-        fprintf(stderr,
-            "x86 fdiv machine: variant=%u operands=%zu implicit=%zu"
-            " effects=%u expected=%u terminates=%u fallthrough=%u"
-            " template_ok=%u\n",
-            ins->source_asm_machine_form_variant,
-            ins->operand_count,ins->implicit_count,ins->effects,
-            (unsigned int)(MINIC_MACHINE_EFFECT_SOURCE_ASM |
-                MINIC_MACHINE_EFFECT_MEMORY_READ |
-                MINIC_MACHINE_EFFECT_MEMORY_WRITE |
-                MINIC_MACHINE_EFFECT_COMPILER_BARRIER),
-            (unsigned int)ins->source_asm_terminates_block,
-            (unsigned int)ins->source_asm_permits_fallthrough,
-            (unsigned int)minic_x86_64_typed_machine_form_matches_template(
-                ins->source_asm_machine_form_id,
-                ins->source_asm_machine_form_variant,
-                ins->source_asm_template,ins->source_asm_length));
-        if (ins->operands != NULL) {
-            size_t diag;
-            for (diag = 0U; diag < ins->operand_count && diag < 3U; ++diag) {
-                const MinicMachineOperand *op = &ins->operands[diag];
-                fprintf(stderr,
-                    "x86 fdiv machine operand%zu: kind=%u"
-                    " asm=%s name=%s base=%u width=%u"
-                    " disp=%lld index=%u segment=%u symbol=%u\n",
-                    diag,(unsigned int)op->kind,
-                    op->asm_constraint ? op->asm_constraint : "<null>",
-                    op->asm_name ? op->asm_name : "<null>",
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        op->value.address.base.number : 0U,
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        op->value.address.base.width_bits : 0U,
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        (long long)op->value.address.displacement : 0LL,
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        (unsigned int)op->value.address.has_index : 0U,
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        (unsigned int)op->value.address.has_segment : 0U,
-                    op->kind == MINIC_MACHINE_OPERAND_ADDRESS ?
-                        (unsigned int)op->value.address.has_symbol : 0U);
-            }
-        }
-        if (ins->implicit != NULL && ins->implicit_count != 0U)
-            fprintf(stderr,
-                "x86 fdiv machine implicit0: bank=%u reg=%u width=%u access=%u\n",
-                (unsigned int)ins->implicit[0].reg.bank,
-                ins->implicit[0].reg.number,
-                ins->implicit[0].reg.width_bits,
-                ins->implicit[0].access);
-    }
     if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_FDIV_BUG ||
         ins->source_asm_machine_form_variant != 0U ||
         ins->operand_count != 3U || ins->operands == NULL ||
