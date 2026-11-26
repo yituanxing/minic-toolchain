@@ -5645,6 +5645,9 @@ bool minic_x86_64_qualify_inline_asm(
     uint32_t nospec_width = 0U;
     size_t i, count;
     if (!invocation || !program || !source || !contract ||
+        !source->template_text ||
+        (source->output_count && !source->outputs) ||
+        (source->input_count && !source->inputs) ||
         source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
         source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
                               source->output_count)
