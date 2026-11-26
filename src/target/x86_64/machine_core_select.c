@@ -5909,9 +5909,7 @@ static bool x86_source_scalar_atomic_cc(X86CoreSelector *sel,
         x86_scalar_output_store(sel,roles[1].value,MINIC_X86_REG_R9,1U);
 }
 
-/* Linux queued spinlock: the source-qualified LOCK_PREFIX record names the
- * actual BTS instruction (not the following SETC).  The `I` bit operand is
- * an exact constant 8; the old memory bit becomes the carry flag output. */
+
 /* The other complete Linux LOCK_BITCC source form is the one-byte locked
  * AND in arch_clear_bit_unlock_is_negative_byte.  Its GNU `=@ccs` output
  * consumes the sign flag resulting from the *same* memory RMW; the SMP
@@ -5967,6 +5965,9 @@ static bool x86_source_linux_lock_bitcc_sign(X86CoreSelector *sel,
         x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_R9,1U);
 }
 
+/* Linux queued spinlock: the source-qualified LOCK_PREFIX record names the
+ * actual BTS instruction (not the following SETC).  The `I` bit operand is
+ * an exact constant 8; the old memory bit becomes the carry flag output. */
 static bool x86_source_linux_lock_bitcc(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -6304,9 +6305,7 @@ static bool x86_apic_core_constant(const X86CoreSelector *sel,
         constant->value.integer_value == expected;
 }
 
-/* Linux TASK_SIZE_MAX is a complete CPU-feature alternative, not a normal
- * MOV.  The dummy input, both user-address ceilings and the destination are
- * frozen in typed MachineIR before its ELF patch-site is serialized. */
+
 /* FPU signal-frame user access is one indivisible MachineIR source form:
  * STAC/CLAC alternative patches, the FPU memory access, and its type-15
  * exception record must all survive. The two memory operands have distinct
@@ -6508,6 +6507,9 @@ static bool x86_source_xsave_triple_alt(X86CoreSelector *sel,
             sel,roles[0].value,MINIC_X86_REG_R11,4U));
 }
 
+/* Linux TASK_SIZE_MAX is a complete CPU-feature alternative, not a normal
+ * MOV.  The dummy input, both user-address ceilings and the destination are
+ * frozen in typed MachineIR before its ELF patch-site is serialized. */
 static bool x86_source_task_size_alt(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const int64_t immediates[3] = {
@@ -6742,12 +6744,7 @@ static bool x86_source_kexec_load_segments(X86CoreSelector *sel,
             0U,&binding,1U,NULL,0U,false,false);
 }
 
-/* Linux 6.6 idle and PAT cacheline alternatives share a validated
- * fixed-register cache-address contract, but NOT the same patch records.
- * The idle form patches a NOP site into CLFLUSH on RAX; PAT replaces the
- * 3E-prefixed CLFLUSH on R10 by its 66-prefixed CLFLUSHOPT spelling.
- * The Source qualifier freezes each complete GNU section grammar, while
- * the physical machine verifier separately checks these exact bindings. */
+
 /* The five Linux idle instructions are fixed-register hardware interfaces,
  * despite being spelled as raw opcode bytes in kernel C for old assemblers.
  * MWAITX consumes RBX, which the SysV callee must preserve explicitly. */
@@ -6959,6 +6956,12 @@ static bool x86_source_crash_segment_snapshot(X86CoreSelector *sel,
         x86_scalar_output_store(sel,role->value,MINIC_X86_REG_RAX,bytes);
 }
 
+/* Linux 6.6 idle and PAT cacheline alternatives share a validated
+ * fixed-register cache-address contract, but NOT the same patch records.
+ * The idle form patches a NOP site into CLFLUSH on RAX; PAT replaces the
+ * 3E-prefixed CLFLUSH on R10 by its 66-prefixed CLFLUSHOPT spelling.
+ * The Source qualifier freezes each complete GNU section grammar, while
+ * the physical machine verifier separately checks these exact bindings. */
 static bool x86_source_cache_flush_alt(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -7512,9 +7515,7 @@ static bool x86_source_boot_segments(X86CoreSelector *sel,
         &binding,1U,NULL,0U,false,false);
 }
 
-/* All 12 Linux debug-register forms: six reads and six writes. DR7's fake
- * 32-bit `m` dependency is an ADDRESS in MachineIR and is NEVER dereferenced.
- * The source's nonvolatile vs volatile distinction remains exact. */
+
 /* The complete loadsegment() GNU source has one 16-bit selector input and
  * a target-owned three-word fault fixup. SourcePolicy seals each FS/GS/DS/
  * ES/SS variant; MachineIR records the exact physical segment operation
@@ -7661,6 +7662,9 @@ static bool x86_source_lkgs_extable(X86CoreSelector *sel,
             x86_reg(MINIC_X86_REG_RDI,16U),x86_addr(MINIC_X86_REG_R10,0));
 }
 
+/* All 12 Linux debug-register forms: six reads and six writes. DR7's fake
+ * 32-bit `m` dependency is an ADDRESS in MachineIR and is NEVER dereferenced.
+ * The source's nonvolatile vs volatile distinction remains exact. */
 static bool x86_source_debug_register(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -8139,16 +8143,9 @@ static bool x86_source_gs_tied_alu(X86CoreSelector *sel,
         x86_addr(MINIC_X86_REG_R11,0));
 }
 
-/* Original Linux ip_fast_csum has three GNU outputs, two tied inputs and a
- * hardware carry chain. Its output 1 is a pointer, outputs 0/2 are 32-bit
- * integers. Materialize the two initial values before emitting the single
- * sealed MachineIR source instruction, and store all three physical outputs
- * back through their Core-owned lvalue pointers afterwards. */
 
-/* The x86 checksum carry family is a fixed register/CF dataflow: splitting
- * ADD from ADC would let intervening Core traffic destroy CF.  Keep the
- * complete proven GNU form in one source-ASM MachineIR instruction; tied
- * inputs occupy the exact same RAX carrier as their output. */
+
+
 /* Linux PM_TRACE_RESUME records must be an actual ten-byte .tracedata ELF
  * record and an absolute pointer to that record, not a run-time string or
  * pseudo instruction. Its GNU `i` arguments arrive as a Core integer
@@ -8357,6 +8354,10 @@ static bool x86_source_ipv6_checksum(X86CoreSelector *sel,
             x86_addr(MINIC_X86_REG_R11,0));
 }
 
+/* The x86 checksum carry family is a fixed register/CF dataflow: splitting
+ * ADD from ADC would let intervening Core traffic destroy CF.  Keep the
+ * complete proven GNU form in one source-ASM MachineIR instruction; tied
+ * inputs occupy the exact same RAX carrier as their output. */
 static bool x86_source_checksum_carry(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -8498,6 +8499,11 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         x86_addr(MINIC_X86_REG_R11,0));
 }
 
+/* Original Linux ip_fast_csum has three GNU outputs, two tied inputs and a
+ * hardware carry chain. Its output 1 is a pointer, outputs 0/2 are 32-bit
+ * integers. Materialize the two initial values before emitting the single
+ * sealed MachineIR source instruction, and store all three physical outputs
+ * back through their Core-owned lvalue pointers afterwards. */
 static bool x86_source_ip_fast_csum(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -8641,8 +8647,7 @@ static bool x86_source_smp_xadd(X86CoreSelector *sel,
             x86_addr(MINIC_X86_REG_R11,0));
 }
 
-/* Linux _THIS_IP_ returns the instruction's current RIP, not an address
- * computed from a source-C constant or guessed symbol expression. */
+
 
 /* Non-SMP local and GS per-CPU atomics retain the original XADD value
  * exchange and CMPXCHG accumulator semantics.  The GS address is a physical
@@ -8760,11 +8765,7 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
             x86_addr(MINIC_X86_REG_R11,0));
 }
 
-/* Migrate the existing x86 Linux FXSAVE/VERW/TLB-cache Source contracts to
- * physical MachineIR.  Source qualification already froze each exact GNU
- * template, constraint and semantic variant. Re-check its immutable identity,
- * use typed Core pointer transport, and bind an actual memory/register operand.
- * Never emit an unqualified assembly string or borrow the retired FILE* path. */
+
 /* Exact Linux descriptor-table operations were Source-admitted prior to
  * MachineIR migration. Restore all four in one target-owned physical path,
  * retaining the ten-byte packed record ABI and read/write distinction. */
@@ -8914,6 +8915,11 @@ static bool x86_source_xstate_fault(X86CoreSelector *sel,
         x86_scalar_output_store(sel,roles[0].value,MINIC_X86_REG_RAX,4U);
 }
 
+/* Migrate the existing x86 Linux FXSAVE/VERW/TLB-cache Source contracts to
+ * physical MachineIR.  Source qualification already froze each exact GNU
+ * template, constraint and semantic variant. Re-check its immutable identity,
+ * use typed Core pointer transport, and bind an actual memory/register operand.
+ * Never emit an unqualified assembly string or borrow the retired FILE* path. */
 static bool x86_source_legacy_memory(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -9019,9 +9025,7 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
             verw ? 1U : 0U,false,false);
 }
 
-/* Restore the exact Linux LAR selector and identity-load GNU ABI. The
- * Source-qualified operands are selected as physical register/memory roles;
- * Core lvalue materialization is still a separate verified machine STORE. */
+
 /* The old Linux delay calibration MUL uses two tied physical registers:
  * 64-bit unsigned-long output %rdx (=d) / input 0 and 32-bit scratch %eax
  * (=&a) / input 1.  The ISA is MUL EDX, implicit EAX/EDX pair. Do not
@@ -9079,10 +9083,7 @@ static bool x86_source_delay_mul(X86CoreSelector *sel,
            x86_scalar_output_store(sel,roles[1].value,MINIC_X86_REG_RAX,4U);
 }
 
-/* Linux VDSO pvclock_scale_delta: MULQ computes RDX:RAX = RAX * r/m64,
- * then SHRD $32 shifts the low 64-bit result through the high half.
- * Preserve the GNU tied input 0, =a/=d fixed outputs, and use a distinct
- * physical scratch register for the GNU "rm" multiplier. */
+
 /* Linux's VMware backdoor and steal-clock ALTERNATIVE_2 share one register
  * transport: their full original Source grammars are already qualified,
  * while MachineIR owns the eight physical bindings and RBX preservation.
@@ -9249,6 +9250,10 @@ static bool x86_source_kvm_hypercall(X86CoreSelector *sel,
         x86_reg(MINIC_X86_REG_RBX,64U));
 }
 
+/* Linux VDSO pvclock_scale_delta: MULQ computes RDX:RAX = RAX * r/m64,
+ * then SHRD $32 shifts the low 64-bit result through the high half.
+ * Preserve the GNU tied input 0, =a/=d fixed outputs, and use a distinct
+ * physical scratch register for the GNU "rm" multiplier. */
 static bool x86_source_pvclock_scale(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static char constraints[4][4] = {"=a", "=d", "0", "rm"};
@@ -9515,12 +9520,7 @@ static bool x86_source_preempt_static_call(X86CoreSelector *sel,
         &physical, 1U, NULL, 0U, false, false);
 }
 
-/* Linux PVOP_VCALL0..4 is an externally callable patch site, not ordinary
- * scalar inline ASM. A genuine *memory-indirect* CALL must be paired with
- * the RETPOLINE-safe and parainstruction metadata. The 4 argument registers
- * are input-only and the corresponding 4 GNU outputs are separate writable
- * C lvalues; +r(current_stack_pointer) denotes the unmodified physical RSP.
- * Every relocation/constant/register is frozen in typed MachineIR. */
+
 /* Original Linux exception/IRQ stack calls: retain the old backend's
  * physical calling convention, including R11/RSP stack exchange, the
  * callee-saved R12/R13 values across irq_enter_rcu, and the objtool PC32
@@ -9811,6 +9811,12 @@ static bool x86_source_alt_reloc_selftest(X86CoreSelector *sel,
         &binding,1U,&clobber,1U,false,false);
 }
 
+/* Linux PVOP_VCALL0..4 is an externally callable patch site, not ordinary
+ * scalar inline ASM. A genuine *memory-indirect* CALL must be paired with
+ * the RETPOLINE-safe and parainstruction metadata. The 4 argument registers
+ * are input-only and the corresponding 4 GNU outputs are separate writable
+ * C lvalues; +r(current_stack_pointer) denotes the unmodified physical RSP.
+ * Every relocation/constant/register is frozen in typed MachineIR. */
 static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     static const unsigned int registers[4] = {
@@ -10277,8 +10283,10 @@ static bool x86_source_lowlevel_btcq(X86CoreSelector *sel,
 }
 
 
-/* Boot flag update: exact GNU +m/Ir BTSL with 32-bit bit index and
- * the real 32-bit memory RMW effect. No widening to BTSQ or fake flags. */
+
+/* Boot BTL tests a 32-bit memory word and returns its previous bit in CF.
+ * Unlike BTSL, BTL does not modify the memory operand. The selected SETC
+ * materializes the GNU condition-code output as a byte-sized C bool. */
 static bool x86_source_boot_test_bit(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -10366,6 +10374,8 @@ static bool x86_source_boot_eflags(X86CoreSelector *sel,
         x86_scalar_output_store(sel,roles[1].value,MINIC_X86_REG_R11,8U);
 }
 
+/* Boot flag update: exact GNU +m/Ir BTSL with 32-bit bit index and
+ * the real 32-bit memory RMW effect. No widening to BTSQ or fake flags. */
 static bool x86_source_boot_bit(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *src;
@@ -10409,6 +10419,9 @@ static bool x86_source_boot_bit(X86CoreSelector *sel,
         bindings,2U,NULL,0U,false,false);
 }
 
+/* Restore the exact Linux LAR selector and identity-load GNU ABI. The
+ * Source-qualified operands are selected as physical register/memory roles;
+ * Core lvalue materialization is still a separate verified machine STORE. */
 static bool x86_source_legacy_scalar(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -10497,6 +10510,8 @@ static bool x86_source_legacy_scalar(X86CoreSelector *sel,
         bindings,1U,&implicit,1U,false,false);
 }
 
+/* Linux _THIS_IP_ returns the instruction's current RIP, not an address
+ * computed from a source-C constant or guessed symbol expression. */
 static bool x86_source_ip_here(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
