@@ -322,17 +322,8 @@ static void core_runtime_if_merge_false_fallthrough(
               before->value.bits != after->value.bits))) {
             continue;
         }
-        context->local_integer_constants[i] = *before;
-        if (!then_terminated && after != NULL) {
-            context->local_integer_constants[i].specialization_modified =
-                before->specialization_modified ||
-                after->specialization_modified;
-            context->local_integer_constants[i].escaped =
-                before->escaped || after->escaped;
-            if (context->local_integer_constants[i].specialization_modified) {
-                context->local_integer_constants[i].specialization_known = false;
-            }
-        }
+        context->local_integer_constants[i] = then_terminated
+            ? *before : minic_core_local_fact_meet(before, after);
     }
 }
 MinicCoreLowerStatus

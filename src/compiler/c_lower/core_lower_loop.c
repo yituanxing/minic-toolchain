@@ -62,7 +62,7 @@ static bool core_loop_condition_is_constant_true(const MinicCoreLowerContext *co
     return !is_zero;
 }
 
-MinicCoreLowerStatus
+static MinicCoreLowerStatus
 minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
             const MinicStatement *statement,
             MinicStatementId continue_label_statement,
@@ -473,11 +473,11 @@ static unsigned char *core_collect_loop_modified_locals(
     return modified;
 }
 
-/* One owner for normal loop facts. Parser-created while/for label pairs use
- * minic_core_lower_loop_cfg directly because their fact snapshots are owned
- * by the normalized source path. */
+/* All source loop entrances share the same fact barrier; detached reentry
+ * never inherits speculative values from the unrelated lexical predecessor. */
 MinicCoreLowerStatus minic_core_lower_loop_statement(
     MinicCoreLowerContext *context, const MinicStatement *statement,
+    MinicStatementId continue_label_statement, bool detached_reentry,
     bool *terminated) {
     MinicCoreLowerStatus status;
     if (context == NULL || statement == NULL || terminated == NULL)
@@ -489,6 +489,16 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     unsigned char *loop_modified_locals = NULL;
     bool local_fact_single_pass;
 
+    if (detached_reentry) {
+        size_t index;
+        if (context->source_function == NULL) return MINIC_CORE_LOWER_ERROR;
+        for (index = 0U; index < context->source_function->local_count; ++index)
+            minic_core_local_fact_invalidate(context, context->source_function->local_begin + index);
+        minic_core_local_facts_clear_known(context);
+        status = minic_core_lower_loop_cfg(context, statement, continue_label_statement, terminated);
+        minic_core_local_facts_clear_known(context);
+        return status;
+    }
     loop_incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U &&
@@ -522,7 +532,7 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
             context, loop_incoming_facts, statement, loop_modified_locals);
     }
     status = minic_core_lower_loop_cfg(
-        context, statement, MINIC_STATEMENT_INVALID, terminated);
+        context, statement, continue_label_statement, terminated);
     if (!local_fact_single_pass) {
         minic_core_local_facts_clear_known(context);
         core_restore_loop_invariant_facts(

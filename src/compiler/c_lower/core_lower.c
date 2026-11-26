@@ -795,7 +795,6 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
          expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_OR)) {
         const MinicExpression *left_expression;
         MinicCoreLocalIntegerConstant *skipped_rhs_facts;
-        MinicCoreLocalIntegerConstant *evaluated_rhs_facts;
         MinicConstValue left_constant;
         bool is_and = expression->value.binary.operator_kind == MINIC_BINARY_LOGICAL_AND;
         bool left_is_zero;
@@ -846,20 +845,11 @@ MinicCoreLowerStatus minic_core_lower_internal_lower_condition_branch(MinicCoreL
             free(skipped_rhs_facts);
             return status;
         }
-        evaluated_rhs_facts = minic_core_local_facts_snapshot(context);
-        if (context->source_function != NULL &&
-            context->source_function->local_count != 0U &&
-            evaluated_rhs_facts == NULL) {
-            free(skipped_rhs_facts);
-            return MINIC_CORE_LOWER_ERROR;
-        }
         if (!minic_core_local_facts_meet(context, skipped_rhs_facts,
-                                          evaluated_rhs_facts)) {
-            free(evaluated_rhs_facts);
+                                         context->local_integer_constants)) {
             free(skipped_rhs_facts);
             return MINIC_CORE_LOWER_ERROR;
         }
-        free(evaluated_rhs_facts);
         free(skipped_rhs_facts);
         return MINIC_CORE_LOWER_OK;
     }
@@ -1230,10 +1220,9 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                             return MINIC_CORE_LOWER_ERROR;
                         }
                         context->block_id = detached_preheader;
-                        status = minic_core_lower_loop_cfg(
-                            context,
-                            unreachable_loop,
-                            source_block->statements[statement_index],
+                        status = minic_core_lower_loop_statement(
+                            context, unreachable_loop,
+                            source_block->statements[statement_index], true,
                             &statement_terminated);
                         if (status != MINIC_CORE_LOWER_OK) {
                             return status;
@@ -1256,8 +1245,8 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                     return MINIC_CORE_LOWER_ERROR;
                 }
                 context->block_id = detached_preheader;
-                status = minic_core_lower_loop_cfg(
-                    context, statement, MINIC_STATEMENT_INVALID, &statement_terminated);
+                status = minic_core_lower_loop_statement(
+                    context, statement, MINIC_STATEMENT_INVALID, true, &statement_terminated);
                 if (status != MINIC_CORE_LOWER_OK) {
                     return status;
                 }
@@ -1362,9 +1351,8 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 internal_loop_label = minic_core_loop_internal_while_label_pair(statement, loop);
             }
             if (internal_loop_label) {
-                status = minic_core_lower_loop_cfg(context,
-                                     loop,
-                                     source_block->statements[statement_index],
+                status = minic_core_lower_loop_statement(context, loop,
+                                     source_block->statements[statement_index], false,
                                      &statement_terminated);
                 if (status != MINIC_CORE_LOWER_OK) return status;
                 statement_index += 1U;
@@ -1495,7 +1483,8 @@ minic_core_lower_internal_lower_block(MinicCoreLowerContext *context, const Mini
                 status = minic_core_lower_if(context, statement, &statement_terminated);
                 break;
             case MINIC_STATEMENT_WHILE:
-                status = minic_core_lower_loop_statement(context, statement, &statement_terminated);
+                status = minic_core_lower_loop_statement(context, statement,
+                    MINIC_STATEMENT_INVALID, false, &statement_terminated);
                 break;
             case MINIC_STATEMENT_SWITCH:
                 minic_core_local_facts_clear_known(context);

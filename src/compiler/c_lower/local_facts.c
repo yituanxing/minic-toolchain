@@ -101,6 +101,46 @@ void minic_core_local_facts_restore(
                  count * sizeof(*snapshot));
 }
 
+MinicCoreLocalIntegerConstant minic_core_local_fact_meet(
+    const MinicCoreLocalIntegerConstant *lhs,
+    const MinicCoreLocalIntegerConstant *rhs) {
+    MinicCoreLocalIntegerConstant merged = *lhs;
+    bool same_value = lhs->known && rhs->known &&
+        !lhs->escaped && !rhs->escaped &&
+        minic_type_equal(lhs->value.type, rhs->value.type) &&
+        lhs->value.bits == rhs->value.bits;
+
+    merged.escaped = lhs->escaped || rhs->escaped;
+    merged.program_zero_checked =
+        lhs->program_zero_checked && rhs->program_zero_checked;
+    merged.program_zero_stable =
+        lhs->program_zero_stable && rhs->program_zero_stable;
+    merged.specialization_modified =
+        lhs->specialization_modified || rhs->specialization_modified;
+    merged.specialization_known =
+        lhs->specialization_known && rhs->specialization_known &&
+        minic_type_equal(lhs->specialization_value.type,
+                         rhs->specialization_value.type) &&
+        lhs->specialization_value.bits == rhs->specialization_value.bits;
+    merged.known = same_value && !merged.escaped;
+    merged.possible_one_bits_valid = !merged.escaped &&
+        (lhs->known || lhs->possible_one_bits_valid) &&
+        (rhs->known || rhs->possible_one_bits_valid);
+    merged.possible_one_bits = merged.possible_one_bits_valid
+        ? (lhs->known ? lhs->value.bits : lhs->possible_one_bits) |
+          (rhs->known ? rhs->value.bits : rhs->possible_one_bits)
+        : UINT64_MAX;
+    merged.nonnegative_range_valid = !merged.escaped &&
+        lhs->nonnegative_range_valid && rhs->nonnegative_range_valid;
+    if (merged.nonnegative_range_valid) {
+        merged.nonnegative_min = lhs->nonnegative_min < rhs->nonnegative_min
+            ? lhs->nonnegative_min : rhs->nonnegative_min;
+        merged.nonnegative_max = lhs->nonnegative_max > rhs->nonnegative_max
+            ? lhs->nonnegative_max : rhs->nonnegative_max;
+    }
+    return merged;
+}
+
 bool minic_core_local_facts_meet(
     MinicCoreLowerContext *context,
     const MinicCoreLocalIntegerConstant *left,
@@ -114,41 +154,7 @@ bool minic_core_local_facts_meet(
     for (index = 0U; index < context->source_function->local_count; ++index) {
         const MinicCoreLocalIntegerConstant *lhs = &left[index];
         const MinicCoreLocalIntegerConstant *rhs = &right[index];
-        MinicCoreLocalIntegerConstant merged = *lhs;
-        bool same_value = lhs->known && rhs->known &&
-            !lhs->escaped && !rhs->escaped &&
-            minic_type_equal(lhs->value.type, rhs->value.type) &&
-            lhs->value.bits == rhs->value.bits;
-
-        merged.escaped = lhs->escaped || rhs->escaped;
-        merged.program_zero_checked =
-            lhs->program_zero_checked && rhs->program_zero_checked;
-        merged.program_zero_stable =
-            lhs->program_zero_stable && rhs->program_zero_stable;
-        merged.specialization_modified =
-            lhs->specialization_modified || rhs->specialization_modified;
-        merged.specialization_known =
-            lhs->specialization_known && rhs->specialization_known &&
-            minic_type_equal(lhs->specialization_value.type,
-                             rhs->specialization_value.type) &&
-            lhs->specialization_value.bits == rhs->specialization_value.bits;
-        merged.known = same_value && !merged.escaped;
-        merged.possible_one_bits_valid = !merged.escaped &&
-            (lhs->known || lhs->possible_one_bits_valid) &&
-            (rhs->known || rhs->possible_one_bits_valid);
-        merged.possible_one_bits = merged.possible_one_bits_valid
-            ? (lhs->known ? lhs->value.bits : lhs->possible_one_bits) |
-              (rhs->known ? rhs->value.bits : rhs->possible_one_bits)
-            : UINT64_MAX;
-        merged.nonnegative_range_valid = !merged.escaped &&
-            lhs->nonnegative_range_valid && rhs->nonnegative_range_valid;
-        if (merged.nonnegative_range_valid) {
-            merged.nonnegative_min = lhs->nonnegative_min < rhs->nonnegative_min
-                ? lhs->nonnegative_min : rhs->nonnegative_min;
-            merged.nonnegative_max = lhs->nonnegative_max > rhs->nonnegative_max
-                ? lhs->nonnegative_max : rhs->nonnegative_max;
-        }
-        context->local_integer_constants[index] = merged;
+        context->local_integer_constants[index] = minic_core_local_fact_meet(lhs, rhs);
     }
     return true;
 }

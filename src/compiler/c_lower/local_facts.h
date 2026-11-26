@@ -23,6 +23,10 @@ void minic_core_local_facts_restore(
 /* Meet two reachable source-expression CFG paths. Preserve a known value
  * only when both paths agree; carry escape/specialization effects from either
  * path. The caller owns both snapshots and must check allocation success. */
+MinicCoreLocalIntegerConstant minic_core_local_fact_meet(
+    const MinicCoreLocalIntegerConstant *lhs,
+    const MinicCoreLocalIntegerConstant *rhs);
+
 bool minic_core_local_facts_meet(
     MinicCoreLowerContext *context,
     const MinicCoreLocalIntegerConstant *left,
