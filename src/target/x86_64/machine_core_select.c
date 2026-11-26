@@ -11382,8 +11382,9 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         [MINIC_X86_MACHINE_ASM_AMX_TILERELEASE] = x86_source_fpu_zero_asm,
         [MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT] = x86_source_fpu_zero_asm,
     };
+    const MinicCoreInlineAsm *source;
     MinicCoreInlineAsmId id;
-    unsigned int form;
+    unsigned int form, variant;
     if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
         id = ins->value.inline_asm_id;
     else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
@@ -11391,39 +11392,68 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
     else return false;
     if (sel->core->inline_asms == NULL ||
         id >= sel->core->inline_asm_count) return false;
-    form = sel->core->inline_asms[id].target_machine_form_id;
+    source = &sel->core->inline_asms[id];
+    form = source->target_machine_form_id;
+    variant = source->target_machine_form_variant;
+    /* Each admitted source form has one selector. Never use a failed
+     * emission as a predicate to try another selector: failure can occur
+     * after machine instructions or CFG successors have been appended. */
     switch (form) {
     case MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO:
         return x86_source_kernel_nofault_goto(sel, ins, instruction_id);
     case MINIC_X86_MACHINE_ASM_NONE:
-        return x86_source_jump_label(sel, ins, instruction_id) ||
-            x86_source_cpu_has_goto(sel, ins, instruction_id) ||
-            x86_source_zero_barrier(sel, ins);
+        if (source->is_goto) {
+            if (minic_x86_64_linux_jump_label_form(
+                    source->template_text, source->template_length))
+                return x86_source_jump_label(sel, ins, instruction_id);
+            if (minic_x86_64_linux_cpu_has_goto_form(
+                    source->template_text, source->template_length))
+                return x86_source_cpu_has_goto(sel, ins, instruction_id);
+            return false;
+        }
+        return x86_source_zero_barrier(sel, ins);
     case MINIC_X86_MACHINE_ASM_RAW_CMPXCHG:
         return x86_source_scalar_cmpxchg(sel, ins, false);
     case MINIC_X86_MACHINE_ASM_TRYCAS:
         return x86_source_scalar_cmpxchg(sel, ins, true);
     case MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR:
-        return x86_source_lowlevel_halt(sel, ins) ||
-            x86_source_lowlevel_descriptor(sel, ins) ||
-            x86_source_lowlevel_segment(sel, ins) ||
-            x86_source_movnti(sel, ins) ||
-            x86_source_lowlevel_btcq(sel, ins);
+        switch (variant) {
+        case 1U: return x86_source_lowlevel_halt(sel, ins);
+        case 2U: case 5U: return x86_source_lowlevel_descriptor(sel, ins);
+        case 3U: case 4U: return x86_source_lowlevel_segment(sel, ins);
+        case 6U: return x86_source_lowlevel_btcq(sel, ins);
+        case 7U: case 8U: return x86_source_movnti(sel, ins);
+        default: return false;
+        }
     case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
-        return x86_source_cpuid_matched(sel, ins) ||
-            x86_source_boot_bit(sel, ins) ||
-            x86_source_boot_test_bit(sel, ins) ||
-            x86_source_boot_eflags(sel, ins);
+        switch (variant) {
+        case 1U: return x86_source_boot_test_bit(sel, ins);
+        case 2U: return x86_source_boot_bit(sel, ins);
+        case 3U: return x86_source_cpuid_matched(sel, ins);
+        case 4U: return x86_source_boot_eflags(sel, ins);
+        default: return false;
+        }
     case MINIC_X86_MACHINE_ASM_BOOT_STRING:
-        return x86_source_boot_cmpsb(sel, ins) ||
-            x86_source_boot_divl(sel, ins) ||
-            x86_source_boot_movs(sel, ins);
-    case MINIC_X86_MACHINE_ASM_GS_ATOMIC:
-        return x86_source_gs_atomic_extended(sel, ins) ||
-            x86_source_smp_xadd(sel, ins);
+        switch (variant) {
+        case 1U: return x86_source_boot_cmpsb(sel, ins);
+        case 2U: return x86_source_boot_divl(sel, ins);
+        case 3U: return x86_source_boot_movs(sel, ins);
+        default: return false;
+        }
+    case MINIC_X86_MACHINE_ASM_GS_ATOMIC: {
+        const MinicX86GsAtomicPlan plan = minic_x86_64_gs_atomic_plan(
+            source->template_text, source->template_length);
+        if (plan.kind == MINIC_X86_GS_ATOMIC_XADD_SMP)
+            return x86_source_smp_xadd(sel, ins);
+        return x86_source_gs_atomic_extended(sel, ins);
+    }
     case MINIC_X86_MACHINE_ASM_LOCK_BITCC:
-        return x86_source_linux_lock_bitcc(sel, ins) ||
-            x86_source_linux_lock_bitcc_sign(sel, ins);
+        switch (minic_x86_64_linux_lock_bitcc_form(
+                source->template_text, source->template_length)) {
+        case 1U: return x86_source_linux_lock_bitcc(sel, ins);
+        case 2U: return x86_source_linux_lock_bitcc_sign(sel, ins);
+        default: return false;
+        }
     default:
         return form < sizeof(selectors) / sizeof(selectors[0]) &&
             selectors[form] != NULL && selectors[form](sel, ins);
