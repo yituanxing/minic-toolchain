@@ -20,3 +20,43 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+
+  temporary-minic-semantic-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 28
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download model and scan entire MiniC src with jscpd semantic embeddings
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "SEMANTIC_AUDIT_START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "RUNNER_MEMORY=$(free -m | grep Mem:)"
+          echo "RUNNER_NODE=$(node --version)"
+          echo "SOURCE_C_FILES=$(find src -type f -name '*.c' | wc -l)"
+          START_TIME=$SECONDS
+          npx --yes jscpd@5.4.3 --semantic-download > /tmp/minic-model-download.log 2>&1
+          DOWN_RC=$?
+          echo "MODEL_DOWNLOAD_EXIT=$DOWN_RC"
+          echo "MODEL_DOWNLOAD_SECONDS=$((SECONDS-START_TIME))"
+          tail -40 /tmp/minic-model-download.log
+          if [ "$DOWN_RC" -ne 0 ]; then
+            echo "SEMANTIC_AUDIT_FAILED_AT=model-download"
+            exit "$DOWN_RC"
+          fi
+          SCAN_START=$SECONDS
+          timeout --signal=TERM --kill-after=10s 1260s npx --yes jscpd@5.4.3 \
+            --semantic --semantic-scope same --kind semantic \
+            --format c --min-lines 15 \
+            --reporters ai --no-colors \
+            src > /tmp/minic-semantic.log 2>&1
+          SCAN_RC=$?
+          echo "SEMANTIC_SCAN_EXIT=$SCAN_RC"
+          echo "SEMANTIC_SCAN_SECONDS=$((SECONDS-SCAN_START))"
+          echo "SEMANTIC_LOG_LINES=$(wc -l < /tmp/minic-semantic.log)"
+          echo "=== SEMANTIC FINDINGS FIRST 250 LINES ==="
+          head -250 /tmp/minic-semantic.log
+          echo "=== SEMANTIC FINDINGS LAST 60 LINES ==="
+          tail -60 /tmp/minic-semantic.log
+          echo "=== SEMANTIC END ==="
+          exit "$SCAN_RC"
