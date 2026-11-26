@@ -63,7 +63,6 @@ static bool x86_linux_gs_testcc_source(const MinicTargetInvocation *invocation,
         !minic_type_unqualified(memory->type, &plain) ||
         !minic_type_is_integer(plain) ||
         !minic_type_is_integer(index->type)) return false;
-    contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -99,7 +98,6 @@ static bool x86_linux_testcc_source(const MinicTargetInvocation *invocation,
         !minic_type_unqualified(memory->type, &type) ||
         !minic_type_is_integer(type) ||
         !minic_type_is_integer(mask->type)) return false;
-    contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -247,7 +245,6 @@ static bool x86_linux_crash_register_source(const MinicTargetInvocation *invocat
         minic_type_is_const(out->type) ||
         !minic_type_unqualified(out->type, &plain) ||
         !minic_type_equal(plain, minic_type_unsigned_long())) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = memory_output ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -280,7 +277,6 @@ static bool x86_linux_pm_trace_source(const MinicTargetInvocation *invocation,
         !minic_type_is_integer(line->type) ||
         line->value.integer_value < 0 || line->value.integer_value > 65535 ||
         !minic_type_is_pointer(filename->type)) return false;
-    contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -323,7 +319,6 @@ static bool x86_linux_vmware_stealclock_alt_source(const MinicTargetInvocation *
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 8U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -359,9 +354,8 @@ static bool x86_linux_kvm_hypercall_alt_source(const MinicTargetInvocation *invo
                 ? minic_type_unsigned_int() : minic_type_unsigned_long()))
             return false;
     }
-    contract->operand_count = 1U + src->input_count;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    for (i = 1U; i < contract->operand_count; ++i)
+    for (i = 1U; i < (src->output_count + src->input_count); ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -414,7 +408,6 @@ static bool x86_linux_exception_stack_call_source(const MinicTargetInvocation *i
             !minic_type_equal(arg->type, minic_type_unsigned_long())))
             return false;
     }
-    contract->operand_count = 7U;
     /* These are genuine GNU +r input/output constraints. The machine
      * operation restores both registers, but Core must retain their
      * read/write ownership and the fixed-RSP identity. */
@@ -443,7 +436,6 @@ static bool x86_linux_alt_reloc_selftest_source(const MinicTargetInvocation *inv
         !target_constraint_is(&src->inputs[0], "m")) return false;
     value = minic_c0_program_expression(program, src->inputs[0].expression);
     if (!value || value->value_category != MINIC_VALUE_LVALUE) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -470,7 +462,6 @@ static bool x86_linux_real_mode_far_jump_source(const MinicTargetInvocation *inv
         !minic_type_equal(type, minic_type_unsigned_int()) ||
         !restart_type || !minic_type_unqualified(restart_type->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_int())) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
@@ -508,7 +499,6 @@ static bool x86_linux_mmio_write_source(const MinicTargetInvocation *invocation,
     if (!value || !memory || memory->value_category != MINIC_VALUE_LVALUE ||
         !minic_x86_64_linux_mmio_type_matches(value->type, width) ||
         !minic_x86_64_linux_mmio_type_matches(memory->type, width)) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
@@ -538,7 +528,6 @@ static bool x86_linux_mmio_read_source(const MinicTargetInvocation *invocation, 
         memory->value_category != MINIC_VALUE_LVALUE ||
         !minic_x86_64_linux_mmio_type_matches(output->type, width) ||
         !minic_x86_64_linux_mmio_type_matches(memory->type, width)) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
@@ -572,7 +561,6 @@ static bool x86_linux_pci_mmconfig_source(const MinicTargetInvocation *invocatio
         !minic_x86_64_linux_mmio_type_matches(value->type, width) ||
         (read && (value->value_category != MINIC_VALUE_LVALUE ||
                   minic_type_is_const(value->type)))) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = read ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -606,7 +594,6 @@ static bool x86_linux_rep_string_io_source(const MinicTargetInvocation *invocati
         !minic_type_is_pointer(address->type) ||
         !minic_type_equal(count->type, minic_type_unsigned_long()) ||
         !minic_type_equal(port->type, minic_type_unsigned_short())) return false;
-    contract->operand_count = 3U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -639,7 +626,6 @@ static bool x86_linux_i915_movntdqa_source(const MinicTargetInvocation *invocati
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 2U;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
     return true;
@@ -681,7 +667,6 @@ static bool x86_linux_raid6_simd_source(const MinicTargetInvocation *invocation,
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     }
-    contract->operand_count = count;
     contract->target_machine_form_variant = (uint32_t)count;
     contract->implicit_memory_effect = true;
     return true;
@@ -727,7 +712,6 @@ static bool x86_linux_kvm_movdqa_source(const MinicTargetInvocation *invocation,
         (!read && minic_type_is_const(expr->type)) ||
         !minic_type_unqualified(expr->type, &type) ||
         !minic_x86_64_kvm_movdqa_u32x4_type(type)) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = read
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT
         : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
@@ -778,8 +762,7 @@ static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
             !minic_data_layout_type(invocation, program, value->type,
                 &bytes, &alignment) || bytes != 8U) return false;
     }
-    contract->operand_count = outputs + inputs;
-    for (i = 0U; i < contract->operand_count; ++i)
+    for (i = 0U; i < (src->output_count + src->input_count); ++i)
         contract->kinds[i] = i < outputs
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -826,8 +809,7 @@ static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invoca
         for (i = 0U; i < src->register_clobber_count; ++i)
             if (!clobber_is(&src->register_clobbers[i], clobbers[i])) return false;
     }
-    contract->operand_count = src->input_count + src->output_count;
-    for (i = 0U; i < contract->operand_count; ++i)
+    for (i = 0U; i < (src->output_count + src->input_count); ++i)
         contract->kinds[i] = form == 4U && i == 0U
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -863,7 +845,6 @@ static bool x86_linux_atomic_xchg_source(const MinicTargetInvocation *invocation
         !minic_data_layout_type(invocation, program, reg_type,
             &object_bytes, &object_alignment) || object_bytes != width)
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->implicit_memory_effect = true;
@@ -894,7 +875,6 @@ static bool x86_linux_pvclock_scale_source(const MinicTargetInvocation *invocati
     for (i = 0U; i < 4U; ++i)
         if (!expressions[i] || !x86_linux_is_u64_type(expressions[i]->type) ||
             (i < 2U && expressions[i]->value_category != MINIC_VALUE_LVALUE)) return false;
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -952,13 +932,12 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
     if (stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
     if (!x86_source_register_is(program, stack, "rsp", false, false))
         return false;
-    contract->operand_count = 5U + src->input_count;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[5] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[6] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    for (i = 7U; i < contract->operand_count; ++i)
+    for (i = 7U; i < (src->output_count + src->input_count); ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -990,7 +969,6 @@ static bool x86_linux_task_control_source(const MinicTargetInvocation *invocatio
          (form != 1U || bytes != 1U)) ||
         (form == 2U && (expr->value_category != MINIC_VALUE_LVALUE ||
                         minic_type_is_const(expr->type)))) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = form == 1U
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
         : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -1019,7 +997,6 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
         stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
     if (!x86_source_register_is(program, stack, "rsp", false, false))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
@@ -1047,7 +1024,6 @@ static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocati
         stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
     if (!x86_source_register_is(program, stack, "rsp", false, false))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -1092,7 +1068,6 @@ static bool x86_linux_lidt_source(const MinicTargetInvocation *invocation,
         !minic_type_equal(record->fields[0].type, minic_type_unsigned_short()) ||
         !minic_type_equal(record->fields[1].type, minic_type_unsigned_long()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = output
                              ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
                              : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
@@ -1122,7 +1097,6 @@ static bool x86_linux_boot_segments_source(const MinicTargetInvocation *invocati
         (type.integer_rank != MINIC_INTEGER_RANK_INT &&
          type.integer_rank != MINIC_INTEGER_RANK_SHORT &&
          type.integer_rank != MINIC_INTEGER_RANK_LONG)) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = 1U;
@@ -1169,7 +1143,6 @@ static bool x86_linux_muldiv_u64_source(const MinicTargetInvocation *invocation,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     return true;
 }
 
@@ -1197,7 +1170,6 @@ static bool x86_linux_crash_segment_snapshot_source(const MinicTargetInvocation 
         !minic_type_unqualified(output->type, &type) ||
         !(minic_type_equal(type, minic_type_unsigned_short()) ||
           minic_type_equal(type, minic_type_unsigned_long()))) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->target_machine_form_variant = form;
     return true;
@@ -1244,7 +1216,6 @@ static bool x86_linux_via_xstore_source(const MinicTargetInvocation *invocation,
     if (!mem_base || mem_base->kind != MINIC_EXPRESSION_LOCAL ||
         mem_base->value.local_id != expressions[3]->value.local_id)
         return false;
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -1284,7 +1255,6 @@ static bool x86_linux_kaslr_mul_source(const MinicTargetInvocation *invocation,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     return true;
 }
 
@@ -1312,7 +1282,6 @@ static bool x86_linux_gen_endbr_source(const MinicTargetInvocation *invocation,
         minic_type_is_const(expression->type) ||
         !minic_type_unqualified(expression->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_int())) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     return true;
 }
@@ -1349,7 +1318,6 @@ static bool x86_linux_preempt_gs_dec_source(const MinicTargetInvocation *invocat
         !minic_type_unqualified(zero->type, &flag_type) ||
         !minic_type_equal(mem_type, minic_type_int()) ||
         !minic_type_equal(flag_type, minic_type_bool())) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->implicit_memory_effect = true;
@@ -1381,7 +1349,6 @@ static bool x86_linux_preempt_static_call_source(const MinicTargetInvocation *in
         !minic_type_equal(type, minic_type_unsigned_long())) return false;
     if (!x86_source_register_is(program, stack, "rsp", true, false))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     /* Like an ordinary externally visible call, the trampoline can modify
      * arbitrary memory even without a GNU `memory` compiler clobber. */
@@ -1491,7 +1458,6 @@ static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocat
         input = minic_c0_program_expression(program, src->inputs[3].expression);
         if (!input || !minic_type_is_integer(input->type)) return false;
     }
-    contract->operand_count = 2U + src->input_count;
     /* Both GNU +r outputs are fixed physical registers with true read/write
      * liveness, even though the stack exchange leaves their final values
      * unchanged. The source qualifier owns this contract. */
@@ -1499,7 +1465,7 @@ static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocat
         MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[1] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
-    for (i = 2U; i < contract->operand_count; ++i)
+    for (i = 2U; i < (src->output_count + src->input_count); ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
@@ -1548,7 +1514,6 @@ static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation 
     }
     value = minic_c0_program_expression(program, src->inputs[3].expression);
     if (!value || !minic_type_is_pointer(value->type)) return false;
-    contract->operand_count = 6U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     /* This is a GNU +r *output* bound to the real fixed RSP, despite no
      * addressable C lvalue to write back. Preserve its physical read/write
@@ -1600,7 +1565,6 @@ static bool x86_linux_control_register_source(const MinicTargetInvocation *invoc
              (!fake_memory || fake_memory->value_category != MINIC_VALUE_LVALUE ||
               !minic_type_unqualified(fake_memory->type, &plain) ||
               !minic_type_equal(plain, minic_type_unsigned_int())))) return false;
-        contract->operand_count = plain_read_cr ? 1U : 2U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         if (!plain_read_cr)
             contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
@@ -1612,7 +1576,6 @@ static bool x86_linux_control_register_source(const MinicTargetInvocation *invoc
             minic_type_is_const(value->type) ||
             !minic_type_unqualified(value->type, &plain) ||
             !minic_type_equal(plain, minic_type_unsigned_long())) return false;
-        contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     } else {
         if (!target_constraint_is(&source->inputs[0], "r")) return false;
@@ -1620,7 +1583,6 @@ static bool x86_linux_control_register_source(const MinicTargetInvocation *invoc
             program, source->inputs[0].expression);
         if (!value || !minic_type_unqualified(value->type, &plain) ||
             !minic_type_equal(plain, minic_type_unsigned_long())) return false;
-        contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
     contract->implicit_memory_effect = true;
@@ -1660,7 +1622,6 @@ static bool x86_linux_tlb_cache_source(const MinicTargetInvocation *invocation, 
             minic_type_is_const(expr->type)) return false;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     }
-    contract->operand_count = 1U;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
     return true;
@@ -1691,7 +1652,6 @@ static bool x86_linux_alternative_wrmsr_source(const MinicTargetInvocation *invo
             !minic_type_equal(plain, minic_type_unsigned_int())) return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -1727,7 +1687,6 @@ static bool x86_linux_ip_here_source(const MinicTargetInvocation *invocation,
          !minic_type_equal(plain, minic_type_unsigned_long_long()) &&
          !minic_type_equal(plain, minic_type_long_long())))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->target_machine_form_variant = 1U;
     return true;
@@ -1761,7 +1720,6 @@ static bool x86_linux_zero_barrier_source(
                source->clobber_count != (mem ? 1U : 0U)) {
         return false;
     }
-    contract->operand_count = 0U;
     contract->target_machine_form_variant = form;
     return true;
 }
@@ -1802,7 +1760,6 @@ static bool x86_counter_source(const MinicTargetInvocation *invocation, const Mi
            !minic_type_is_integer(ti)||ti.pointer_depth||
            ti.integer_rank!=MINIC_INTEGER_RANK_INT)return false;
     }
-    ct->operand_count=(f==2U||f==5U)?3U:2U;
     ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     if(f==2U||f==5U)
@@ -1836,7 +1793,6 @@ static bool x86_xsetbv_source(const MinicTargetInvocation *invocation, const Min
             type.integer_rank != MINIC_INTEGER_RANK_INT) return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 3U;
     return true;
 }
 
@@ -1869,7 +1825,6 @@ static bool x86_fxsave_source(const MinicTargetInvocation *invocation, const Min
             invocation,
             program, destination->type, &size, &alignment) ||
         size < 512U || alignment < 16U) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = form == 1U ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
@@ -1902,7 +1857,6 @@ static bool x86_x87_probe_source(const MinicTargetInvocation *invocation, const 
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     }
-    contract->operand_count = 2U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -1934,7 +1888,6 @@ static bool x86_hweight_source(const MinicTargetInvocation *invocation, const Mi
          to.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)||
         (ti.integer_rank!=MINIC_INTEGER_RANK_LONG&&
          ti.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)))return false;
-    ct->operand_count=2U;
     ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
@@ -1974,7 +1927,6 @@ static bool x86_linux_vmware_hypercall_source(const MinicTargetInvocation *invoc
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 8U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -2009,7 +1961,6 @@ static bool x86_linux_legacy_fnsave_source(const MinicTargetInvocation *invocati
         !minic_data_layout_type(
             invocation, program, image->type,
             &size, &alignment) || size < 108U) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     return true;
 }
@@ -2034,7 +1985,6 @@ static bool x86_linux_kexec_load_segments_source(const MinicTargetInvocation *in
         !minic_type_is_integer(type) || minic_type_is_bool_integer(type) ||
         !minic_data_layout_type(invocation, program, type,
             &bytes, &alignment) || bytes != 4U) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -2063,7 +2013,6 @@ static bool x86_linux_efi_kernel_transfer_source(const MinicTargetInvocation *in
         !minic_type_unqualified(entry->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_long()) ||
         !minic_type_is_pointer(boot->type)) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
@@ -2105,8 +2054,7 @@ static bool x86_linux_msr_source(const MinicTargetInvocation *invocation, const 
                (output && (v->value_category!=MINIC_VALUE_LVALUE ||
                            minic_type_is_const(v->type))))return false;
         }
-        contract->operand_count=outputs+inputs;
-        for(i=0U;i<contract->operand_count;++i)
+        for(i=0U;i<(src->output_count + src->input_count);++i)
             contract->kinds[i]=i<outputs?
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2142,8 +2090,7 @@ static bool x86_linux_msr_source(const MinicTargetInvocation *invocation, const 
               type.integer_rank!=MINIC_INTEGER_RANK_INT))
             return false;
     }
-    contract->operand_count=src->output_count+src->input_count;
-    for(i=0U;i<contract->operand_count;++i)
+    for(i=0U;i<(src->output_count + src->input_count);++i)
         contract->kinds[i]=i<src->output_count?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2179,7 +2126,6 @@ static bool x86_ip_fast_csum_source(const MinicTargetInvocation *invocation, con
              (!minic_type_is_integer(type) ||
               type.integer_rank!=MINIC_INTEGER_RANK_INT)))return false;
     }
-    ct->operand_count=5U;
     for(i=0U;i<5U;++i)
         ct->kinds[i]=i<3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                     MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2212,7 +2158,6 @@ static bool x86_checksum_source(const MinicTargetInvocation *invocation, const M
                      minic_type_is_const(e->type))))
             return false;
     }
-    ct->operand_count=3U;
     ct->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     ct->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     ct->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2267,7 +2212,6 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
                      (op==0U&&minic_type_is_const(e->type)))))
             return false;
     }
-    contract->operand_count=1U+src->input_count;
     contract->kinds[0]=op==0U?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
@@ -2331,7 +2275,6 @@ static bool x86_gs_tied_alu_source(const MinicTargetInvocation *invocation,
           : seed_type.integer_rank != MINIC_INTEGER_RANK_LONG &&
             seed_type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
         return false;
-    contract->operand_count=3U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2377,7 +2320,6 @@ static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
            !minic_type_equal(mem->type,memory_input->type)||
            zero->kind!=MINIC_EXPRESSION_INTEGER||
            zero->value.integer_value!=0)return false;
-        contract->operand_count=5U;
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
         contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2395,7 +2337,6 @@ static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
         if(!e||e->kind!=MINIC_EXPRESSION_INTEGER||
            e->value.integer_value!=(i==2U?1:0))return false;
     }
-    contract->operand_count=3U;
     for(i=0U;i<3U;++i)
         contract->kinds[i]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     return true;
@@ -2419,7 +2360,6 @@ static bool x86_prefetchw_alt_source(const MinicTargetInvocation *invocation,
        imm->value.integer_value!=0||
        !memory||memory->value_category!=MINIC_VALUE_LVALUE)
         return false;
-    contract->operand_count=2U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->target_machine_form_variant=1U;
@@ -2453,7 +2393,6 @@ static bool x86_linux_tcpudp_nofold_source(const MinicTargetInvocation *invocati
             (i == 0U && (expr->value_category != MINIC_VALUE_LVALUE ||
                          minic_type_is_const(expr->type)))) return false;
     }
-    c->operand_count = 5U;
     c->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     for (i = 1U; i < 5U; ++i)
         c->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2485,7 +2424,6 @@ static bool x86_add32_carry_source(const MinicTargetInvocation *invocation, cons
                      minic_type_is_const(expr->type))))
             return false;
     }
-    c->operand_count=3U;
     c->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     c->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     c->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2569,7 +2507,6 @@ static bool x86_linux_raw_cmpxchg_source(const MinicTargetInvocation *invocation
                  : (unsigned int)type.integer_rank != rank))))
             return false;
     }
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2610,7 +2547,6 @@ static bool x86_port_io_source(const MinicTargetInvocation *invocation, const Mi
        !(d->width==1U?minic_type_equal(dt,minic_type_unsigned_char()):
          d->width==2U?minic_type_equal(dt,minic_type_unsigned_short()):
                       minic_type_equal(dt,minic_type_unsigned_int())))return false;
-    contract->operand_count=2U;
     contract->kinds[0]=d->is_input?
        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT:
        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -2673,7 +2609,6 @@ static bool x86_trycas_source(const MinicTargetInvocation *invocation,
                     t[i].integer_rank != MINIC_INTEGER_RANK_LONG_LONG)
                  : (unsigned int)t[i].integer_rank!=rank)))
             return false;
-    contract->operand_count=4U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2754,7 +2689,6 @@ static bool x86_linux_atomic_rmw_source(const MinicTargetInvocation *invocation,
               dependency_type.integer_rank!=MINIC_INTEGER_RANK_LONG_LONG)
            : dependency_type.integer_rank!=MINIC_INTEGER_RANK_INT)))
         return false;
-    contract->operand_count=1U+(unary?0U:1U)+(legacy?1U:0U);
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     if(!unary)contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     if(legacy)contract->kinds[unary?1U:2U]=
@@ -2816,7 +2750,6 @@ static bool x86_linux_smp_local_xadd_source(
         !x86_linux_xadd_integer_width(reg_type, width) ||
         !x86_linux_xadd_integer_width(mem_type, width))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     return true;
@@ -2855,7 +2788,6 @@ static bool x86_linux_percpu_xadd_source(
                                   &memory_bytes, &memory_alignment) &&
            memory_bytes == width)))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->implicit_memory_effect = true;
@@ -2903,7 +2835,6 @@ static bool x86_linux_gs_cmpxchg_source(
             !(width == 8U && unqualified.integer_rank == MINIC_INTEGER_RANK_LONG_LONG))
             return false;
     }
-    contract->operand_count = 3U;
     contract->kinds[0] = loop
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
         : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2982,7 +2913,6 @@ static bool x86_linux_rep_stos_source(const MinicTargetInvocation *invocation,
         !minic_type_is_integer(output_count->type) ||
         !minic_type_is_integer(output_dest->type))
         return false;
-    contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -3006,7 +2936,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
         return false;
     if (form == 1U) {
         if (source->output_count || source->input_count) return false;
-        contract->operand_count = 0U;
         contract->implicit_memory_effect = source->has_memory_clobber;
         contract->target_machine_form_variant = form;
         return true;
@@ -3019,7 +2948,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
         operand = minic_c0_program_expression(
             program, source->inputs[0].expression);
         if (!operand || !minic_type_is_integer(operand->type)) return false;
-        contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
         contract->target_machine_form_variant = form;
@@ -3036,7 +2964,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
             !minic_type_unqualified(operand->type, &plain) ||
             plain.integer_rank != MINIC_INTEGER_RANK_SHORT ||
             !minic_type_is_integer(plain)) return false;
-        contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
         contract->implicit_memory_effect = true;
         contract->target_machine_form_variant = form;
@@ -3055,7 +2982,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
         operand = minic_c0_program_expression(
             program, source->inputs[1].expression);
         if (!operand || !minic_type_is_integer(operand->type)) return false;
-        contract->operand_count = 2U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
@@ -3075,7 +3001,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
         operand = minic_c0_program_expression(
             program, source->inputs[1].expression);
         if (!operand || !minic_type_is_integer(operand->type)) return false;
-        contract->operand_count = 2U;
         /* GNU input-only "m" is an input location, even though the
          * selected BTC hardware operation mutates memory. Keep the GNU
          * binding role separate from the target Machine write effect. */
@@ -3103,7 +3028,6 @@ static bool x86_linux_lowlevel_scalar_source(const MinicTargetInvocation *invoca
         operand = minic_c0_program_expression(
             program, source->inputs[0].expression);
         if (!operand || !minic_type_is_integer(operand->type)) return false;
-        contract->operand_count = 2U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->implicit_memory_effect = true;
@@ -3135,7 +3059,6 @@ static bool x86_linux_delay_wait_source(const MinicTargetInvocation *invocation,
         if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
             !minic_type_equal(expr->type, minic_type_unsigned_long()))
             return false;
-        contract->operand_count = 1U;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
         contract->target_machine_form_variant = form;
         return true;
@@ -3149,7 +3072,6 @@ static bool x86_linux_delay_wait_source(const MinicTargetInvocation *invocation,
                                        minic_type_unsigned_int())) return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 3U;
     contract->target_machine_form_variant = form;
     return true;
 }
@@ -3172,7 +3094,6 @@ static bool x86_linux_identity_load_source(const MinicTargetInvocation *invocati
     expr = minic_c0_program_expression(program, source->inputs[0].expression);
     if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_equal(expr->type, minic_type_unsigned_long())) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = 1U;
@@ -3209,7 +3130,6 @@ static bool x86_linux_ipv6_checksum_source(const MinicTargetInvocation *invocati
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = 1U;
     return true;
@@ -3239,7 +3159,6 @@ static bool x86_linux_csum_partial_source(const MinicTargetInvocation *invocatio
         !minic_type_is_integer(type) ||
         (type.integer_rank != MINIC_INTEGER_RANK_LONG &&
          type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG)) return false;
-    contract->operand_count = count;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     for (i = 1U; i < count; ++i) {
         const MinicInlineAsmOperand *operand = &source->inputs[i - 1U];
@@ -3326,7 +3245,6 @@ static bool x86_linux_delay_mul_source(const MinicTargetInvocation *invocation,
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     contract->target_machine_form_variant = 1U;
     return true;
 }
@@ -3365,7 +3283,6 @@ static bool x86_linux_boot_flags_source(const MinicTargetInvocation *invocation,
             if (!flag || flag->value_category != MINIC_VALUE_LVALUE ||
                 !minic_type_equal(flag->type, minic_type_bool())) return false;
         }
-        contract->operand_count = form == 1U ? 3U : 2U;
         contract->kinds[0] = form == 1U
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
@@ -3408,7 +3325,6 @@ static bool x86_linux_boot_flags_source(const MinicTargetInvocation *invocation,
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = count;
     contract->implicit_memory_effect = form == 4U;
     contract->target_machine_form_variant = form;
     return true;
@@ -3442,7 +3358,6 @@ static bool x86_linux_lock_bitcc_source(const MinicTargetInvocation *invocation,
         !minic_type_is_integer(mem->type) ||
         !minic_type_equal(flag->type, minic_type_bool()) ||
         !minic_type_is_integer(input->type)) return false;
-    contract->operand_count = 3U;
     contract->kinds[0] = form == 1U
         ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE
         : MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -3510,7 +3425,6 @@ static bool x86_linux_boot_string_source(const MinicTargetInvocation *invocation
             output ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                      MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = outputs + inputs;
     contract->implicit_memory_effect = form != 2U;
     contract->target_machine_form_variant = form;
     return true;
@@ -3564,7 +3478,6 @@ static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocatio
         !minic_data_layout_type(invocation, program, arg1->type,
             &bytes, &alignment) || (bytes != 4U && bytes != 8U)))
         return false;
-    contract->operand_count = clock_form ? 5U : 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     if (clock_form)
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
@@ -3609,7 +3522,6 @@ static bool x86_linux_vdso_cpunode_source(const MinicTargetInvocation *invocatio
         !minic_data_layout_type(invocation, program, selector->type,
             &bytes, &alignment) ||
         (bytes != 2U && bytes != 4U && bytes != 8U)) return false;
-    contract->operand_count=3U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[2]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -3664,7 +3576,6 @@ static bool x86_linux_atomic_cc_source(const MinicTargetInvocation *invocation,
                (minic_type_equal(mt, minic_type_long()) ||
                 minic_type_equal(mt, minic_type_long_long()))))) return false;
     }
-    contract->operand_count = d->has_value ? 3U : 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     if (d->has_value)
@@ -3737,7 +3648,6 @@ static bool x86_linux_bitops_source(const MinicTargetInvocation *invocation,
           !minic_type_unqualified(f->type,&flag_type)||
           !minic_type_equal(flag_type,minic_type_bool()))))
         return false;
-    contract->operand_count=src->output_count+src->input_count;
     if(desc->memory_output) {
         contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
         if(desc->has_flag) {
@@ -3841,7 +3751,6 @@ static bool x86_zstd_cpuid_source(const MinicTargetInvocation *invocation,
             contract->kinds[output_counts[form]+i] =
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         }
-        contract->operand_count = output_counts[form] + input_counts[form];
         return true;
     }
     return false;
@@ -3981,7 +3890,6 @@ static bool qualified(const MinicC0Program *program,
     } else return false;
     count = src->output_count + src->input_count;
     if (count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT) return false;
-    contract->operand_count = count;
     for (i = 0U; i < count; ++i)
         contract->kinds[i] = i < src->output_count
             ? (bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE ?
@@ -4027,7 +3935,6 @@ static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocatio
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = count;
     contract->target_machine_form_variant = form;
     return true;
 }
@@ -4064,7 +3971,6 @@ static bool x86_linux_segment_read_source(const MinicTargetInvocation *invocatio
           (short_selector && minic_type_equal(
               plain, minic_type_unsigned_int()))))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
@@ -4092,7 +3998,6 @@ static bool x86_linux_segment_load_extable_source(const MinicTargetInvocation *i
     if (!value || !minic_type_unqualified(value->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_short()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
@@ -4121,7 +4026,6 @@ static bool x86_linux_lkgs_extable_source(const MinicTargetInvocation *invocatio
         !minic_type_unqualified(selector->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_short()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = 1U;
@@ -4154,7 +4058,6 @@ static bool x86_linux_fsgsbase_source(const MinicTargetInvocation *invocation,
         !minic_type_unqualified(value->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_long()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = reading ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4209,7 +4112,6 @@ static bool x86_linux_kernel_nofault_goto_source(const MinicTargetInvocation *in
           (bytes == 8U && type.integer_rank != MINIC_INTEGER_RANK_LONG &&
                           type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = load ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4255,7 +4157,6 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
     expr = minic_c0_program_expression(
         program, source->inputs[0].expression);
     if (!expr || !minic_type_is_integer(expr->type)) return false;
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
@@ -4317,7 +4218,6 @@ static bool x86_linux_fpu_user_frame_source(const MinicTargetInvocation *invocat
         !minic_type_equal(output->type, input->type) ||
         !minic_type_is_integer(zero->type))
         return false;
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4363,7 +4263,6 @@ static bool x86_linux_mxcsr_source(const MinicTargetInvocation *invocation,
         (!reading_memory && minic_type_is_const(expression->type)) ||
         !minic_type_unqualified(expression->type, &plain) ||
         !minic_type_equal(plain, minic_type_unsigned_int())) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = reading_memory ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
@@ -4400,7 +4299,6 @@ static bool x86_linux_unwind_context_source(const MinicTargetInvocation *invocat
             !minic_type_equal(plain, minic_type_unsigned_long())) return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     }
-    contract->operand_count = 3U;
     return true;
 }
 
@@ -4430,7 +4328,6 @@ static bool x86_linux_task_size_alt_source(const MinicTargetInvocation *invocati
         input = minic_c0_program_expression(program, source->inputs[i].expression);
         if (!input || !minic_type_is_integer(input->type)) return false;
     }
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     for (i = 1U; i < 4U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4453,7 +4350,6 @@ static bool x86_linux_x87_fild_prepare_source(const MinicTargetInvocation *invoc
     input = minic_c0_program_expression(program, source->inputs[0].expression);
     if (!input || input->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(input->type)) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
     return true;
@@ -4492,7 +4388,6 @@ static bool x86_linux_fpu_kernel_restore_source(const MinicTargetInvocation *inv
         out_base->kind != MINIC_EXPRESSION_LOCAL ||
         in_base->kind != MINIC_EXPRESSION_LOCAL ||
         out_base->value.local_id != in_base->value.local_id) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
@@ -4536,7 +4431,6 @@ static bool x86_linux_fxrstor_safe_source(const MinicTargetInvocation *invocatio
         !minic_type_equal(memory->type, input->type) ||
         !minic_type_is_integer(zero->type))
         return false;
-    contract->operand_count = 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4590,7 +4484,6 @@ static bool x86_linux_xstate_memory_source(
         !minic_type_is_integer(low->type) ||
         !minic_type_is_integer(high->type))
         return false;
-    contract->operand_count = 4U + offset;
     if (has_output)
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[offset] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4652,7 +4545,6 @@ static bool x86_linux_jump_label_source(
     if (!key || !flags || !minic_type_is_pointer(key->type) ||
         !minic_type_is_integer(flags->type))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
@@ -4706,7 +4598,6 @@ static bool x86_linux_pkru_source(const MinicTargetInvocation *invocation,
             return false;
         contract->kinds[index] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = source->output_count + source->input_count;
     contract->target_machine_form_variant = form;
     return true;
 }
@@ -4748,7 +4639,6 @@ static bool x86_linux_fdiv_bug_source(const MinicTargetInvocation *invocation,
             return false;
         contract->kinds[i + 1U] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     }
-    contract->operand_count = 3U;
     contract->implicit_memory_effect = true;
     return true;
 }
@@ -4780,7 +4670,6 @@ static bool x86_linux_load_unaligned_zeropad_source(const MinicTargetInvocation 
         memory->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_equal(memory->type, minic_type_unsigned_long()))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
@@ -4815,7 +4704,6 @@ static bool x86_linux_lar_selector_source(const MinicTargetInvocation *invocatio
         !minic_type_unqualified(selector->type, &plain) ||
         !minic_type_equal(plain, minic_type_unsigned_short()))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->target_machine_form_variant = 1U;
@@ -4851,7 +4739,6 @@ static bool x86_linux_random_seed_source(const MinicTargetInvocation *invocation
         !minic_type_unqualified(output->type, &plain) ||
         !minic_type_equal(plain, minic_type_unsigned_long()))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->target_machine_form_variant = form;
@@ -4894,7 +4781,6 @@ static bool x86_linux_smap_alternative_source(const MinicTargetInvocation *invoc
                         minic_type_is_const(expression->type))) ||
         !minic_type_equal(expression->type, minic_type_unsigned_long()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = form == 3U ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -4972,7 +4858,6 @@ static bool x86_linux_rep_movsb_alternative_source(const MinicTargetInvocation *
     if (expression->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
     if (!x86_source_register_is(program, expression, "rsp", false, false))
         return false;
-    contract->operand_count = 4U;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] =
             i == 3U ? MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE :
@@ -5006,7 +4891,6 @@ static bool x86_linux_segment_register_extable_source(const MinicTargetInvocatio
         !minic_type_unqualified(selector->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_short()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
@@ -5067,7 +4951,6 @@ static bool x86_linux_cmpxchg128_source(const MinicTargetInvocation *invocation,
                  parts[i]->type.integer_rank != MINIC_INTEGER_RANK_LONG_LONG))
                 return false;
     }
-    contract->operand_count = alt ? 5U : 6U;
     if (!alt)
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[at] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
@@ -5133,7 +5016,6 @@ static bool x86_linux_put_user_call_source(const MinicTargetInvocation *invocati
      * does not use the ordinary System V argument register allocator. */
     if (!x86_source_register_is(program, value, "rax", true, true))
         return false;
-    contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -5194,7 +5076,6 @@ static bool x86_linux_get_user_call_source(const MinicTargetInvocation *invocati
         return false;
     if (!x86_source_register_is(program, value, "rdx", true, true))
         return false;
-    contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
@@ -5231,7 +5112,6 @@ static bool x86_linux_pat_clflushopt_source(const MinicTargetInvocation *invocat
         plain.integer_rank != MINIC_INTEGER_RANK_CHAR ||
         plain.pointer_depth != 0U ||
         !zero || !minic_type_is_integer(zero->type)) return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
@@ -5284,7 +5164,6 @@ static bool x86_linux_bug_table_c_source(
             return false;
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = 4U;
     contract->target_machine_form_variant = variant;
     contract->capture_typed_immediate_inputs = true;
     return true;
@@ -5338,7 +5217,6 @@ static bool x86_linux_futex_extable_source(const MinicTargetInvocation *invocati
                     MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT) :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     }
-    contract->operand_count = output_count + 2U;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = form;
     return true;
@@ -5368,7 +5246,6 @@ static bool x86_linux_idle_clflush_alt_source(const MinicTargetInvocation *invoc
         zero->value.integer_value != 0 ||
         !address || !minic_type_is_pointer(address->type))
         return false;
-    contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
@@ -5397,7 +5274,6 @@ static bool x86_linux_verw_clear_source(const MinicTargetInvocation *invocation,
         !minic_type_unqualified(selector->type, &plain) ||
         !minic_type_equal(plain, minic_type_unsigned_short()))
         return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     contract->implicit_memory_effect = true;
     contract->target_machine_form_variant = 1U;
@@ -5444,7 +5320,6 @@ static bool x86_linux_debug_register_source(const MinicTargetInvocation *invocat
             !minic_type_equal(plain, minic_type_unsigned_int()))
             return false;
     }
-    contract->operand_count = dr7 ? 2U : 1U;
     contract->kinds[0] = read ?
         MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
         MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
@@ -5482,7 +5357,6 @@ static bool x86_linux_zstd_padding_source(
     form = minic_x86_64_linux_zstd_padding_form(
         source->template_text, source->template_length);
     if (form == 0U) return false;
-    contract->operand_count = 0U;
     contract->target_machine_form_variant = form;
     return true;
 }
@@ -5507,7 +5381,6 @@ static bool x86_linux_privileged_zero_source(
         source->clobber_count != (source->has_memory_clobber ? 1U : 0U) ||
         ((form == 5U || form == 6U) && !source->has_memory_clobber))
         return false;
-    contract->operand_count = 0U;
     contract->target_machine_form_variant = form;
     contract->implicit_memory_effect = form == 5U || form == 6U;
     return true;
@@ -5527,7 +5400,6 @@ static bool x86_linux_amx_tilerelease_source(
         source->has_memory_clobber || source->register_clobber_count != 0U ||
         !minic_x86_64_linux_amx_tilerelease_form(
             source->template_text,source->template_length)) return false;
-    contract->operand_count = 0U;
     contract->target_machine_form_variant = 1U;
     return true;
 }
@@ -5546,7 +5418,6 @@ static bool x86_linux_x87_fwait_fault_source(
         source->has_memory_clobber || source->register_clobber_count != 0U ||
         !minic_x86_64_linux_x87_fwait_fault_form(
             source->template_text,source->template_length)) return false;
-    contract->operand_count = 0U;
     contract->target_machine_form_variant = 1U;
     return true;
 }
@@ -5574,7 +5445,6 @@ static bool x86_nop_const_i_source(const MinicTargetInvocation *invocation,
     if (expression == NULL ||
         expression->kind != MINIC_EXPRESSION_INTEGER ||
         !minic_type_is_integer(expression->type)) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->capture_typed_immediate_inputs = true;
     contract->target_machine_form_variant = 1U;
@@ -5604,7 +5474,6 @@ static bool x86_linux_unreachable_annotation_source(
     if (!expression || expression->kind != MINIC_EXPRESSION_INTEGER ||
         !minic_type_is_integer(expression->type) ||
         expression->value.integer_value != (long long)label) return false;
-    contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->capture_typed_immediate_inputs = true;
     contract->target_machine_form_variant = 1U;
@@ -5753,8 +5622,13 @@ bool minic_x86_64_qualify_inline_asm(
     const MinicTargetInvocation *invocation, const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
     uint32_t nospec_width = 0U;
-    size_t i;
-    if (!invocation || !contract) return false;
+    size_t i, count;
+    if (!invocation || !program || !source || !contract ||
+        source->output_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT ||
+        source->input_count > MINIC_CORE_STRUCTURED_INLINE_ASM_OPERAND_LIMIT -
+                              source->output_count)
+        return false;
+    count = source->output_count + source->input_count;
     for (i = 0U;
          i < sizeof(minic_x86_source_qualifiers) /
                  sizeof(minic_x86_source_qualifiers[0]);
@@ -5764,6 +5638,7 @@ bool minic_x86_64_qualify_inline_asm(
          * those partial facts to leak into the next form's contract. */
         (void)memset(contract, 0, sizeof(*contract));
         if (minic_x86_source_qualifiers[i].qualify(invocation, program, source, contract)) {
+            contract->operand_count = count;
             contract->target_machine_form_id =
                 (uint32_t)minic_x86_source_qualifiers[i].machine_form;
             return true;
@@ -5773,11 +5648,13 @@ bool minic_x86_64_qualify_inline_asm(
     if (x86_nospec_source(program, source, &nospec_width)) {
         contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_NOSPEC;
         contract->target_machine_form_variant = nospec_width;
-        contract->operand_count = 3U;
+        contract->operand_count = count;
         contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
         contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
         return true;
     }
-    return qualified(program, source, contract);
+    if (!qualified(program, source, contract)) return false;
+    contract->operand_count = count;
+    return true;
 }
