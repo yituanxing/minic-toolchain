@@ -14,6 +14,17 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build complete production toolchain (C11, -Werror)
         run: make -j4 MODE=release CFLAGS=-Werror all
+      - name: One-off Cppcheck dead-code scan (x86-64 only)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cppcheck
+          cppcheck --version
+          timeout 240s cppcheck --quiet --enable=unusedFunction --max-configs=1 \
+            --language=c --std=c11 -Iinclude -Isrc src/target/x86_64 \
+            2>&1 | tee /tmp/minic-deadcode-scan.txt
+          echo "---- Cppcheck unused-function candidates ----"
+          grep 'unusedFunction' /tmp/minic-deadcode-scan.txt || true
+          echo "---- End dead-code scan ----"
       - name: Run maintained 202-case GNU/MiniC native oracle matrix
         run: make MODE=release CFLAGS=-Werror check-native
       - name: Verify generated invalid-language rejections
