@@ -1912,6 +1912,9 @@ static bool x86_call_record_result(X86CoreSelector *sel,
             sel->core->objects[object].core_type_id)) return false;
     if (minic_x86_64_core_memory_result_record(sel->core->type_context,
             return_type, &bytes)) return bytes == type->size;
+    /* An empty GNU record has NO_CLASS: no GP result and no object bytes. */
+    if (type->size == 0U && type->value.record.field_count == 0U)
+        return true;
     if (!x86_object_address(sel, object, MINIC_X86_REG_R10))
         return false;
     if (minic_x86_64_core_one_gp_record(sel->core->type_context,
@@ -11733,8 +11736,16 @@ static bool x86_core_terminator(X86CoreSelector *sel, size_t core_id) {
                 sel->core->objects == NULL ||
                 !minic_x86_64_core_record_abi_compatible(
                     sel->core->type_context, id,
-                    sel->core->objects[object].core_type_id) ||
-                !x86_object_address(sel, object, MINIC_X86_REG_R11))
+                    sel->core->objects[object].core_type_id))
+                return false;
+            /* SysV NO_CLASS empty returns have no physical value. In
+             * particular do not demand storage for a zero-size object. */
+            if (type->has_layout && type->size == 0U &&
+                type->value.record.field_count == 0U)
+                return !sel->frame->has_sret &&
+                    minic_x86_64_machine_select_epilogue(
+                        &sel->builder, &sel->frame_view);
+            if (!x86_object_address(sel, object, MINIC_X86_REG_R11))
                 return false;
             if (minic_x86_64_core_one_gp_record(sel->core->type_context,
                     id, &bytes)) {
