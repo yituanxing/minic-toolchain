@@ -14,6 +14,35 @@ static bool lp64_call_core_integer_128(const MinicCoreType *type) {
            !type->value.integer.is_bool && type->size == 16U;
 }
 
+static void lp64_place_gp_word(MinicLP64ArgumentLocation *loc,
+    const MinicDirectLP64AbiPolicy *abi, size_t *gp, size_t *stack) {
+    if (*gp < abi->gp_argument_registers) {
+        loc->gp_first = *gp;
+        loc->gp_registers = 1U;
+    } else {
+        loc->stack_first = (*stack)++;
+        loc->stack_slots = 1U;
+    }
+    ++*gp;
+}
+
+static void lp64_place_split_wide(MinicLP64ArgumentLocation *loc,
+    const MinicDirectLP64AbiPolicy *abi, size_t *gp, size_t *stack) {
+    const size_t available = *gp < abi->gp_argument_registers
+        ? abi->gp_argument_registers - *gp : 0U;
+    const size_t used = available < 2U ? available : 2U;
+    if (used != 0U) {
+        loc->gp_first = *gp;
+        loc->gp_registers = used;
+    } else *stack += *stack & 1U;
+    if (used < 2U) {
+        loc->stack_first = *stack;
+        loc->stack_slots = 2U - used;
+        *stack += 2U - used;
+    }
+    *gp += used;
+}
+
 static bool minic_lp64_plan_types(
     const MinicCoreTypeContext *core_types, const MinicCoreTypeId *core_ids,
     size_t count, size_t fixed, bool variadic,
@@ -69,14 +98,7 @@ static bool minic_lp64_plan_types(
         if (record) {
             if (by_reference) {
                 loc->kind = MINIC_LP64_ARGUMENT_INDIRECT_RECORD;
-                if (gp < abi->gp_argument_registers) {
-                    loc->gp_first = gp;
-                    loc->gp_registers = 1U;
-                } else {
-                    loc->stack_first = stack++;
-                    loc->stack_slots = 1U;
-                }
-                ++gp;
+                lp64_place_gp_word(loc, abi, &gp, &stack);
             } else {
                 size_t available = gp < abi->gp_argument_registers
                     ? abi->gp_argument_registers - gp : 0U;
@@ -142,19 +164,7 @@ static bool minic_lp64_plan_types(
                  * even GAR pair or spills the entire value to the stack. */
                 if (abi->variadic_align_wide_gp_pair && variadic && j >= fixed &&
                     gp < abi->gp_argument_registers && (gp & 1U)) ++gp;
-                const size_t available = gp < abi->gp_argument_registers
-                    ? abi->gp_argument_registers - gp : 0U;
-                const size_t used = available < 2U ? available : 2U;
-                if (used != 0U) {
-                    loc->gp_first = gp;
-                    loc->gp_registers = used;
-                } else stack += stack & 1U;
-                if (used < 2U) {
-                    loc->stack_first = stack;
-                    loc->stack_slots = 2U - used;
-                    stack += 2U - used;
-                }
-                gp += used;
+                lp64_place_split_wide(loc, abi, &gp, &stack);
             }
         } else if (minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY128)) {
             loc->kind = MINIC_LP64_ARGUMENT_WIDE;
@@ -170,22 +180,9 @@ static bool minic_lp64_plan_types(
                 }
                 ++fp;
             } else {
-                size_t available, used;
                 if (variadic && j >= fixed &&
                     gp < abi->gp_argument_registers && (gp & 1U)) ++gp;
-                available = gp < abi->gp_argument_registers
-                    ? abi->gp_argument_registers - gp : 0U;
-                used = available < 2U ? available : 2U;
-                if (used != 0U) {
-                    loc->gp_first = gp;
-                    loc->gp_registers = used;
-                } else stack += stack & 1U;
-                if (used < 2U) {
-                    loc->stack_first = stack;
-                    loc->stack_slots = 2U - used;
-                    stack += 2U - used;
-                }
-                gp += used;
+                lp64_place_split_wide(loc, abi, &gp, &stack);
             }
         } else if (minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY64) ||
                    minic_lp64_core_float_format(core, MINIC_CORE_FLOAT_BINARY32)) {
@@ -203,25 +200,11 @@ static bool minic_lp64_plan_types(
                 ++fp;
             } else {
                 loc->kind = MINIC_LP64_ARGUMENT_GP;
-                if (gp < abi->gp_argument_registers) {
-                    loc->gp_first = gp;
-                    loc->gp_registers = 1U;
-                } else {
-                    loc->stack_first = stack++;
-                    loc->stack_slots = 1U;
-                }
-                ++gp;
+                lp64_place_gp_word(loc, abi, &gp, &stack);
             }
         } else {
             loc->kind = MINIC_LP64_ARGUMENT_GP;
-            if (gp < abi->gp_argument_registers) {
-                loc->gp_first = gp;
-                loc->gp_registers = 1U;
-            } else {
-                loc->stack_first = stack++;
-                loc->stack_slots = 1U;
-            }
-            ++gp;
+            lp64_place_gp_word(loc, abi, &gp, &stack);
         }
     }
     /* Every call is already capped at 64 arguments, each at most two slots. */

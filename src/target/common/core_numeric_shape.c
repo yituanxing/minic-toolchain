@@ -52,35 +52,38 @@ bool minic_core_integer_overflow_shape(
            (*width == 4U || *width == 8U);
 }
 
+static bool core_numeric_overflow_widths(
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    MinicCoreIntegerOverflowNarrowShape *shape) {
+    MinicCoreTypeId result_id;
+    if (!core_numeric_overflow_result(fn, ins, &result_id)) return false;
+    return minic_lp64_function_integer_width(fn, result_id,
+               &shape->result_width, &shape->result_signed) &&
+           minic_lp64_function_integer_width(fn,
+               fn->values[ins->value.integer_overflow.left].core_type_id,
+               &shape->left_width, &shape->left_signed) &&
+           minic_lp64_function_integer_width(fn,
+               fn->values[ins->value.integer_overflow.right].core_type_id,
+               &shape->right_width, &shape->right_signed);
+}
+
 bool minic_core_integer_overflow_mixed_add_i32_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *signed_left) {
-    MinicCoreValueId left, right;
-    MinicCoreTypeId result_id;
-    size_t left_width, right_width, result_width;
-    bool left_sign, right_sign, result_sign;
-    if (fn == NULL || ins == NULL ||
-        signed_left == NULL ||
+    MinicCoreIntegerOverflowNarrowShape shape;
+    if (fn == NULL || ins == NULL || signed_left == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        !core_numeric_overflow_widths(fn, ins, &shape) ||
+        shape.result_width != 4U || !shape.result_signed)
         return false;
-    left = ins->value.integer_overflow.left;
-    right = ins->value.integer_overflow.right;
-    if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !minic_lp64_function_integer_width(fn, result_id, &result_width, &result_sign) ||
-        !minic_lp64_function_integer_width(fn, fn->values[left].core_type_id,
-                              &left_width, &left_sign) ||
-        !minic_lp64_function_integer_width(fn, fn->values[right].core_type_id,
-                              &right_width, &right_sign) ||
-        result_width != 4U || !result_sign)
-        return false;
-    if (left_width == 4U && left_sign &&
-        right_width == 8U && !right_sign) {
+    if (shape.left_width == 4U && shape.left_signed &&
+        shape.right_width == 8U && !shape.right_signed) {
         *signed_left = true;
         return true;
     }
-    if (left_width == 8U && !left_sign &&
-        right_width == 4U && right_sign) {
+    if (shape.left_width == 8U && !shape.left_signed &&
+        shape.right_width == 4U && shape.right_signed) {
         *signed_left = false;
         return true;
     }
@@ -129,30 +132,18 @@ bool minic_core_integer_overflow_i32_u32_to_i32_shape(
 bool minic_core_integer_overflow_u64_u32_to_i32_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *wide_left) {
-    MinicCoreValueId left, right;
-    MinicCoreTypeId result_id;
-    size_t left_width, right_width, result_width;
-    bool left_sign, right_sign, result_sign;
-    if (!fn || !ins || !wide_left ||
+    MinicCoreIntegerOverflowNarrowShape shape;
+    if (fn == NULL || ins == NULL || wide_left == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-        ins->value.integer_overflow.operator_kind !=
-            MINIC_CORE_INTEGER_OVERFLOW_ADD)
+        ins->value.integer_overflow.operator_kind != MINIC_CORE_INTEGER_OVERFLOW_ADD ||
+        !core_numeric_overflow_widths(fn, ins, &shape) ||
+        shape.result_width != 4U || !shape.result_signed || shape.left_signed || shape.right_signed)
         return false;
-    left = ins->value.integer_overflow.left;
-    right = ins->value.integer_overflow.right;
-    if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !minic_lp64_function_integer_width(fn, result_id, &result_width, &result_sign) ||
-        !minic_lp64_function_integer_width(fn, fn->values[left].core_type_id,
-                              &left_width, &left_sign) ||
-        !minic_lp64_function_integer_width(fn, fn->values[right].core_type_id,
-                              &right_width, &right_sign) ||
-        result_width != 4U || !result_sign || left_sign || right_sign)
-        return false;
-    if (left_width == 8U && right_width == 4U) {
+    if (shape.left_width == 8U && shape.right_width == 4U) {
         *wide_left = true;
         return true;
     }
-    if (left_width == 4U && right_width == 8U) {
+    if (shape.left_width == 4U && shape.right_width == 8U) {
         *wide_left = false;
         return true;
     }
@@ -189,22 +180,8 @@ bool minic_core_integer_overflow_mixed_multiply_i32_shape(
 bool minic_core_integer_overflow_narrow_result_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     MinicCoreIntegerOverflowNarrowShape *shape) {
-    MinicCoreValueId lhs, rhs;
-    MinicCoreTypeId result_id;
-    if (!fn || !ins || !shape ||
-        ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW)
-        return false;
-    lhs = ins->value.integer_overflow.left;
-    rhs = ins->value.integer_overflow.right;
-    /* The shared Core overflow contract already excludes source-only
-     * ineligible destinations, including enum representation aliases. */
-    if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !minic_lp64_function_integer_width(fn, result_id, &shape->result_width,
-                              &shape->result_signed) ||
-        !minic_lp64_function_integer_width(fn, fn->values[lhs].core_type_id,
-                              &shape->left_width, &shape->left_signed) ||
-        !minic_lp64_function_integer_width(fn, fn->values[rhs].core_type_id,
-                              &shape->right_width, &shape->right_signed))
+    if (fn == NULL || ins == NULL || shape == NULL ||
+        !core_numeric_overflow_widths(fn, ins, shape))
         return false;
     return (shape->result_width == 1U || shape->result_width == 2U) &&
            shape->left_width >= 1U && shape->left_width <= 4U &&
