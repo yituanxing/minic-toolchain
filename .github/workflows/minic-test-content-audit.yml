@@ -30,7 +30,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          make -j4 MODE=release BUILD_DIR=build/gc-audit CFLAGS="-Werror -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" build/gc-audit/bin/minic build/gc-audit/bin/minic-cc > /tmp/minic-gc-stdout.log 2> /tmp/minic-gc-stderr.log
+          make -j4 MODE=debug BUILD_DIR=build/gc-noinline CFLAGS="-Werror -fno-inline -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" build/gc-noinline/bin/minic build/gc-noinline/bin/minic-cc > /tmp/minic-gc-stdout.log 2> /tmp/minic-gc-stderr.log
           rc=$?
           echo "GC_BUILD_EXIT=$rc"
           if [ "$rc" -ne 0 ]; then tail -140 /tmp/minic-gc-stderr.log; exit "$rc"; fi
