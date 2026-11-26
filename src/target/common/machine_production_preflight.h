@@ -53,18 +53,5 @@ static inline bool minic_machine_production_preflight_prepare(
         minic_machine_gnu_asm_prepare_body(selected, policy, prepared);
 }
 
-/* Standalone checks keep their previous one-shot contract; production
- * callers retain the prepared plan through the body emission so they never
- * reverify the same physical instructions or rebuild labels in the writer. */
-static inline bool minic_machine_production_preflight(
-    const MinicMachineProductionSource *source,
-    const MinicMachineFunction *selected,
-    const MinicMachineGNUAsmPolicy *policy) {
-    MinicMachineGNUAsmPrepared *prepared = NULL;
-    bool ok = minic_machine_production_preflight_prepare(
-        source, selected, policy, &prepared);
-    minic_machine_gnu_asm_prepared_destroy(prepared);
-    return ok;
-}
 
 #endif
