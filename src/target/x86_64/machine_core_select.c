@@ -8162,12 +8162,16 @@ static bool x86_pm_trace_global_symbol(const MinicCoreFunction *core,
     size_t depth;
     if (core == NULL || symbol == NULL || core->values == NULL ||
         core->instructions == NULL || core->globals == NULL) return false;
-    for (depth = 0U; depth < 6U; ++depth) {
+    /* A legal no-offset cast chain can be longer than an arbitrary fixed
+     * number of steps. Bound traversal by the finite SSA instruction graph,
+     * so malformed cyclic definitions still fail deterministically. */
+    for (depth = 0U; depth < core->instruction_count; ++depth) {
         const MinicCoreInstruction *def;
         if (value >= core->value_count ||
             core->values[value].definition >= core->instruction_count)
             return false;
         def = &core->instructions[core->values[value].definition];
+        if (def->result != value) return false;
         if (def->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
             if (def->value.global_id >= core->global_count ||
                 !minic_core_inline_asm_symbol_valid(
@@ -8182,14 +8186,16 @@ static bool x86_pm_trace_global_symbol(const MinicCoreFunction *core,
         if (def->kind == MINIC_CORE_INSTRUCTION_POINTER_OFFSET) {
             const MinicCoreValueId index = def->value.pointer_offset.index;
             const MinicCoreInstruction *constant;
-            if (def->value.pointer_offset.subtract ||
-                def->value.pointer_offset.element_size != 1U ||
-                index >= core->value_count ||
+            /* +/- 0 preserves the global's address at every element size.
+             * Do not reject a valid zero-offset pointer expression merely
+             * because its array element type is wider than one byte. */
+            if (index >= core->value_count ||
                 core->values[index].definition >= core->instruction_count)
                 return false;
             constant = &core->instructions[core->values[index].definition];
             if (constant->kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT ||
-                constant->value.integer_value != 0U) return false;
+                constant->result != index ||
+                constant->value.integer_value != 0) return false;
             value = def->value.pointer_offset.base;
             continue;
         }
@@ -9050,7 +9056,13 @@ static bool x86_source_delay_mul(X86CoreSelector *sel,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].has_fixed_register_binding ||
-            (output ? (i == 0U && !x86_asm_u64_lvalue(sel,roles[i].value)) :
+            roles[i].physical_read_write ||
+            roles[i].physical_early_clobber != (i == 1U) ||
+            roles[i].has_tied_output != (i >= 2U) ||
+            (i >= 2U && roles[i].tied_output_index != 3U - i) ||
+            (output ? (i == 0U ?
+                !x86_asm_u64_lvalue(sel,roles[i].value) :
+                !x86_asm_gp_lvalue_width(sel,roles[i].value,4U)) :
                 !x86_asm_u64_input(sel,roles[i].value))) return false;
         binding[i] = x86_reg(i == 0U || i == 3U ?
             MINIC_X86_REG_RDX : MINIC_X86_REG_RAX,
