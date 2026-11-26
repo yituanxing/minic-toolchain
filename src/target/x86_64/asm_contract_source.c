@@ -133,7 +133,7 @@ static bool x86_atomic_rmw_has_memory_role(const MinicInlineAsm *source) {
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
         "outb ", "outw ", "outl ", "inb ", "inw ", "inl ",
-        "lidt", "lgdt", "sgdt", "sidt"};
+        "lidt", "lgdt"};
     size_t i;
     /* GCC's x86 I is an ISA-specific 0..31 shift count, whereas lowercase
      * i is a generic compile-time constant. A valid I value is not license
@@ -175,6 +175,12 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
              src->template_length) != 0U ||
          minic_x86_64_linux_cmpxchg128_form(src->template_text,
              src->template_length) != 0U))
+        return true;
+    /* SGDT/SIDT have a GNU output but no input, so the input-only
+     * prefix gate cannot reserve them from generic source fallback. */
+    if (src && src->template_text &&
+        minic_x86_64_linux_descriptor_table_form(
+            src->template_text, src->template_length) >= 3U)
         return true;
     if (src && src->template_text &&
         (minic_x86_64_linux_crash_segment_snapshot_form(
