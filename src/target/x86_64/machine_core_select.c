@@ -5511,6 +5511,63 @@ static bool x86_source_kvm_movdqa(X86CoreSelector *sel,
         &memory, 1U, &xmm, 1U, false, false);
 }
 
+/* RAID6 is a finite target-qualified hardware grammar, not a generic
+ * inline-assembler escape. All GNU memory operands have physical GP bases;
+ * every vector register visible to this x86 backend is conservatively
+ * clobbered because the source uses fixed XMM/YMM/ZMM register spellings. */
+static bool x86_source_raid6_simd(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    static const unsigned int memory_regs[8] = {
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDI
+    };
+    const MinicCoreInlineAsm *source;
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    MinicMachineOperand bindings[8];
+    MinicMachineRegisterEffect vector[16];
+    size_t count, i;
+    if (!x86_scalar_source_base(sel, ins, MINIC_X86_MACHINE_ASM_RAID6_SIMD,
+            &source, &roles))
+        return false;
+    count = ins->value.structured_inline_asm.operand_count;
+    if (count > 8U || source->target_machine_form_variant != count ||
+        !source->has_memory_clobber || !source->implicit_memory_effect ||
+        !minic_x86_64_raid6_simd_template(source->template_text,
+            source->template_length, count))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const bool output = roles[i].kind ==
+            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT;
+        MinicCoreTypeId pointee;
+        const MinicCoreType *type;
+        if (!x86_scalar_role(&roles[i], output ?
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
+                MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT) ||
+            roles[i].physical_read_write || roles[i].has_tied_output ||
+            roles[i].value >= sel->core->value_count ||
+            !minic_lp64_core_pointer_pointee(sel->core->type_context,
+                sel->core->values[roles[i].value].core_type_id, &pointee) ||
+            (type = x86_type(sel, pointee)) == NULL ||
+            !type->has_layout ||
+            !x86_core_load(sel, roles[i].value, memory_regs[i]))
+            return false;
+        bindings[i] = x86_addr(memory_regs[i], 0);
+        bindings[i].asm_constraint = output ? "=m" : "m";
+    }
+    for (i = 0U; i < 16U; ++i) {
+        vector[i].reg = (MinicMachineRegister){
+            (unsigned int)i, 128U, MINIC_MACHINE_REGISTER_VECTOR};
+        vector[i].access = MINIC_MACHINE_REGISTER_CLOBBER;
+    }
+    return minic_machine_builder_emit_core_source_asm(&sel->builder,
+        source, MINIC_MACHINE_EFFECT_MEMORY_READ |
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+        count ? bindings : NULL, count,
+        vector, 16U, false, false);
+}
+
 static bool x86_source_scalar_bitops(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
@@ -10647,6 +10704,7 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         [MINIC_X86_MACHINE_ASM_TESTCC] = x86_source_testcc,
         [MINIC_X86_MACHINE_ASM_GS_TESTCC] = x86_source_gs_testcc,
         [MINIC_X86_MACHINE_ASM_KVM_MOVDQA] = x86_source_kvm_movdqa,
+        [MINIC_X86_MACHINE_ASM_RAID6_SIMD] = x86_source_raid6_simd,
         [MINIC_X86_MACHINE_ASM_PREFETCHW_ALT] = x86_source_prefetchw_alt,
         [MINIC_X86_MACHINE_ASM_APIC_AMD_ALT] = x86_source_apic_amd_alt,
         [MINIC_X86_MACHINE_ASM_GS_TIED_ALU] = x86_source_gs_tied_alu,
