@@ -64,6 +64,24 @@ static bool a64_wide_memory(A64CoreSelection *, const MinicCoreInstruction *);
 static bool a64_load_core(A64CoreSelection *, MinicCoreValueId,
     unsigned int, unsigned int);
 
+/* Common admission invariants for fixed, target-qualified volatile forms.
+ * Memory effects and operand roles remain the responsibility of each form. */
+static bool a64_qualified_volatile_asm(const MinicCoreInlineAsm *source) {
+    return source->operand_plan_owner == MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED &&
+           source->is_volatile && !source->is_goto &&
+           source->register_clobber_count == 0U &&
+           source->resolved_immediate_count == 0U &&
+           source->symbol_reference_count == 0U &&
+           source->deferred_immediate_symbol == NULL;
+}
+
+static bool a64_void_asm_shape(const MinicCoreFunction *fn,
+    const MinicCoreInstruction *ins, size_t count) {
+    return ins->result == MINIC_CORE_VALUE_INVALID &&
+           minic_core_function_type_is_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) &&
+           ins->value.structured_inline_asm.operand_count == count;
+}
+
 static bool a64_neon_builtin_memory_shape(const MinicCoreFunction *fn,
     MinicCoreTypeId pointer_id, MinicCoreTypeId vector_id,
     size_t element_bytes, size_t element_count) {
@@ -356,10 +374,7 @@ static bool a64_sha3_eor3_source(A64CoreSelection *sel,
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
         source->has_memory_clobber || !source->is_volatile || source->is_goto ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 4U ||
+        !a64_void_asm_shape(fn, ins, 4U) ||
         sel->ctx->machine_frame->has_dynamic_stack ||
         ops[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
         ops[0].value >= fn->value_count)
@@ -1639,10 +1654,7 @@ static bool a64_linux_pstate_alternative_zero(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        ins->value.structured_inline_asm.operand_count != 0U ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID)) return false;
+        !a64_void_asm_shape(fn, ins, 0U)) return false;
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, NULL, 0U, NULL, 0U, false, false);
 }
@@ -1666,10 +1678,7 @@ static bool a64_linux_barrier_alternative_zero(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        ins->value.structured_inline_asm.operand_count != 0U ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID)) return false;
+        !a64_void_asm_shape(fn, ins, 0U)) return false;
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
         source, 0U, NULL, 0U, NULL, 0U, false, false);
 }
@@ -1883,10 +1892,7 @@ static bool a64_linux_acquire_release(A64CoreSelection *sel,
             source->template_length) :
             aarch64_stlr_width(source->template_text,
                 source->template_length)) != width ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        !a64_void_asm_shape(fn, ins, 2U) ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber ||
         source->register_clobber_count != 0U ||
@@ -1961,10 +1967,7 @@ static bool a64_mask_core_contract(const MinicCoreFunction *fn,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 3U)
+        !a64_void_asm_shape(fn, ins, 3U))
         return false;
     ops = ins->value.structured_inline_asm.operands;
     for (i = 0U; i < 3U; ++i)
@@ -2183,17 +2186,9 @@ static bool a64_linux_kvm_va_mask_source(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         !aarch64_linux_kvm_va_mask_form(
             source->template_text, source->template_length) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         source->has_memory_clobber || source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         op == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
@@ -2232,17 +2227,9 @@ static bool a64_linux_xpaclri_source(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         !aarch64_linux_xpaclri_form(source->template_text,
             source->template_length) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         source->has_memory_clobber || source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         op == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE ||
@@ -2284,17 +2271,9 @@ static bool a64_linux_qcom_return_stack_source(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         !aarch64_linux_qcom_return_stack_form(
             source->template_text, source->template_length) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         source->has_memory_clobber || source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         op == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
@@ -2328,17 +2307,9 @@ static bool a64_linux_kvm_at_fixup_source(A64CoreSelection *sel,
         source->target_machine_form_variant != 0U ||
         !aarch64_linux_kvm_at_fixup_template(
             source->template_text, source->template_length) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber || !source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 5U ||
+        !a64_void_asm_shape(fn, ins, 5U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
         return false;
     for (i = 0U; i < 5U; ++i) {
@@ -2411,10 +2382,7 @@ static bool a64_linux_brk_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         op == NULL || op->operand_index != 0U ||
         op->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
         op->early_clobber || op->physical_early_clobber ||
@@ -2490,13 +2458,8 @@ static bool a64_linux_old_atomic_source(A64CoreSelection *sel,
     unsigned int mode, declared_variant;
     bool explicit_memory;
     if (!(fetch || percpu || old_rmw || ret || xchg) ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber || !source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_core_function_type_is_kind(fn, ins->core_type_id,
             MINIC_CORE_TYPE_VOID) ||
@@ -2792,13 +2755,8 @@ static bool a64_linux_futex_source(A64CoreSelection *sel,
     size_t i;
     if (source->target_machine_form_id != AARCH64_MACHINE_ASM_FUTEX ||
         mode == 0U || source->target_machine_form_variant != mode ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber || !source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_core_function_type_is_kind(fn,ins->core_type_id,
             MINIC_CORE_TYPE_VOID) ||
@@ -2886,10 +2844,7 @@ static bool a64_linux_uaccess_bic_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 3U ||
+        !a64_void_asm_shape(fn, ins, 3U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_pointer(fn, ops[0].value, true) ||
         !aarch64_asm_core_pointer(fn, ops[1].value, false) ||
@@ -2962,10 +2917,7 @@ static bool a64_linux_percpu_alternative_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         !a64_ordered_core_symbol_roots(fn, source) ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != count ||
+        !a64_void_asm_shape(fn, ins, count) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         (read && (!aarch64_asm_core_integer(fn,
                        ops[0].value, true, 8U, -1) ||
@@ -3043,10 +2995,7 @@ static bool a64_linux_raw_io_source(A64CoreSelection *sel,
             AARCH64_MACHINE_ASM_RAW_IO_STORE) ||
         source->target_machine_form_variant != width ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        !a64_void_asm_shape(fn, ins, 2U) ||
         !source->is_volatile || source->is_goto ||
         source->explicit_memory_clobber ||
         source->has_memory_clobber != !is_read ||
@@ -3123,10 +3072,7 @@ static bool a64_linux_extra_source(A64CoreSelection *sel,
          * arbitrary template relocation is still denied by source sealing. */
         !a64_ordered_core_symbol_roots(fn, source) ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != count ||
+        !a64_void_asm_shape(fn, ins, count) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn,ops[0].value,true,8U,-1) ||
         (cmpwait &&
@@ -3215,10 +3161,7 @@ static bool a64_linux_uaccess_source(A64CoreSelection *sel,
         source->target_machine_form_variant !=
             (((unsigned int)form.is_load << 16) |
              ((unsigned int)form.width << 8) | form.exception_type) ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 3U ||
+        !a64_void_asm_shape(fn, ins, 3U) ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber || !source->implicit_memory_effect ||
         source->register_clobber_count != 0U ||
@@ -3305,19 +3248,11 @@ static bool a64_linux_kexec_crash_source(A64CoreSelection *sel,
     static const unsigned int regs[] = {9U, 10U, 0U};
     if (source->target_machine_form_id != AARCH64_MACHINE_ASM_KEXEC_CRASH ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
         !aarch64_linux_kexec_crash_template(source->template_text,
             source->template_length) ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 3U ||
+        !a64_void_asm_shape(fn, ins, 3U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
         return false;
     record = aarch64_asm_core_type(fn, ops[2].value, true);
@@ -3402,10 +3337,7 @@ static bool a64_linux_rng_sysreg_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        !a64_void_asm_shape(fn, ins, 2U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn, ops[0].value, true, 8U, 0) ||
         !aarch64_asm_core_bool(fn, ops[1].value, true)) return false;
@@ -3445,18 +3377,10 @@ static bool a64_linux_user_cache_fault_source(A64CoreSelection *sel,
     size_t i;
     if (source->target_machine_form_id != AARCH64_MACHINE_ASM_USER_CACHE_FAULT ||
         opcode == NULL || source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        !a64_void_asm_shape(fn, ins, 2U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn, ops[0].value, true, 4U, 1) ||
         !(aarch64_asm_core_integer(fn, ops[1].value, false, 8U, 0) ||
@@ -3525,10 +3449,7 @@ static bool a64_linux_sysreg_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         sel->ctx->machine_frame->has_dynamic_stack || operand == NULL ||
         operand->operand_index != 0U ||
         operand->kind != (read ?
@@ -3572,13 +3493,8 @@ static bool a64_linux_smccc_source(A64CoreSelection *sel,
     if (form == 0U ||
         source->target_machine_form_id != AARCH64_MACHINE_ASM_SMCCC ||
         source->target_machine_form_variant != form ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         !minic_core_function_type_is_kind(fn, ins->core_type_id,
             MINIC_CORE_TYPE_VOID) ||
@@ -3655,16 +3571,9 @@ static bool a64_linux_svc_source(A64CoreSelection *sel,
     if (source->target_machine_form_id != AARCH64_MACHINE_ASM_SVC ||
         !aarch64_linux_svc_form(source->template_text, source->template_length) ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
-        !source->has_memory_clobber || source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 4U ||
+        !a64_qualified_volatile_asm(source) ||
+        !source->has_memory_clobber ||
+        !a64_void_asm_shape(fn, ins, 4U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
         return false;
     for (i = 0U; i < 4U; ++i) {
@@ -3731,16 +3640,8 @@ static bool a64_linux_timer_alternative_source(A64CoreSelection *sel,
     if (source->target_machine_form_id !=
             AARCH64_MACHINE_ASM_TIMER_ALTERNATIVE ||
         variant == 0U || source->target_machine_form_variant != variant ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
+        !a64_qualified_volatile_asm(source) ||
+        !a64_void_asm_shape(fn, ins, 1U) ||
         operand == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         operand->operand_index != 0U ||
         operand->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT ||
@@ -3775,18 +3676,10 @@ static bool a64_linux_counter_ordering_source(A64CoreSelection *sel,
         !aarch64_linux_counter_ordering_form(source->template_text,
             source->template_length) ||
         source->target_machine_form_variant != 0U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
+        !a64_qualified_volatile_asm(source) ||
         !source->has_memory_clobber || source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
-        source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 2U ||
+        !a64_void_asm_shape(fn, ins, 2U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn, ops[0].value, true, 8U, 0) ||
         !aarch64_asm_core_integer(fn, ops[1].value, false, 8U, 0))
@@ -4015,16 +3908,9 @@ static bool a64_linux_hyp_spin_source(A64CoreSelection *sel,
     if (form == AARCH64_LINUX_HYP_SPIN_NONE ||
         source->target_machine_form_id != AARCH64_MACHINE_ASM_HYP_SPIN ||
         source->target_machine_form_variant != (unsigned int)form ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        !source->is_volatile || source->is_goto ||
-        !source->has_memory_clobber || source->register_clobber_count != 0U ||
-        source->resolved_immediate_count != 0U ||
-        source->symbol_reference_count != 0U ||
-        source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != count ||
+        !a64_qualified_volatile_asm(source) ||
+        !source->has_memory_clobber ||
+        !a64_void_asm_shape(fn, ins, count) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack)
         return false;
     for (i = 0U; i < count; ++i) {
@@ -4124,10 +4010,7 @@ static bool a64_linux_cmpxchg_source(A64CoreSelection *sel,
         source->resolved_immediate_count != 0U ||
         source->symbol_reference_count != 0U ||
         source->deferred_immediate_symbol != NULL ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        !minic_core_function_type_is_kind(fn, ins->core_type_id,
-            MINIC_CORE_TYPE_VOID) ||
-        ins->value.structured_inline_asm.operand_count != 5U ||
+        !a64_void_asm_shape(fn, ins, 5U) ||
         ops == NULL || sel->ctx->machine_frame->has_dynamic_stack ||
         !aarch64_asm_core_integer(fn, ops[0].value, true, 8U, -1) ||
         !aarch64_asm_core_integer(fn, ops[1].value, true, width, -1) ||
@@ -5583,10 +5466,7 @@ static bool a64_core_instruction(A64CoreSelection *sel,
             return a64_linux_scalar_lse_source(sel, ins, source);
         if (source->target_machine_form_id == AARCH64_MACHINE_ASM_LSE_DEC_POSITIVE)
             return a64_linux_lse_dec_positive_source(sel, ins, source);
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            ins->value.structured_inline_asm.operand_count != 0U ||
-            !minic_core_function_type_is_kind(fn, ins->core_type_id,
-                MINIC_CORE_TYPE_VOID)) return false;
+        if (!a64_void_asm_shape(fn, ins, 0U)) return false;
         /* A valid GNU spelling is not a machine-admission capability.
          * ID0 belongs only to proved generic structured ASM; target-owned
          * physical forms must carry their exact nonzero Machine form ID.
