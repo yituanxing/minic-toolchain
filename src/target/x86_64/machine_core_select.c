@@ -12068,6 +12068,8 @@ bool minic_x86_64_machine_select_core_for_production(
     size_t i, count;
     bool ok = false;
     const char *phase = "entry";
+    const bool trace_select = getenv("MINIC_X86_TYPED_SELECT_TRACE") != NULL;
+    const bool trace_reject = getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL;
     if (machine == NULL || target == NULL || core == NULL || frame == NULL ||
         target->architecture != MINIC_TARGET_ARCH_X86_64 ||
         core->name == NULL || core->type_context == NULL ||
@@ -12108,8 +12110,8 @@ bool minic_x86_64_machine_select_core_for_production(
         minic_core_function_calling_convention(core);
     machine->frame_size = frame->frame_size;
     machine->frame_alignment = 16U;
-    /* No dynamically based local address is silently claimed stable while
-     * the stack changes: dynamic alloca is rejected by this selector. */
+    /* Only a successfully selected dynamic alloca sets this flag. Aligned-RSP
+     * local objects are rejected by the dynamic allocation path. */
     machine->has_dynamic_stack = false;
     for (i = 0U; i < count; ++i) {
         sel.blocks[i] = SIZE_MAX;
@@ -12289,7 +12291,7 @@ bool minic_x86_64_machine_select_core_for_production(
             sel.direct_object_consumer = previous_direct;
             sel.direct_object_value = previous_value;
             sel.direct_object_id = previous_object;
-            if (getenv("MINIC_X86_TYPED_SELECT_TRACE") != NULL)
+            if (trace_select)
                 fprintf(stderr,
                     "x86 typed select: function=%s block=%zu instruction=%zu kind=%u result=%u type=%u\n",
                     core->name, i, (size_t)id, (unsigned int)ins->kind,
@@ -12297,13 +12299,13 @@ bool minic_x86_64_machine_select_core_for_production(
                     (unsigned int)ins->core_type_id);
             minic_machine_builder_set_origin(&sel.builder, i, id);
             if (!x86_core_instruction(&sel, ins, id)) {
-                if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+                if (trace_reject)
                     fprintf(stderr,
                         "x86 typed select reject: function=%s block=%zu instruction=%zu kind=%u result=%u type=%u\n",
                         core->name, i, (size_t)id, (unsigned int)ins->kind,
                         (unsigned int)ins->result,
                         (unsigned int)ins->core_type_id);
-                if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL &&
+                if (trace_reject &&
                     ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM &&
                     ins->value.inline_asm_id < core->inline_asm_count) {
                     const MinicCoreInlineAsm *rejected =
@@ -12313,7 +12315,7 @@ bool minic_x86_64_machine_select_core_for_production(
                         rejected->template_length,
                         rejected->template_text ? rejected->template_text : "");
                 }
-                if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL &&
+                if (trace_reject &&
                     ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
                     ins->value.structured_inline_asm.inline_asm_id < core->inline_asm_count) {
                     const MinicCoreInlineAsm *rejected = &core->inline_asms[
@@ -12342,7 +12344,7 @@ bool minic_x86_64_machine_select_core_for_production(
         minic_machine_builder_clear_origin(&sel.builder);
         phase = "core-terminator";
         if (!x86_core_terminator(&sel, i)) {
-            if (getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+            if (trace_reject)
                 fprintf(stderr,
                     "x86 typed select reject: function=%s stage=core-terminator block=%zu terminator=%u\n",
                     core->name, i, (unsigned int)block->terminator.kind);
@@ -12353,7 +12355,7 @@ bool minic_x86_64_machine_select_core_for_production(
      * physical ISA/ASM verification once, after selection and before output. */
     ok = true;
 cleanup:
-    if (!ok && getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
+    if (!ok && trace_reject)
         fprintf(stderr,
             "x86 typed select reject: function=%s stage=%s\n",
             core->name, phase);
