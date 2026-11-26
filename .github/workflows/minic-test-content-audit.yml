@@ -56,4 +56,18 @@ jobs:
               print("GC_FILE",n,src,flush=True)
           for src,sym in sorted(found):
               print("GC_UNUSED",src,sym,flush=True)
+          import subprocess
+          paths=subprocess.check_output(["git","ls-files","-z","--","*.c","*.h"]).decode().split("\0")
+          indexed={}
+          for path in paths:
+              if path and not path.startswith("third_party/"):
+                  indexed[path]=Path(path).read_text(encoding="utf-8",errors="replace")
+          for src,sym in sorted(found):
+              pat=re.compile(r"\b"+re.escape(sym)+r"\b")
+              references=[]
+              for path,body in indexed.items():
+                  hits=len(pat.findall(body))
+                  if hits:references.append((path,hits))
+              refs=" ".join(f"{p}:{n}" for p,n in references[:16])
+              print("GC_SITE",sym,"FILES",len(references),"HITS",sum(n for _,n in references),"REFS",refs,flush=True)
           PY
