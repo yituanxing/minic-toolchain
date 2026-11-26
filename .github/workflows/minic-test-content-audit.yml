@@ -43,20 +43,4 @@ jobs:
                   for match in pattern.finditer(body):
                       sites.append((path,body.count("\n",0,match.start())+1))
               print("SYMBOL",name,"HITS",len(sites),"SITES"," ".join(f"{p}:{n}" for p,n in sites[:16]),flush=True)
-          # One-definition global C functions with no other textual reference
-          definitions=[]
-          func=re.compile(r"(?m)^(?:static\s+)?(?:[A-Za-z_]\w*(?:\s+|\s*\*)){1,6}([A-Za-z_]\w*)\s*\([^;{}]{0,450}\)\s*\{")
-          for path,body in data.items():
-              if not path.startswith(("src/","compiler/","tools/","assembler/","linker/","preprocessor/","elf/")) or not path.endswith(".c"):continue
-              for match in func.finditer(body):
-                  name=match.group(1)
-                  if name in ("if","switch","for","while") or name.startswith("_"):continue
-                  definitions.append((name,path,body.count("\n",0,match.start())+1))
-          isolated=[]
-          for name,path,line in definitions:
-              pattern=re.compile(r"\b"+re.escape(name)+r"\b")
-              sites=sum(len(pattern.findall(body)) for body in data.values())
-              if sites==1:isolated.append((name,path,line))
-          print("DEFINITION_ONLY",len(isolated),flush=True)
-          for name,path,line in isolated[:120]:print("DEF_ONLY",name,f"{path}:{line}",flush=True)
           PY
