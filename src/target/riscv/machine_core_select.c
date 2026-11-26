@@ -4152,7 +4152,7 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
         (isa.xlen == 32U
             ? (plan->abi32 == NULL || plan->abi64 != NULL ||
                plan->semantic_calls64 != NULL ||
-               plan->abi32->semantic_calls.index == NULL ||
+               plan->abi32->semantic_calls == NULL ||
                plan->abi32->parameter_count !=
                    minic_core_function_parameter_count(core) ||
                plan->frame->has_hidden_result_pointer !=
