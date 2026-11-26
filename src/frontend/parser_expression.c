@@ -439,17 +439,68 @@ static bool parse_static_duration_compound_literal(MinicParser *parser,
     return minic_parser_parse_postfix(parser, base_id, expression_id);
 }
 
+static bool allocate_compound_literal_backing(
+    MinicParser *parser, MinicSourcePosition begin, MinicType type,
+    MinicLocalId *local_id, MinicExpressionId *hidden_lvalue_id,
+    MinicBlockId *initializer_block, const char *allocation_error, const char *block_error) {
+    MinicLocal local;
+    MinicExpression hidden_lvalue;
+    minic_c0_local_initialize(&local);
+    local.name_span.begin = begin;
+    local.name_span.end = begin;
+    local.type = type;
+    local.is_register_storage = false;
+    local.declaration_block = parser->current_block;
+    local.has_declaration_block =
+        parser->current_block != MINIC_BLOCK_INVALID;
+    if (!minic_c0_program_add_local(parser->program, &local, local_id)) {
+        minic_parser_error(parser, "%s", allocation_error);
+        return false;
+    }
+
+    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
+    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
+    hidden_lvalue.span.begin = begin;
+    hidden_lvalue.span.end = parser->current.span.begin;
+    hidden_lvalue.type = type;
+    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
+    hidden_lvalue.value.local_id = *local_id;
+    if (!minic_parser_add_expression(parser, &hidden_lvalue, hidden_lvalue_id) ||
+        !minic_c0_program_add_block(parser->program, initializer_block)) {
+        if (block_error != NULL) minic_parser_error(parser, "%s", block_error);
+        return false;
+    }
+
+    return true;
+}
+
+static bool finish_compound_literal(MinicParser *parser, MinicSourcePosition begin,
+                                    MinicSourcePosition end, MinicType type,
+                                    MinicLocalId local_id, MinicBlockId initializer_block,
+                                    MinicExpressionId *expression_id) {
+    MinicExpression compound_literal;
+    MinicExpressionId compound_literal_id;
+    (void)memset(&compound_literal, 0, sizeof(compound_literal));
+    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
+    compound_literal.span.begin = begin;
+    compound_literal.span.end = end;
+    compound_literal.type = type;
+    compound_literal.value_category = MINIC_VALUE_LVALUE;
+    compound_literal.value.compound_literal.local_id = local_id;
+    compound_literal.value.compound_literal.initializer_block = initializer_block;
+    if (!minic_parser_add_expression(parser, &compound_literal, &compound_literal_id)) {
+        return false;
+    }
+    return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
+}
+
 static bool parse_record_compound_literal(MinicParser *parser,
                                           MinicSourcePosition begin,
                                           MinicType type,
                                           MinicExpressionId *expression_id) {
     const MinicRecord *record;
-    MinicLocal local;
     MinicLocalId local_id;
-    MinicExpression hidden_lvalue;
-    MinicExpression compound_literal;
     MinicExpressionId hidden_lvalue_id;
-    MinicExpressionId compound_literal_id;
     MinicBlockId initializer_block;
     MinicBlockId parent_block;
     bool success;
@@ -468,31 +519,8 @@ static bool parse_record_compound_literal(MinicParser *parser,
         return false;
     }
 
-    minic_c0_local_initialize(&local);
-    local.name_span.begin = begin;
-    local.name_span.end = begin;
-    local.type = type;
-    local.is_register_storage = false;
-    local.declaration_block = parser->current_block;
-    local.has_declaration_block =
-        parser->current_block != MINIC_BLOCK_INVALID;
-    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
-        minic_parser_error(parser, "cannot allocate compound literal backing object");
-        return false;
-    }
-
-    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
-    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
-    hidden_lvalue.span.begin = begin;
-    hidden_lvalue.span.end = parser->current.span.begin;
-    hidden_lvalue.type = type;
-    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
-    hidden_lvalue.value.local_id = local_id;
-    if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
-        !minic_c0_program_add_block(parser->program, &initializer_block)) {
-        minic_parser_error(parser, "cannot create compound literal initializer block");
-        return false;
-    }
+    if (!allocate_compound_literal_backing(parser, begin, type, &local_id, &hidden_lvalue_id,
+            &initializer_block, "cannot allocate compound literal backing object", "cannot create compound literal initializer block")) return false;
 
     parent_block = parser->current_block;
     parser->current_block = initializer_block;
@@ -502,18 +530,8 @@ static bool parse_record_compound_literal(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&compound_literal, 0, sizeof(compound_literal));
-    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
-    compound_literal.span.begin = begin;
-    compound_literal.span.end = parser->current.span.begin;
-    compound_literal.type = type;
-    compound_literal.value_category = MINIC_VALUE_LVALUE;
-    compound_literal.value.compound_literal.local_id = local_id;
-    compound_literal.value.compound_literal.initializer_block = initializer_block;
-    if (!minic_parser_add_expression(parser, &compound_literal, &compound_literal_id)) {
-        return false;
-    }
-    return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
+    return finish_compound_literal(parser, begin, parser->current.span.begin, type,
+                                   local_id, initializer_block, expression_id);
 }
 
 static bool parse_array_compound_literal(MinicParser *parser,
@@ -521,12 +539,8 @@ static bool parse_array_compound_literal(MinicParser *parser,
                                          MinicType type,
                                          MinicExpressionId *expression_id) {
     const MinicArrayType *array_type;
-    MinicLocal local;
     MinicLocalId local_id;
-    MinicExpression hidden_lvalue;
-    MinicExpression compound_literal;
     MinicExpressionId hidden_lvalue_id;
-    MinicExpressionId compound_literal_id;
     MinicBlockId initializer_block;
     MinicBlockId parent_block;
     size_t element_count;
@@ -557,33 +571,8 @@ static bool parse_array_compound_literal(MinicParser *parser,
         }
     }
 
-    minic_c0_local_initialize(&local);
-    local.name_span.begin = begin;
-    local.name_span.end = begin;
-    /* The compound literal and its backing local denote the same complete
-     * array object. Keep the actual ArrayType in both AST nodes rather than
-     * re-encoding its outer bound in MinicLocal. */
-    local.type = type;
-    local.is_register_storage = false;
-    local.declaration_block = parser->current_block;
-    local.has_declaration_block =
-        parser->current_block != MINIC_BLOCK_INVALID;
-    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
-        minic_parser_error(parser, "cannot allocate array compound literal backing object");
-        return false;
-    }
-
-    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
-    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
-    hidden_lvalue.span.begin = begin;
-    hidden_lvalue.span.end = parser->current.span.begin;
-    hidden_lvalue.type = type;
-    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
-    hidden_lvalue.value.local_id = local_id;
-    if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
-        !minic_c0_program_add_block(parser->program, &initializer_block)) {
-        return false;
-    }
+    if (!allocate_compound_literal_backing(parser, begin, type, &local_id, &hidden_lvalue_id,
+            &initializer_block, "cannot allocate array compound literal backing object", NULL)) return false;
     parent_block = parser->current_block;
     parser->current_block = initializer_block;
     success = minic_parser_parse_fixed_runtime_array_initializer(
@@ -593,28 +582,15 @@ static bool parse_array_compound_literal(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&compound_literal, 0, sizeof(compound_literal));
-    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
-    compound_literal.span.begin = begin;
-    compound_literal.span.end = parser->current.span.begin;
-    compound_literal.type = type;
-    compound_literal.value_category = MINIC_VALUE_LVALUE;
-    compound_literal.value.compound_literal.local_id = local_id;
-    compound_literal.value.compound_literal.initializer_block = initializer_block;
-    if (!minic_parser_add_expression(parser, &compound_literal, &compound_literal_id)) {
-        return false;
-    }
-    return minic_parser_parse_postfix(parser, compound_literal_id, expression_id);
+    return finish_compound_literal(parser, begin, parser->current.span.begin, type,
+                                   local_id, initializer_block, expression_id);
 }
 
 static bool parse_scalar_compound_literal(MinicParser *parser,
                                           MinicSourcePosition begin,
                                           MinicType type,
                                           MinicExpressionId *expression_id) {
-    MinicLocal local;
     MinicLocalId local_id;
-    MinicExpression hidden_lvalue;
-    MinicExpression compound_literal;
     MinicExpressionId hidden_lvalue_id;
     MinicExpressionId value_id;
     MinicBlockId initializer_block;
@@ -638,31 +614,8 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
         return false;
     }
 
-    minic_c0_local_initialize(&local);
-    local.name_span.begin = begin;
-    local.name_span.end = begin;
-    local.type = type;
-    local.is_register_storage = false;
-    local.declaration_block = parser->current_block;
-    local.has_declaration_block =
-        parser->current_block != MINIC_BLOCK_INVALID;
-    if (!minic_c0_program_add_local(parser->program, &local, &local_id)) {
-        minic_parser_error(parser, "cannot allocate scalar compound literal backing object");
-        return false;
-    }
-
-    (void)memset(&hidden_lvalue, 0, sizeof(hidden_lvalue));
-    hidden_lvalue.kind = MINIC_EXPRESSION_LOCAL;
-    hidden_lvalue.span.begin = begin;
-    hidden_lvalue.span.end = parser->current.span.begin;
-    hidden_lvalue.type = type;
-    hidden_lvalue.value_category = MINIC_VALUE_LVALUE;
-    hidden_lvalue.value.local_id = local_id;
-    if (!minic_parser_add_expression(parser, &hidden_lvalue, &hidden_lvalue_id) ||
-        !minic_c0_program_add_block(parser->program, &initializer_block)) {
-        minic_parser_error(parser, "cannot create scalar compound literal initializer block");
-        return false;
-    }
+    if (!allocate_compound_literal_backing(parser, begin, type, &local_id, &hidden_lvalue_id,
+            &initializer_block, "cannot allocate scalar compound literal backing object", "cannot create scalar compound literal initializer block")) return false;
 
     initializer_span.begin = parser->current.span.begin;
     parent_block = parser->current_block;
@@ -727,18 +680,8 @@ static bool parse_scalar_compound_literal(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&compound_literal, 0, sizeof(compound_literal));
-    compound_literal.kind = MINIC_EXPRESSION_COMPOUND_LITERAL;
-    compound_literal.span.begin = begin;
-    compound_literal.span.end = initializer_span.end;
-    compound_literal.type = type;
-    compound_literal.value_category = MINIC_VALUE_LVALUE;
-    compound_literal.value.compound_literal.local_id = local_id;
-    compound_literal.value.compound_literal.initializer_block = initializer_block;
-    if (!minic_parser_add_expression(parser, &compound_literal, &value_id)) {
-        return false;
-    }
-    return minic_parser_parse_postfix(parser, value_id, expression_id);
+    return finish_compound_literal(parser, begin, initializer_span.end, type,
+                                   local_id, initializer_block, expression_id);
 }
 
 /* GCC's `(union U)scalar` extension selects the union member whose declared

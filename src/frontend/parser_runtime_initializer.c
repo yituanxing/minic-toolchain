@@ -9,6 +9,15 @@
 /* Runtime automatic-storage initializers: materialized expression effects.
  * Static relocations and constant bytes stay owned by parser_global.c. */
 
+static bool probe_aggregate_zero_shorthand(MinicParser *parser) {
+    MinicParser probe = *parser;
+    int value;
+    if (!minic_parser_parse_integer_value(&probe, &value) || value != 0) return false;
+    if (probe.current.kind == MINIC_TOKEN_COMMA && !minic_parser_advance(&probe))
+        return false;
+    return probe.current.kind == MINIC_TOKEN_RBRACE;
+}
+
 static bool add_zero_initialized_record_lvalue(MinicParser *parser,
                                                MinicExpressionId base_id,
                                                MinicSourceSpan initializer_span);
@@ -278,20 +287,7 @@ static bool parse_fixed_runtime_record_array_initializer(MinicParser *parser,
         goto done;
     }
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
-        MinicParser probe;
-        int zero_value;
-        bool zero_shorthand;
-
-        probe = *parser;
-        zero_shorthand =
-            minic_parser_parse_integer_value(&probe, &zero_value) && zero_value == 0;
-        if (zero_shorthand && probe.current.kind == MINIC_TOKEN_COMMA) {
-            zero_shorthand =
-                minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_RBRACE;
-        } else if (zero_shorthand) {
-            zero_shorthand = probe.current.kind == MINIC_TOKEN_RBRACE;
-        }
-        if (zero_shorthand) {
+        if (probe_aggregate_zero_shorthand(parser)) {
             int parsed_zero;
 
             if (!minic_parser_parse_integer_value(parser, &parsed_zero)) {
@@ -1849,24 +1845,11 @@ bool minic_parser_parse_runtime_record_initializer(MinicParser *parser,
     if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
         const MinicExpression *target;
         const MinicRecord *record;
-        MinicParser probe;
-        int zero_value;
-        bool zero_shorthand;
-
         target = minic_c0_program_expression(parser->program, target_id);
         record = target != NULL && minic_type_is_record(target->type)
                      ? minic_c0_program_record(parser->program, target->type.record_id)
                      : NULL;
-        probe = *parser;
-        zero_shorthand = record != NULL && !record->is_union &&
-                         minic_parser_parse_integer_value(&probe, &zero_value) && zero_value == 0;
-        if (zero_shorthand && probe.current.kind == MINIC_TOKEN_COMMA) {
-            zero_shorthand =
-                minic_parser_advance(&probe) && probe.current.kind == MINIC_TOKEN_RBRACE;
-        } else if (zero_shorthand) {
-            zero_shorthand = probe.current.kind == MINIC_TOKEN_RBRACE;
-        }
-        if (zero_shorthand) {
+        if (record != NULL && !record->is_union && probe_aggregate_zero_shorthand(parser)) {
             int parsed_zero;
 
             if (!minic_parser_parse_integer_value(parser, &parsed_zero)) {

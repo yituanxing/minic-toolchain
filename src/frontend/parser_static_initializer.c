@@ -2435,6 +2435,26 @@ static bool overwrite_static_zero_array_constant(MinicParser *parser,
         parser, MINIC_TOKEN_RBRACE, "expected '}' after backward static array initializer");
 }
 
+static bool parse_static_record_literal_type(MinicParser *parser, MinicType type) {
+    MinicType explicit_type;
+    if (!minic_parser_advance(parser) ||
+        !minic_parser_parse_type_name(parser, &explicit_type) ||
+        !minic_parser_expect(
+            parser, MINIC_TOKEN_RPAREN, "expected ')' after static compound literal type")) {
+        return false;
+    }
+    if (!minic_type_is_record(explicit_type) ||
+        !minic_type_assignment_compatible(type, explicit_type)) {
+        minic_parser_error(parser, "static record compound literal type mismatch");
+        return false;
+    }
+    if (parser->current.kind != MINIC_TOKEN_LBRACE) {
+        minic_parser_error(parser, "static record compound literal requires initializer list");
+        return false;
+    }
+    return true;
+}
+
 static bool overwrite_static_zero_record_value(MinicParser *parser,
                                                MinicGlobalObjectId object_id,
                                                MinicType type,
@@ -2445,7 +2465,6 @@ static bool overwrite_static_zero_record_value(MinicParser *parser,
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
         MinicParser probe;
-        MinicType explicit_type;
 
         probe = *parser;
         if (!minic_parser_advance(&probe)) {
@@ -2462,21 +2481,7 @@ static bool overwrite_static_zero_record_value(MinicParser *parser,
             }
             return true;
         }
-        if (!minic_parser_advance(parser) ||
-            !minic_parser_parse_type_name(parser, &explicit_type) ||
-            !minic_parser_expect(
-                parser, MINIC_TOKEN_RPAREN, "expected ')' after static compound literal type")) {
-            return false;
-        }
-        if (!minic_type_is_record(explicit_type) ||
-            !minic_type_assignment_compatible(type, explicit_type)) {
-            minic_parser_error(parser, "static record compound literal type mismatch");
-            return false;
-        }
-        if (parser->current.kind != MINIC_TOKEN_LBRACE) {
-            minic_parser_error(parser, "static record compound literal requires initializer list");
-            return false;
-        }
+        if (!parse_static_record_literal_type(parser, type)) return false;
     }
     /* The compound-literal type name may append anonymous records and move
      * Program.records. Do not forward the borrowed descriptor past parsing. */
@@ -3178,8 +3183,7 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
     if (minic_type_is_record(type)) {
         if (parser->current.kind == MINIC_TOKEN_LPAREN) {
             MinicParser probe;
-            MinicType explicit_type;
-
+    
             probe = *parser;
             if (!minic_parser_advance(&probe)) {
                 return false;
@@ -3194,23 +3198,7 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                 }
                 return true;
             }
-            if (!minic_parser_advance(parser) ||
-                !minic_parser_parse_type_name(parser, &explicit_type) ||
-                !minic_parser_expect(parser,
-                                     MINIC_TOKEN_RPAREN,
-                                     "expected ')' after static compound literal type")) {
-                return false;
-            }
-            if (!minic_type_is_record(explicit_type) ||
-                !minic_type_assignment_compatible(type, explicit_type)) {
-                minic_parser_error(parser, "static record compound literal type mismatch");
-                return false;
-            }
-            if (parser->current.kind != MINIC_TOKEN_LBRACE) {
-                minic_parser_error(parser,
-                                   "static record compound literal requires initializer list");
-                return false;
-            }
+            if (!parse_static_record_literal_type(parser, type)) return false;
         }
         {
             const MinicRecord *record;

@@ -33,15 +33,22 @@ static bool parse_branch(MinicParser *parser, MinicBlockId *block_id) {
     return success;
 }
 
-static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id) {
+static bool parse_loop_branch(MinicParser *parser, MinicBlockId *block_id,
+                              MinicStatementId continue_label) {
+    MinicStatementId previous_continue_target = parser->continue_target_statement;
+    MinicCleanupContextId previous_continue_cleanup_context = parser->continue_cleanup_context;
     MinicCleanupContextId previous_break_cleanup_context;
     bool success;
 
     previous_break_cleanup_context = parser->break_cleanup_context;
     parser->break_cleanup_context = parser->cleanup_context;
+    parser->continue_target_statement = continue_label;
+    parser->continue_cleanup_context = parser->cleanup_context;
     parser->loop_depth += 1U;
     success = parse_branch(parser, block_id);
     parser->loop_depth -= 1U;
+    parser->continue_target_statement = previous_continue_target;
+    parser->continue_cleanup_context = previous_continue_cleanup_context;
     parser->break_cleanup_context = previous_break_cleanup_context;
     return success;
 }
@@ -186,8 +193,6 @@ bool minic_parser_control_parse_continue(MinicParser *parser) {
 bool minic_parser_control_parse_while(MinicParser *parser) {
     MinicStatement statement;
     MinicStatementId continue_label;
-    MinicStatementId previous_continue_target;
-    MinicCleanupContextId previous_continue_cleanup_context;
     MinicSourceSpan while_span;
     bool success;
 
@@ -210,13 +215,7 @@ bool minic_parser_control_parse_while(MinicParser *parser) {
         return false;
     }
 
-    previous_continue_target = parser->continue_target_statement;
-    previous_continue_cleanup_context = parser->continue_cleanup_context;
-    parser->continue_target_statement = continue_label;
-    parser->continue_cleanup_context = parser->cleanup_context;
-    success = parse_loop_branch(parser, &statement.then_block);
-    parser->continue_target_statement = previous_continue_target;
-    parser->continue_cleanup_context = previous_continue_cleanup_context;
+    success = parse_loop_branch(parser, &statement.then_block, continue_label);
     if (!success) {
         return false;
     }
@@ -233,8 +232,6 @@ bool minic_parser_control_parse_do_while(MinicParser *parser) {
     MinicStatementId continue_label;
     MinicStatementId condition_check_id;
     MinicStatementId break_statement_id;
-    MinicStatementId previous_continue_target;
-    MinicCleanupContextId previous_continue_cleanup_context;
     MinicBlockId break_block;
     MinicExpressionId condition_id;
     MinicExpressionId negated_condition_id;
@@ -262,13 +259,7 @@ bool minic_parser_control_parse_do_while(MinicParser *parser) {
         return false;
     }
 
-    previous_continue_target = parser->continue_target_statement;
-    previous_continue_cleanup_context = parser->continue_cleanup_context;
-    parser->continue_target_statement = continue_label;
-    parser->continue_cleanup_context = parser->cleanup_context;
-    success = parse_loop_branch(parser, &statement.then_block);
-    parser->continue_target_statement = previous_continue_target;
-    parser->continue_cleanup_context = previous_continue_cleanup_context;
+    success = parse_loop_branch(parser, &statement.then_block, continue_label);
     if (!success || parser->current.kind != MINIC_TOKEN_KW_WHILE ||
         !minic_c0_block_add_statement(parser->program, statement.then_block, continue_label)) {
         if (success && parser->current.kind != MINIC_TOKEN_KW_WHILE) {
@@ -621,8 +612,6 @@ bool minic_parser_control_parse_for(MinicParser *parser) {
     MinicStatement statement;
     MinicStatementId update_statement;
     MinicStatementId continue_label;
-    MinicStatementId previous_continue_target;
-    MinicCleanupContextId previous_continue_cleanup_context;
     MinicCleanupContextId scope_cleanup_context;
     bool has_update;
     MinicSourceSpan for_span;
@@ -679,13 +668,7 @@ bool minic_parser_control_parse_for(MinicParser *parser) {
         !add_internal_continue_label(parser, for_span, &continue_label)) {
         return false;
     }
-    previous_continue_target = parser->continue_target_statement;
-    previous_continue_cleanup_context = parser->continue_cleanup_context;
-    parser->continue_target_statement = continue_label;
-    parser->continue_cleanup_context = parser->cleanup_context;
-    success = parse_loop_branch(parser, &statement.then_block);
-    parser->continue_target_statement = previous_continue_target;
-    parser->continue_cleanup_context = previous_continue_cleanup_context;
+    success = parse_loop_branch(parser, &statement.then_block, continue_label);
     if (!success ||
         !minic_c0_block_add_statement(parser->program, statement.then_block, continue_label)) {
         if (success) {
