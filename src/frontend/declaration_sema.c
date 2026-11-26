@@ -168,15 +168,8 @@ bool minic_declaration_merge_external_array_composite_type(MinicC0Program *progr
             program, existing_type, declared_type)) {
         return false;
     }
-    if (program == NULL || !minic_type_is_array(existing_type) ||
-        !minic_type_is_array(declared_type)) {
-        return false;
-    }
     existing_array = minic_c0_program_array_type(program, existing_type.array_type_id);
     declared_array = minic_c0_program_array_type(program, declared_type.array_type_id);
-    if (existing_array == NULL || declared_array == NULL) {
-        return false;
-    }
     existing_element = existing_array->element_type;
     declared_element = declared_array->element_type;
     declared_count = declared_array->element_count;

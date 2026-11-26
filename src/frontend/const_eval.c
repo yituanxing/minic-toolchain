@@ -1498,22 +1498,7 @@ static bool eval_arithmetic_expression(const MinicC0Program *program,
         return true;
     }
     case MINIC_EXPRESSION_CAST:
-    case MINIC_EXPRESSION_CONVERSION: {
-        MinicArithmeticConstValue operand;
-        double converted;
-
-        if (!eval_arithmetic_expression(program,
-                                        target,
-                                        expression->value.unary.operand,
-                                        depth + 1U,
-                                        &operand) ||
-            !arithmetic_value_as_double(program, target, &operand, &converted)) {
-            return false;
-        }
-        value->floating =
-            minic_type_is_float(expression->type) ? (double)(float)converted : converted;
-        return true;
-    }
+    case MINIC_EXPRESSION_CONVERSION:
     case MINIC_EXPRESSION_UNARY: {
         MinicArithmeticConstValue operand;
         double converted;
@@ -1526,7 +1511,7 @@ static bool eval_arithmetic_expression(const MinicC0Program *program,
             !arithmetic_value_as_double(program, target, &operand, &converted)) {
             return false;
         }
-        switch (expression->value.unary.operator_kind) {
+        if (expression->kind == MINIC_EXPRESSION_UNARY) switch (expression->value.unary.operator_kind) {
         case MINIC_UNARY_PLUS:
             break;
         case MINIC_UNARY_NEGATE:

@@ -71,6 +71,42 @@ static bool core_bit_field_access_window(
     return true;
 }
 
+/* Keep transport width distinct from the field's semantic width. */
+static bool bit_field_constant(MinicCoreLowerContext *context, MinicSourceSpan span,
+                               MinicType type, uint64_t bits, MinicCoreValueId *out) {
+    MinicCoreInstruction op = {0};
+    op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
+    op.span = span;
+    op.result = MINIC_CORE_VALUE_INVALID;
+    (void)memcpy(&op.value.integer_value, &bits, sizeof(bits));
+    return minic_core_function_append_source_value_instruction(
+        context->source, context->block_id, &op, type, out);
+}
+
+static bool bit_field_binary(MinicCoreLowerContext *context, MinicSourceSpan span,
+                             MinicCoreInstructionKind kind, MinicType type,
+                             MinicCoreValueId left, MinicCoreValueId right,
+                             MinicCoreValueId *out) {
+    MinicCoreInstruction op = {0};
+    op.kind = kind;
+    op.span = span;
+    op.result = MINIC_CORE_VALUE_INVALID;
+    op.value.binary.left = left;
+    op.value.binary.right = right;
+    return minic_core_function_append_source_value_instruction(
+        context->source, context->block_id, &op, type, out);
+}
+
+static bool bit_field_sign_extend(MinicCoreLowerContext *context, MinicSourceSpan span,
+                                  MinicType type, uint64_t shift_bits, MinicCoreValueId *value) {
+    MinicCoreValueId shift;
+    return bit_field_constant(context, span, minic_type_unsigned_int(), shift_bits, &shift) &&
+           bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT,
+                            type, *value, shift, value) &&
+           bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                            type, *value, shift, value);
+}
+
 static MinicCoreLowerStatus core_bit_field_byte_address(
     MinicCoreLowerContext *context, MinicSourceSpan span,
     MinicCoreValueId base, size_t byte_index, MinicCoreValueId *address) {
@@ -82,14 +118,7 @@ static MinicCoreLowerStatus core_bit_field_byte_address(
         *address = base;
         return MINIC_CORE_LOWER_OK;
     }
-    (void)memset(&op, 0, sizeof(op));
-    op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    op.span = span;
-    op_source_type = minic_type_unsigned_int();
-    op.result = MINIC_CORE_VALUE_INVALID;
-    op.value.integer_value = (int64_t)byte_index;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &op, op_source_type, &index))
+    if (!bit_field_constant(context, span, minic_type_unsigned_int(), (uint64_t)((int64_t)byte_index), &index))
         return MINIC_CORE_LOWER_ERROR;
     (void)memset(&op, 0, sizeof(op));
     op.kind = MINIC_CORE_INSTRUCTION_POINTER_OFFSET;
@@ -150,34 +179,13 @@ static MinicCoreLowerStatus core_bit_field_load_storage(
             context, span, storage_type, current, &current);
         if (status != MINIC_CORE_LOWER_OK) return status;
         if (byte_index != 0U) {
-            (void)memset(&op, 0, sizeof(op));
-            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            op.span = span;
-            op_source_type = minic_type_unsigned_int();
-            op.result = MINIC_CORE_VALUE_INVALID;
-            op.value.integer_value = (int64_t)(byte_index * 8U);
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &op, op_source_type, &shift))
+            if (!bit_field_constant(context, span, minic_type_unsigned_int(), (uint64_t)((int64_t)(byte_index * 8U)), &shift))
                 return MINIC_CORE_LOWER_ERROR;
-            (void)memset(&op, 0, sizeof(op));
-            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-            op.span = span;
-            op_source_type = storage_type;
-            op.result = MINIC_CORE_VALUE_INVALID;
-            op.value.binary.left = current;
-            op.value.binary.right = shift;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &op, op_source_type, &shifted))
+            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT,
+                                  storage_type, current, shift, &shifted))
                 return MINIC_CORE_LOWER_ERROR;
-            (void)memset(&op, 0, sizeof(op));
-            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-            op.span = span;
-            op_source_type = storage_type;
-            op.result = MINIC_CORE_VALUE_INVALID;
-            op.value.binary.left = assembled;
-            op.value.binary.right = shifted;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &op, op_source_type, &assembled))
+            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
+                                  storage_type, assembled, shifted, &assembled))
                 return MINIC_CORE_LOWER_ERROR;
         } else {
             assembled = current;
@@ -216,24 +224,10 @@ static MinicCoreLowerStatus core_bit_field_store_storage(
         if (status != MINIC_CORE_LOWER_OK) return status;
         if (byte_index != 0U) {
             MinicCoreValueId shift;
-            (void)memset(&op, 0, sizeof(op));
-            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            op.span = span;
-            op_source_type = minic_type_unsigned_int();
-            op.result = MINIC_CORE_VALUE_INVALID;
-            op.value.integer_value = (int64_t)(byte_index * 8U);
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &op, op_source_type, &shift))
+            if (!bit_field_constant(context, span, minic_type_unsigned_int(), (uint64_t)((int64_t)(byte_index * 8U)), &shift))
                 return MINIC_CORE_LOWER_ERROR;
-            (void)memset(&op, 0, sizeof(op));
-            op.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-            op.span = span;
-            op_source_type = minic_core_function_source_value_type(context->source, value);
-            op.result = MINIC_CORE_VALUE_INVALID;
-            op.value.binary.left = value;
-            op.value.binary.right = shift;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &op, op_source_type, &byte_value))
+            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                                  minic_core_function_source_value_type(context->source, value), value, shift, &byte_value))
                 return MINIC_CORE_LOWER_ERROR;
         }
         status = minic_core_lower_internal_append_integer_conversion(
@@ -276,8 +270,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
         field = minic_c0_record_field(record, target->value.member.field_index);
         if (field != NULL && field->is_bit_field) {
             *matched = true;
-            MinicCoreInstruction operation;
-            MinicType operation_source_type = minic_type_void();
             MinicCoreObjectId source_object;
             MinicCoreValueId address;
             MinicCoreValueId base_value;
@@ -391,27 +383,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
 
             low_mask = minic_integer_mask64(field->bit_width);
             if (field->bit_width < storage_width) {
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                operation.span = span;
-                operation_source_type = storage_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&operation.value.integer_value, &low_mask, sizeof(low_mask));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &constant)) {
+                if (!bit_field_constant(context, span, storage_type, low_mask, &constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-                operation.span = span;
-                operation_source_type = storage_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = field_storage;
-                operation.value.binary.right = constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &field_storage)) {
+                if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                      storage_type, field_storage, constant, &field_storage))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (minic_type_equal(storage_type, value_type)) {
                 assigned_value = field_storage;
@@ -430,103 +406,30 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                the masked two's-complement representation. */
             if (minic_type_is_signed_integer(value_type) &&
                 field->bit_width < semantic_width) {
-                MinicCoreValueId shift;
-                uint64_t shift_bits = (uint64_t)(semantic_width - field->bit_width);
-
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                operation.span = span;
-                operation_source_type = minic_type_unsigned_int();
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&operation.value.integer_value, &shift_bits, sizeof(shift_bits));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &shift)) {
+                if (!bit_field_sign_extend(context, span, value_type, (uint64_t)(semantic_width - field->bit_width), &assigned_value))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                operation.span = span;
-                operation_source_type = value_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = assigned_value;
-                operation.value.binary.right = shift;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &assigned_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                operation.span = span;
-                operation_source_type = value_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = assigned_value;
-                operation.value.binary.right = shift;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &assigned_value)) {
-                    return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (bit_offset != 0U) {
                 uint64_t shift_bits = (uint64_t)bit_offset;
 
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                operation.span = span;
-                operation_source_type = storage_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&operation.value.integer_value, &shift_bits, sizeof(shift_bits));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &constant)) {
+                if (!bit_field_constant(context, span, storage_type, shift_bits, &constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&operation, 0, sizeof(operation));
-                operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                operation.span = span;
-                operation_source_type = storage_type;
-                operation.result = MINIC_CORE_VALUE_INVALID;
-                operation.value.binary.left = field_storage;
-                operation.value.binary.right = constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &operation, operation_source_type, &field_storage)) {
+                if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT,
+                                      storage_type, field_storage, constant, &field_storage))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
 
             field_mask = low_mask << bit_offset;
             storage_mask = minic_integer_mask64(storage_width);
             clear_mask = (~field_mask) & storage_mask;
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            operation.span = span;
-            operation_source_type = storage_type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            (void)memcpy(&operation.value.integer_value, &clear_mask, sizeof(clear_mask));
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &operation, operation_source_type, &constant)) {
+            if (!bit_field_constant(context, span, storage_type, clear_mask, &constant))
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-            operation.span = span;
-            operation_source_type = storage_type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.binary.left = current;
-            operation.value.binary.right = constant;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &operation, operation_source_type, &merged)) {
+            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                  storage_type, current, constant, &merged))
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&operation, 0, sizeof(operation));
-            operation.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-            operation.span = span;
-            operation_source_type = storage_type;
-            operation.result = MINIC_CORE_VALUE_INVALID;
-            operation.value.binary.left = merged;
-            operation.value.binary.right = field_storage;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &operation, operation_source_type, &merged)) {
+            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
+                                  storage_type, merged, field_storage, &merged))
                 return MINIC_CORE_LOWER_ERROR;
-            }
             bit_status = core_bit_field_store_storage(
                 context, span, address, merged, narrow, byte_count,
                 minic_type_is_volatile(target->type));
@@ -554,8 +457,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
         const MinicExpression *base;
         const MinicRecord *record;
         const MinicRecordField *field;
-        MinicCoreInstruction extract;
-        MinicType extract_source_type = minic_type_void();
         MinicCoreValueId address_id;
         MinicCoreValueId base_id;
         MinicCoreValueId current;
@@ -634,51 +535,19 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 byte_count, minic_type_is_volatile(expression->type), &current);
             if (status != MINIC_CORE_LOWER_OK) return status;
             if (bit_offset != 0U) {
-                (void)memset(&extract, 0, sizeof(extract));
-                extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                extract.span = expression->span;
-                extract_source_type = minic_type_unsigned_int();
-                extract.result = MINIC_CORE_VALUE_INVALID;
-                extract.value.integer_value = (int64_t)bit_offset;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &extract, extract_source_type, &rhs)) {
+                if (!bit_field_constant(context, expression->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &rhs))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&extract, 0, sizeof(extract));
-                extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                extract.span = expression->span;
-                extract_source_type = storage_type;
-                extract.result = MINIC_CORE_VALUE_INVALID;
-                extract.value.binary.left = current;
-                extract.value.binary.right = rhs;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &extract, extract_source_type, &current)) {
+                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                                      storage_type, current, rhs, &current))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (field->bit_width < storage_width) {
                 mask_bits = minic_integer_mask64(field->bit_width);
-                (void)memset(&extract, 0, sizeof(extract));
-                extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                extract.span = expression->span;
-                extract_source_type = storage_type;
-                extract.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&extract.value.integer_value, &mask_bits, sizeof(mask_bits));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &extract, extract_source_type, &rhs)) {
+                if (!bit_field_constant(context, expression->span, storage_type, mask_bits, &rhs))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&extract, 0, sizeof(extract));
-                extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-                extract.span = expression->span;
-                extract_source_type = storage_type;
-                extract.result = MINIC_CORE_VALUE_INVALID;
-                extract.value.binary.left = current;
-                extract.value.binary.right = rhs;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &extract, extract_source_type, &current)) {
+                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                      storage_type, current, rhs, &current))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (minic_type_is_unsigned_integer(value_type)) {
                 if (minic_type_equal(storage_type, value_type)) {
@@ -703,41 +572,8 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                     return status;
                 }
                 if (field->bit_width < value_width) {
-                    MinicCoreValueId shift;
-                    uint64_t shift_bits = (uint64_t)(value_width - field->bit_width);
-
-                    (void)memset(&extract, 0, sizeof(extract));
-                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                    extract.span = expression->span;
-                    extract_source_type = minic_type_unsigned_int();
-                    extract.result = MINIC_CORE_VALUE_INVALID;
-                    (void)memcpy(&extract.value.integer_value, &shift_bits, sizeof(shift_bits));
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source, context->block_id, &extract, extract_source_type, &shift)) {
+                    if (!bit_field_sign_extend(context, expression->span, value_type, (uint64_t)(value_width - field->bit_width), &signed_current))
                         return MINIC_CORE_LOWER_ERROR;
-                    }
-                    (void)memset(&extract, 0, sizeof(extract));
-                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                    extract.span = expression->span;
-                    extract_source_type = value_type;
-                    extract.result = MINIC_CORE_VALUE_INVALID;
-                    extract.value.binary.left = signed_current;
-                    extract.value.binary.right = shift;
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source, context->block_id, &extract, extract_source_type, &signed_current)) {
-                        return MINIC_CORE_LOWER_ERROR;
-                    }
-                    (void)memset(&extract, 0, sizeof(extract));
-                    extract.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                    extract.span = expression->span;
-                    extract_source_type = value_type;
-                    extract.result = MINIC_CORE_VALUE_INVALID;
-                    extract.value.binary.left = signed_current;
-                    extract.value.binary.right = shift;
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source, context->block_id, &extract, extract_source_type, &signed_current)) {
-                        return MINIC_CORE_LOWER_ERROR;
-                    }
                 }
                 *value_id = signed_current;
                 return MINIC_CORE_LOWER_OK;
@@ -909,53 +745,19 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 minic_type_is_volatile(bit_target->type), &bit_current);
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             if (bit_offset != 0U) {
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = minic_type_unsigned_int();
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.integer_value = (int64_t)bit_offset;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_constant)) {
+                if (!bit_field_constant(context, bit_target->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &bit_constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_current;
-                bit_instruction.value.binary.right = bit_constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_current)) {
+                if (!bit_field_binary(context, bit_target->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                                      bit_storage_type, bit_current, bit_constant, &bit_current))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             bit_low_mask = minic_integer_mask64(bit_field->bit_width);
             if (bit_field->bit_width < bit_storage_width) {
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&bit_instruction.value.integer_value,
-                             &bit_low_mask,
-                             sizeof(bit_low_mask));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_constant)) {
+                if (!bit_field_constant(context, bit_target->span, bit_storage_type, bit_low_mask, &bit_constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_current;
-                bit_instruction.value.binary.right = bit_constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_current)) {
+                if (!bit_field_binary(context, bit_target->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                      bit_storage_type, bit_current, bit_constant, &bit_current))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (!minic_type_equal(bit_storage_type, bit_value_type)) {
                 bit_status = minic_core_lower_internal_append_integer_conversion(context,
@@ -969,53 +771,8 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             }
             if (minic_type_is_signed_integer(bit_value_type) &&
                 bit_field->bit_width < bit_semantic_width) {
-                MinicCoreValueId bit_sign_shift;
-                uint64_t bit_sign_shift_bits =
-                    (uint64_t)(bit_semantic_width - bit_field->bit_width);
-
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = minic_type_unsigned_int();
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&bit_instruction.value.integer_value,
-                             &bit_sign_shift_bits,
-                             sizeof(bit_sign_shift_bits));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_sign_shift)) {
+                if (!bit_field_sign_extend(context, bit_target->span, bit_value_type, (uint64_t)(bit_semantic_width - bit_field->bit_width), &bit_current))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = bit_value_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_current;
-                bit_instruction.value.binary.right = bit_sign_shift;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_current)) {
-                    return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                bit_instruction.span = bit_target->span;
-                bit_instruction_source_type = bit_value_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_current;
-                bit_instruction.value.binary.right = bit_sign_shift;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_current)) {
-                    return MINIC_CORE_LOWER_ERROR;
-                }
             }
             bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                    bit_target->span,
@@ -1130,35 +887,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 }
             }
             if (bit_field->bit_width < bit_storage_width) {
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                bit_instruction.span = expression->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&bit_instruction.value.integer_value,
-                             &bit_low_mask,
-                             sizeof(bit_low_mask));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_constant)) {
+                if (!bit_field_constant(context, expression->span, bit_storage_type, bit_low_mask, &bit_constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-                bit_instruction.span = expression->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_field_storage;
-                bit_instruction.value.binary.right = bit_constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_field_storage)) {
+                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                      bit_storage_type, bit_field_storage, bit_constant, &bit_field_storage))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             if (minic_type_is_signed_integer(bit_value_type)) {
                 if (!minic_type_equal(bit_storage_type, bit_value_type)) {
@@ -1174,86 +907,17 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                     bit_stored_value = bit_field_storage;
                 }
                 if (bit_field->bit_width < bit_semantic_width) {
-                    MinicCoreValueId bit_sign_shift;
-                    uint64_t bit_sign_shift_bits =
-                        (uint64_t)(bit_semantic_width - bit_field->bit_width);
-
-                    (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                    bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                    bit_instruction.span = expression->span;
-                    bit_instruction_source_type = minic_type_unsigned_int();
-                    bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                    (void)memcpy(&bit_instruction.value.integer_value,
-                                 &bit_sign_shift_bits,
-                                 sizeof(bit_sign_shift_bits));
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source,
-                            context->block_id,
-                            &bit_instruction, bit_instruction_source_type,
-                            &bit_sign_shift)) {
+                    if (!bit_field_sign_extend(context, expression->span, bit_value_type, (uint64_t)(bit_semantic_width - bit_field->bit_width), &bit_stored_value))
                         return MINIC_CORE_LOWER_ERROR;
-                    }
-                    (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                    bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                    bit_instruction.span = expression->span;
-                    bit_instruction_source_type = bit_value_type;
-                    bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                    bit_instruction.value.binary.left = bit_stored_value;
-                    bit_instruction.value.binary.right = bit_sign_shift;
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source,
-                            context->block_id,
-                            &bit_instruction, bit_instruction_source_type,
-                            &bit_stored_value)) {
-                        return MINIC_CORE_LOWER_ERROR;
-                    }
-                    (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                    bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-                    bit_instruction.span = expression->span;
-                    bit_instruction_source_type = bit_value_type;
-                    bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                    bit_instruction.value.binary.left = bit_stored_value;
-                    bit_instruction.value.binary.right = bit_sign_shift;
-                    if (!minic_core_function_append_source_value_instruction(
-                            context->source,
-                            context->block_id,
-                            &bit_instruction, bit_instruction_source_type,
-                            &bit_stored_value)) {
-                        return MINIC_CORE_LOWER_ERROR;
-                    }
                 }
             }
             if (bit_offset != 0U) {
                 uint64_t bit_shift = (uint64_t)bit_offset;
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-                bit_instruction.span = expression->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                (void)memcpy(&bit_instruction.value.integer_value,
-                             &bit_shift,
-                             sizeof(bit_shift));
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_constant)) {
+                if (!bit_field_constant(context, expression->span, bit_storage_type, bit_shift, &bit_constant))
                     return MINIC_CORE_LOWER_ERROR;
-                }
-                (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-                bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-                bit_instruction.span = expression->span;
-                bit_instruction_source_type = bit_storage_type;
-                bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-                bit_instruction.value.binary.left = bit_field_storage;
-                bit_instruction.value.binary.right = bit_constant;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source,
-                        context->block_id,
-                        &bit_instruction, bit_instruction_source_type,
-                        &bit_field_storage)) {
+                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT,
+                                      bit_storage_type, bit_field_storage, bit_constant, &bit_field_storage))
                     return MINIC_CORE_LOWER_ERROR;
-                }
             }
             bit_field_mask = bit_low_mask << bit_offset;
             bit_storage_mask = minic_integer_mask64(bit_storage_width);
@@ -1263,40 +927,14 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 bit_narrow, bit_byte_count,
                 minic_type_is_volatile(bit_target->type), &bit_merge_current);
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-            bit_instruction.span = expression->span;
-            bit_instruction_source_type = bit_storage_type;
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            (void)memcpy(&bit_instruction.value.integer_value,
-                         &bit_clear_mask,
-                         sizeof(bit_clear_mask));
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_constant)) {
+            if (!bit_field_constant(context, expression->span, bit_storage_type, bit_clear_mask, &bit_constant))
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-            bit_instruction.span = expression->span;
-            bit_instruction_source_type = bit_storage_type;
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            bit_instruction.value.binary.left = bit_merge_current;
-            bit_instruction.value.binary.right = bit_constant;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_merged)) {
+            if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                                  bit_storage_type, bit_merge_current, bit_constant, &bit_merged))
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            (void)memset(&bit_instruction, 0, sizeof(bit_instruction));
-            bit_instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-            bit_instruction.span = expression->span;
-            bit_instruction_source_type = bit_storage_type;
-            bit_instruction.result = MINIC_CORE_VALUE_INVALID;
-            bit_instruction.value.binary.left = bit_merged;
-            bit_instruction.value.binary.right = bit_field_storage;
-            if (!minic_core_function_append_source_value_instruction(
-                    context->source, context->block_id, &bit_instruction, bit_instruction_source_type, &bit_merged)) {
+            if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
+                                  bit_storage_type, bit_merged, bit_field_storage, &bit_merged))
                 return MINIC_CORE_LOWER_ERROR;
-            }
             bit_status = core_bit_field_store_storage(
                 context, expression->span, bit_address, bit_merged,
                 bit_narrow, bit_byte_count,
@@ -1422,51 +1060,19 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     if (status != MINIC_CORE_LOWER_OK) return status;
     shifted_current = current_storage;
     if (bit_offset != 0U) {
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = operand->span;
-        instruction_source_type = minic_type_unsigned_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.integer_value = (int64_t)bit_offset;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+        if (!bit_field_constant(context, operand->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &constant))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-        instruction.span = operand->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = shifted_current;
-        instruction.value.binary.right = constant;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &shifted_current)) {
+        if (!bit_field_binary(context, operand->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                              storage_type, shifted_current, constant, &shifted_current))
             return MINIC_CORE_LOWER_ERROR;
-        }
     }
     low_mask = minic_integer_mask64(field->bit_width);
     if (field->bit_width < storage_width) {
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = operand->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        (void)memcpy(&instruction.value.integer_value, &low_mask, sizeof(low_mask));
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+        if (!bit_field_constant(context, operand->span, storage_type, low_mask, &constant))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-        instruction.span = operand->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = shifted_current;
-        instruction.value.binary.right = constant;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &shifted_current)) {
+        if (!bit_field_binary(context, operand->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                              storage_type, shifted_current, constant, &shifted_current))
             return MINIC_CORE_LOWER_ERROR;
-        }
     }
     current_field = shifted_current;
     if (!minic_type_equal(storage_type, value_type)) {
@@ -1481,41 +1087,8 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
        promotion, matching M103 signed bit-field reads and preserving postfix
        result semantics. */
     if (minic_type_is_signed_integer(value_type) && field->bit_width < semantic_width) {
-        MinicCoreValueId sign_shift;
-        uint64_t sign_shift_bits = (uint64_t)(semantic_width - field->bit_width);
-
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = operand->span;
-        instruction_source_type = minic_type_unsigned_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        (void)memcpy(&instruction.value.integer_value, &sign_shift_bits, sizeof(sign_shift_bits));
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &sign_shift)) {
+        if (!bit_field_sign_extend(context, operand->span, value_type, (uint64_t)(semantic_width - field->bit_width), &current_field))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-        instruction.span = operand->span;
-        instruction_source_type = value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = current_field;
-        instruction.value.binary.right = sign_shift;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &current_field)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-        instruction.span = operand->span;
-        instruction_source_type = value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = current_field;
-        instruction.value.binary.right = sign_shift;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &current_field)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
     }
     status = minic_core_lower_internal_append_integer_conversion(
         context, operand->span, promoted_type, current_field, &current_promoted);
@@ -1523,16 +1096,8 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         return status;
     }
 
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.span = expression->span;
-    instruction_source_type = promoted_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.integer_value = 1;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+    if (!bit_field_constant(context, expression->span, promoted_type, (uint64_t)(1), &constant))
         return MINIC_CORE_LOWER_ERROR;
-    }
     (void)memset(&instruction, 0, sizeof(instruction));
     instruction.kind = increment ? MINIC_CORE_INSTRUCTION_INTEGER_ADD
                                  : MINIC_CORE_INSTRUCTION_INTEGER_SUBTRACT;
@@ -1559,27 +1124,11 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         }
     }
     if (field->bit_width < storage_width) {
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        (void)memcpy(&instruction.value.integer_value, &low_mask, sizeof(low_mask));
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+        if (!bit_field_constant(context, expression->span, storage_type, low_mask, &constant))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-        instruction.span = expression->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = field_storage;
-        instruction.value.binary.right = constant;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &field_storage)) {
+        if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                              storage_type, field_storage, constant, &field_storage))
             return MINIC_CORE_LOWER_ERROR;
-        }
     }
     /* Prefix update yields the value actually stored in the bit-field, not an
        untruncated arithmetic temporary.  Rebuild that value from the masked
@@ -1594,102 +1143,29 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         }
     }
     if (minic_type_is_signed_integer(value_type) && field->bit_width < semantic_width) {
-        MinicCoreValueId sign_shift;
-        uint64_t sign_shift_bits = (uint64_t)(semantic_width - field->bit_width);
-
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction_source_type = minic_type_unsigned_int();
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        (void)memcpy(&instruction.value.integer_value, &sign_shift_bits, sizeof(sign_shift_bits));
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &sign_shift)) {
+        if (!bit_field_sign_extend(context, expression->span, value_type, (uint64_t)(semantic_width - field->bit_width), &updated_value))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-        instruction.span = expression->span;
-        instruction_source_type = value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = updated_value;
-        instruction.value.binary.right = sign_shift;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &updated_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT;
-        instruction.span = expression->span;
-        instruction_source_type = value_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = updated_value;
-        instruction.value.binary.right = sign_shift;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &updated_value)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
     }
     if (bit_offset != 0U) {
         uint64_t shift = (uint64_t)bit_offset;
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-        instruction.span = expression->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        (void)memcpy(&instruction.value.integer_value, &shift, sizeof(shift));
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+        if (!bit_field_constant(context, expression->span, storage_type, shift, &constant))
             return MINIC_CORE_LOWER_ERROR;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT;
-        instruction.span = expression->span;
-        instruction_source_type = storage_type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.binary.left = field_storage;
-        instruction.value.binary.right = constant;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &instruction, instruction_source_type, &field_storage)) {
+        if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT,
+                              storage_type, field_storage, constant, &field_storage))
             return MINIC_CORE_LOWER_ERROR;
-        }
     }
 
     field_mask = low_mask << bit_offset;
     storage_mask = minic_integer_mask64(storage_width);
     clear_mask = (~field_mask) & storage_mask;
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT;
-    instruction.span = expression->span;
-    instruction_source_type = storage_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    (void)memcpy(&instruction.value.integer_value, &clear_mask, sizeof(clear_mask));
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &instruction, instruction_source_type, &constant)) {
+    if (!bit_field_constant(context, expression->span, storage_type, clear_mask, &constant))
         return MINIC_CORE_LOWER_ERROR;
-    }
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-    instruction.span = expression->span;
-    instruction_source_type = storage_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.binary.left = current_storage;
-    instruction.value.binary.right = constant;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &instruction, instruction_source_type, &merged)) {
+    if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                          storage_type, current_storage, constant, &merged))
         return MINIC_CORE_LOWER_ERROR;
-    }
-    (void)memset(&instruction, 0, sizeof(instruction));
-    instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-    instruction.span = expression->span;
-    instruction_source_type = storage_type;
-    instruction.result = MINIC_CORE_VALUE_INVALID;
-    instruction.value.binary.left = merged;
-    instruction.value.binary.right = field_storage;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &instruction, instruction_source_type, &merged)) {
+    if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
+                          storage_type, merged, field_storage, &merged))
         return MINIC_CORE_LOWER_ERROR;
-    }
     status = core_bit_field_store_storage(
         context, expression->span, address, merged, narrow, byte_count,
         minic_type_is_volatile(operand->type));

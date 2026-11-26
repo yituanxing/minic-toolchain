@@ -787,13 +787,6 @@ static bool verify_expression(const MinicC0Program *program,
     }
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
-        operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL &&
-               minic_target_info_va_cursor_source_operand_supported(
-                   target, program, operand->type,
-                   operand->value_category == MINIC_VALUE_LVALUE) &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return operand != NULL &&
@@ -801,11 +794,13 @@ static bool verify_expression(const MinicC0Program *program,
                    target, program, operand->type,
                    operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               (minic_type_is_integer(expression->type) ||
-                minic_type_is_pointer(expression->type) ||
-                minic_type_is_double(expression->type) ||
-                (minic_type_is_record(expression->type) &&
-                 minic_c0_type_is_complete_object(program, expression->type)));
+               (expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG
+                ? minic_type_is_void(expression->type)
+                : (minic_type_is_integer(expression->type) ||
+                   minic_type_is_pointer(expression->type) ||
+                   minic_type_is_double(expression->type) ||
+                   (minic_type_is_record(expression->type) &&
+                    minic_c0_type_is_complete_object(program, expression->type))));
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
