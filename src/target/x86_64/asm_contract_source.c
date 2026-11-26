@@ -2770,58 +2770,39 @@ static bool x86_linux_xadd_integer_width(MinicType type, size_t width) {
     }
 }
 
-static bool x86_linux_smp_xadd_source(const MinicC0Program *program,
-    const MinicInlineAsm *src,MinicTargetInlineAsmContract *contract,
-    MinicX86GsAtomicPlan plan) {
-    const size_t width=plan.kind==MINIC_X86_GS_ATOMIC_XADD_SMP?plan.width:0U;
-    const MinicExpression *reg,*mem;
-    MinicType rt,mt;
-    if(!program||!src||!contract||!width||!src->is_volatile||src->is_goto||
-        !src->outputs||src->output_count!=2U||src->input_count||
-        src->label_count||!src->has_memory_clobber||src->clobber_count!=2U||
-        src->register_clobber_count!=1U||!src->register_clobbers||
-        !clobber_is(&src->register_clobbers[0],"cc")||
-        !c_is(&src->outputs[0],width==1U?"+q":"+r")||
-        !c_is(&src->outputs[1],"+m"))return false;
-    reg=minic_c0_program_expression(program,src->outputs[0].expression);
-    mem=minic_c0_program_expression(program,src->outputs[1].expression);
-    if(!reg||!mem||reg->value_category!=MINIC_VALUE_LVALUE||
-        mem->value_category!=MINIC_VALUE_LVALUE||
-        minic_type_is_const(reg->type)||minic_type_is_const(mem->type)||
-        !minic_type_unqualified(reg->type,&rt)||
-        !minic_type_unqualified(mem->type,&mt)||
-        !x86_linux_xadd_integer_width(rt,width) ||
-        !x86_linux_xadd_integer_width(mt,width))return false;
-    contract->operand_count=2U;
-    contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
-    contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE;
-    return true;
-}
-static bool x86_linux_local_xadd_source(
-    const MinicC0Program *program, const MinicInlineAsm *src,
+/* SMP and local XADD share the same writable C operand/width contract;
+ * only the cc clobber and the byte-register constraint differ. */
+static bool x86_linux_smp_local_xadd_source(
+    const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract, MinicX86GsAtomicPlan plan) {
+    const bool smp = plan.kind == MINIC_X86_GS_ATOMIC_XADD_SMP;
+    const size_t width = smp ||
+        plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL ? plan.width : 0U;
     const MinicExpression *reg, *mem;
     MinicType reg_type, mem_type;
-    const size_t width = plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL ?
-        plan.width : 0U;
-    if (!program || !src || !contract || !width ||
-        !src->is_volatile || src->is_goto ||
-        !src->outputs || src->output_count != 2U ||
-        src->input_count != 0U || src->label_count != 0U ||
-        !src->has_memory_clobber || src->clobber_count != 1U ||
-        src->register_clobber_count != 0U ||
-        !target_constraint_is(&src->outputs[0], "+r") ||
-        !target_constraint_is(&src->outputs[1], "+m")) return false;
-    reg = minic_c0_program_expression(program, src->outputs[0].expression);
-    mem = minic_c0_program_expression(program, src->outputs[1].expression);
+    if (!program || !source || !contract || !width ||
+        !source->is_volatile || source->is_goto ||
+        source->output_count != 2U || !source->outputs ||
+        source->input_count || source->label_count ||
+        !source->has_memory_clobber ||
+        source->clobber_count != (smp ? 2U : 1U) ||
+        source->register_clobber_count != (smp ? 1U : 0U) ||
+        (smp && (!source->register_clobbers ||
+                 !clobber_is(&source->register_clobbers[0], "cc"))) ||
+        !target_constraint_is(&source->outputs[0],
+            smp && width == 1U ? "+q" : "+r") ||
+        !target_constraint_is(&source->outputs[1], "+m"))
+        return false;
+    reg = minic_c0_program_expression(program, source->outputs[0].expression);
+    mem = minic_c0_program_expression(program, source->outputs[1].expression);
     if (!reg || !mem ||
         reg->value_category != MINIC_VALUE_LVALUE ||
         mem->value_category != MINIC_VALUE_LVALUE ||
         minic_type_is_const(reg->type) || minic_type_is_const(mem->type) ||
         !minic_type_unqualified(reg->type, &reg_type) ||
         !minic_type_unqualified(mem->type, &mem_type) ||
-        !x86_linux_xadd_integer_width(reg_type,width) ||
-        !x86_linux_xadd_integer_width(mem_type,width))
+        !x86_linux_xadd_integer_width(reg_type, width) ||
+        !x86_linux_xadd_integer_width(mem_type, width))
         return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -2930,9 +2911,9 @@ static bool x86_linux_gs_atomic_source(const MinicTargetInvocation *invocation,
         (MinicX86GsAtomicPlan){0};
     switch (plan.kind) {
     case MINIC_X86_GS_ATOMIC_XADD_SMP:
-        return x86_linux_smp_xadd_source(program, source, contract, plan);
+        return x86_linux_smp_local_xadd_source(program, source, contract, plan);
     case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
-        return x86_linux_local_xadd_source(program, source, contract, plan);
+        return x86_linux_smp_local_xadd_source(program, source, contract, plan);
     case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
         return x86_linux_percpu_xadd_source(invocation, program, source,
                                             contract, plan);
