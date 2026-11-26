@@ -1714,9 +1714,6 @@ static bool x86_linux_ip_here_source(const MinicTargetInvocation *invocation,
     contract->target_machine_form_variant = 1U;
     return true;
 }
-static bool c_is(const MinicInlineAsmOperand *op, const char *s) {
-    return target_constraint_is(op, s);
-}
 static bool clobber_is(const MinicInlineAsmRegisterClobber *op, const char *s) {
     const size_t n = strlen(s);
     return op->name && op->name_length == n && memcmp(op->name, s, n) == 0;
@@ -1766,8 +1763,8 @@ static bool x86_counter_source(const MinicTargetInvocation *invocation, const Mi
        s->register_clobber_count!=((f==3U||f==4U)?1U:0U)||
        ((f==3U||f==4U)&&(!s->register_clobbers||
         !clobber_is(&s->register_clobbers[0],"ecx")))||
-       !c_is(&s->outputs[0],"=a")||!c_is(&s->outputs[1],"=d")||
-       ((f==2U||f==5U)&&!c_is(&s->inputs[0],"c")))return false;
+       !target_constraint_is(&s->outputs[0],"=a")||!target_constraint_is(&s->outputs[1],"=d")||
+       ((f==2U||f==5U)&&!target_constraint_is(&s->inputs[0],"c")))return false;
     e0=minic_c0_program_expression(p,s->outputs[0].expression);
     e1=minic_c0_program_expression(p,s->outputs[1].expression);
     if(!e0||!e1||e0->value_category!=MINIC_VALUE_LVALUE||
@@ -1901,7 +1898,7 @@ static bool x86_hweight_source(const MinicTargetInvocation *invocation, const Mi
        s->has_memory_clobber||s->label_count||s->clobber_count||
        s->register_clobber_count||s->output_count!=1U||
        s->input_count!=1U||!s->outputs||!s->inputs||
-       !c_is(&s->outputs[0],"=a")||!c_is(&s->inputs[0],"D"))return false;
+       !target_constraint_is(&s->outputs[0],"=a")||!target_constraint_is(&s->inputs[0],"D"))return false;
     out=minic_c0_program_expression(program,s->outputs[0].expression);
     arg=minic_c0_program_expression(program,s->inputs[0].expression);
     if(!out||!arg||out->value_category!=MINIC_VALUE_LVALUE||
@@ -1949,7 +1946,7 @@ static bool x86_linux_vmware_hypercall_source(const MinicTargetInvocation *invoc
         char expected[4];
         expected[0] = '='; expected[1] = regs[i % 4U][0];
         expected[2] = '\0';
-        if (!c_is(operand, output ? expected : regs[i % 4U]) ||
+        if (!target_constraint_is(operand, output ? expected : regs[i % 4U]) ||
             !expression || !minic_type_unqualified(expression->type, &type) ||
             !(minic_type_equal(type, minic_type_unsigned_int()) ||
               (!output && minic_type_equal(type, minic_type_int()))) ||
@@ -1977,7 +1974,7 @@ static bool x86_linux_legacy_fnsave_source(const MinicTargetInvocation *invocati
         source->output_count != 1U || source->input_count || !source->outputs ||
         source->has_memory_clobber || source->clobber_count ||
         source->register_clobber_count ||
-        !c_is(&source->outputs[0], "=m")) return false;
+        !target_constraint_is(&source->outputs[0], "=m")) return false;
     /* Only the two exact FNSAVE templates are accepted. The named form
      * requires GNU [fp], while the positional %0 form has no operand name. */
     if (memchr(source->template_text, '[', source->template_length) != NULL) {
@@ -2011,7 +2008,7 @@ static bool x86_linux_kexec_load_segments_source(const MinicTargetInvocation *in
         !source->is_volatile || source->is_goto || source->label_count ||
         source->output_count || source->input_count != 1U || !source->inputs ||
         !source->has_memory_clobber || source->clobber_count != 1U ||
-        source->register_clobber_count || !c_is(&source->inputs[0], "a"))
+        source->register_clobber_count || !target_constraint_is(&source->inputs[0], "a"))
         return false;
     selector = minic_c0_program_expression(program,
         source->inputs[0].expression);
@@ -2036,8 +2033,8 @@ static bool x86_linux_efi_kernel_transfer_source(const MinicTargetInvocation *in
         source->input_count != 2U || !source->inputs ||
         source->clobber_count || source->has_memory_clobber ||
         source->register_clobber_count ||
-        !c_is(&source->inputs[0], "r") ||
-        !c_is(&source->inputs[1], "S")) return false;
+        !target_constraint_is(&source->inputs[0], "r") ||
+        !target_constraint_is(&source->inputs[1], "S")) return false;
     entry = minic_c0_program_expression(program,
         source->inputs[0].expression);
     boot = minic_c0_program_expression(program,
@@ -2068,12 +2065,12 @@ static bool x86_linux_msr_source(const MinicTargetInvocation *invocation, const 
            src->clobber_count!=(form==4U?1U:0U) ||
            src->has_memory_clobber!=(form==4U) ||
            src->register_clobber_count ||
-           !c_is(&src->outputs[0],form==3U?"=r":"=a") ||
-           (form==3U && (!c_is(&src->outputs[1],"=a") ||
-                          !c_is(&src->outputs[2],"=d"))) ||
-           !c_is(&src->inputs[0],"c") ||
-           (form==4U && (!c_is(&src->inputs[1],"0") ||
-                          !c_is(&src->inputs[2],"d"))))return false;
+           !target_constraint_is(&src->outputs[0],form==3U?"=r":"=a") ||
+           (form==3U && (!target_constraint_is(&src->outputs[1],"=a") ||
+                          !target_constraint_is(&src->outputs[2],"=d"))) ||
+           !target_constraint_is(&src->inputs[0],"c") ||
+           (form==4U && (!target_constraint_is(&src->inputs[1],"0") ||
+                          !target_constraint_is(&src->inputs[2],"d"))))return false;
         for(i=0U;i<outputs+inputs;++i) {
             const bool output=i<outputs;
             const MinicInlineAsmOperand *op=output ? &src->outputs[i] :
@@ -2103,12 +2100,12 @@ static bool x86_linux_msr_source(const MinicTargetInvocation *invocation, const 
        src->has_memory_clobber!=(form==2U||form==6U)||
        src->register_clobber_count)return false;
     if(form==1U || form==5U) {
-        if(!c_is(&src->outputs[0],"=a")||
-           !c_is(&src->outputs[1],"=d")||
-           !c_is(&src->inputs[0],"c"))return false;
-    }else if(!c_is(&src->inputs[0],"c")||
-             !c_is(&src->inputs[1],"a")||
-             !c_is(&src->inputs[2],"d"))return false;
+        if(!target_constraint_is(&src->outputs[0],"=a")||
+           !target_constraint_is(&src->outputs[1],"=d")||
+           !target_constraint_is(&src->inputs[0],"c"))return false;
+    }else if(!target_constraint_is(&src->inputs[0],"c")||
+             !target_constraint_is(&src->inputs[1],"a")||
+             !target_constraint_is(&src->inputs[2],"d"))return false;
     for(i=0U;i<src->output_count+src->input_count;++i){
         const bool output=i<src->output_count;
         const MinicInlineAsmOperand *op=output?
@@ -2145,7 +2142,7 @@ static bool x86_ip_fast_csum_source(const MinicTargetInvocation *invocation, con
         s->clobber_count!=1U || s->register_clobber_count || s->label_count)
         return false;
     for(i=0U;i<3U;++i) {
-        if(!c_is(&s->outputs[i],"=r"))return false;
+        if(!target_constraint_is(&s->outputs[i],"=r"))return false;
         expr=minic_c0_program_expression(p,s->outputs[i].expression);
         if(!expr || expr->value_category!=MINIC_VALUE_LVALUE ||
             minic_type_is_const(expr->type) ||
@@ -2154,7 +2151,7 @@ static bool x86_ip_fast_csum_source(const MinicTargetInvocation *invocation, con
                 (!minic_type_is_integer(type) ||
                  type.integer_rank!=MINIC_INTEGER_RANK_INT))) return false;
     }
-    if (!c_is(&s->inputs[0],"1") || !c_is(&s->inputs[1],"2"))return false;
+    if (!target_constraint_is(&s->inputs[0],"1") || !target_constraint_is(&s->inputs[1],"2"))return false;
     for(i=0U;i<2U;++i) {
         expr=minic_c0_program_expression(p,s->inputs[i].expression);
         if(!expr || !minic_type_unqualified(expr->type,&type) ||
@@ -2179,8 +2176,8 @@ static bool x86_checksum_source(const MinicTargetInvocation *invocation, const M
        src->has_memory_clobber||
        !minic_x86_64_checksum_fold_template(
            src->template_text,src->template_length)||
-       !c_is(&src->outputs[0],"=r")||
-       !c_is(&src->inputs[0],"r")||!c_is(&src->inputs[1],"0"))
+       !target_constraint_is(&src->outputs[0],"=r")||
+       !target_constraint_is(&src->inputs[0],"r")||!target_constraint_is(&src->inputs[1],"0"))
         return false;
     for(i=0U;i<3U;++i){
         const MinicInlineAsmOperand *op=i==0U?
@@ -2219,10 +2216,10 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
        !src->outputs||(src->input_count&&!src->inputs))
         return false;
     if(op==0U){
-        if(!c_is(&src->outputs[0],width==1U?"=q":"=r")||
-           !c_is(&src->inputs[0],stable?"p":"m"))return false;
-    }else if(!c_is(&src->outputs[0],"+m")||
-             (src->input_count&&!c_is(&src->inputs[0],
+        if(!target_constraint_is(&src->outputs[0],width==1U?"=q":"=r")||
+           !target_constraint_is(&src->inputs[0],stable?"p":"m"))return false;
+    }else if(!target_constraint_is(&src->outputs[0],"+m")||
+             (src->input_count&&!target_constraint_is(&src->inputs[0],
                 width==1U?"qi":width==8U?"re":"ri")))
         return false;
     for(i=0U;i<1U+src->input_count;++i){
@@ -2275,9 +2272,9 @@ static bool x86_gs_tied_alu_source(const MinicTargetInvocation *invocation,
         src->outputs == NULL || src->inputs == NULL ||
         src->label_count || src->clobber_count ||
         src->register_clobber_count || src->has_memory_clobber ||
-        !c_is(&src->outputs[0],"=r") ||
-        !c_is(&src->inputs[0],"m") ||
-        !c_is(&src->inputs[1],"0"))
+        !target_constraint_is(&src->outputs[0],"=r") ||
+        !target_constraint_is(&src->inputs[0],"m") ||
+        !target_constraint_is(&src->inputs[1],"0"))
         return false;
     op=minic_x86_64_gs_tied_alu_form(
         src->template_text, src->template_length, &opcode_width);
@@ -2337,11 +2334,11 @@ static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
     contract->target_machine_form_variant=form;
     if(form==1U){
         const MinicExpression *reg,*mem,*seed,*memory_input,*zero;
-        if(!c_is(&src->outputs[0],"=r")||
-           !c_is(&src->outputs[1],"=m")||
-           !c_is(&src->inputs[0],"i")||
-           !c_is(&src->inputs[1],"0")||
-           !c_is(&src->inputs[2],"m"))return false;
+        if(!target_constraint_is(&src->outputs[0],"=r")||
+           !target_constraint_is(&src->outputs[1],"=m")||
+           !target_constraint_is(&src->inputs[0],"i")||
+           !target_constraint_is(&src->inputs[1],"0")||
+           !target_constraint_is(&src->inputs[2],"m"))return false;
         reg=minic_c0_program_expression(program,src->outputs[0].expression);
         mem=minic_c0_program_expression(program,src->outputs[1].expression);
         zero=minic_c0_program_expression(program,src->inputs[0].expression);
@@ -2369,9 +2366,9 @@ static bool x86_apic_amd_alt_source(const MinicTargetInvocation *invocation,
         contract->implicit_memory_effect=true;
         return true;
     }
-    if(!c_is(&src->inputs[0],"a")||
-       !c_is(&src->inputs[1],"d")||
-       !c_is(&src->inputs[2],"r"))return false;
+    if(!target_constraint_is(&src->inputs[0],"a")||
+       !target_constraint_is(&src->inputs[1],"d")||
+       !target_constraint_is(&src->inputs[2],"r"))return false;
     for(i=0U;i<3U;++i){
         const MinicExpression *e=minic_c0_program_expression(
             program,src->inputs[i].expression);
@@ -2394,7 +2391,7 @@ static bool x86_prefetchw_alt_source(const MinicTargetInvocation *invocation,
        src->has_memory_clobber||
        !minic_x86_64_linux_prefetchw_alt_form(
            src->template_text,src->template_length)||
-       !c_is(&src->inputs[0],"i")||!c_is(&src->inputs[1],"m"))
+       !target_constraint_is(&src->inputs[0],"i")||!target_constraint_is(&src->inputs[1],"m"))
         return false;
     imm=minic_c0_program_expression(program,src->inputs[0].expression);
     memory=minic_c0_program_expression(program,src->inputs[1].expression);
@@ -2452,8 +2449,8 @@ static bool x86_add32_carry_source(const MinicTargetInvocation *invocation, cons
        s->input_count!=2U||!s->outputs||!s->inputs||
        !minic_x86_64_add32_carry_template(
             s->template_text,s->template_length)||
-       !c_is(&s->outputs[0],"=r")||
-       !c_is(&s->inputs[0],"0")||!c_is(&s->inputs[1],"rm"))
+       !target_constraint_is(&s->outputs[0],"=r")||
+       !target_constraint_is(&s->inputs[0],"0")||!target_constraint_is(&s->inputs[1],"rm"))
         return false;
     for(i=0U;i<3U;++i){
         const MinicInlineAsmOperand *op=i==0U?
@@ -2487,10 +2484,10 @@ static bool x86_nospec_source(const MinicC0Program *program,
         !src->register_clobbers || src->has_memory_clobber ||
         !clobber_is(&src->register_clobbers[0], "cc") ||
         !minic_x86_64_asm_nospec_template(src->template_text, src->template_length) ||
-        !c_is(&src->outputs[0], "=r") ||
-        !(c_is(&src->inputs[0], "g") || c_is(&src->inputs[0], "rm") ||
-          c_is(&src->inputs[0], "r")) ||
-        !c_is(&src->inputs[1], "r"))
+        !target_constraint_is(&src->outputs[0], "=r") ||
+        !(target_constraint_is(&src->inputs[0], "g") || target_constraint_is(&src->inputs[0], "rm") ||
+          target_constraint_is(&src->inputs[0], "r")) ||
+        !target_constraint_is(&src->inputs[1], "r"))
         return false;
     out = minic_c0_program_expression(program, src->outputs[0].expression);
     size = minic_c0_program_expression(program, src->inputs[0].expression);
@@ -2906,7 +2903,6 @@ static bool x86_linux_gs_atomic_source(const MinicTargetInvocation *invocation,
         (MinicX86GsAtomicPlan){0};
     switch (plan.kind) {
     case MINIC_X86_GS_ATOMIC_XADD_SMP:
-        return x86_linux_smp_local_xadd_source(program, source, contract, plan);
     case MINIC_X86_GS_ATOMIC_XADD_LOCAL:
         return x86_linux_smp_local_xadd_source(program, source, contract, plan);
     case MINIC_X86_GS_ATOMIC_XADD_PERCPU:
@@ -3785,7 +3781,7 @@ static bool x86_zstd_cpuid_source(const MinicTargetInvocation *invocation,
             const MinicExpression *expr = minic_c0_program_expression(
                 program, source->outputs[i].expression);
             MinicType plain;
-            if (!c_is(&source->outputs[i], form_out[form][i]) || !expr ||
+            if (!target_constraint_is(&source->outputs[i], form_out[form][i]) || !expr ||
                 expr->value_category != MINIC_VALUE_LVALUE ||
                 minic_type_is_const(expr->type) ||
                 !minic_type_unqualified(expr->type, &plain) ||
@@ -3798,7 +3794,7 @@ static bool x86_zstd_cpuid_source(const MinicTargetInvocation *invocation,
             const MinicExpression *expr = minic_c0_program_expression(
                 program, source->inputs[i].expression);
             MinicType plain;
-            if (!c_is(&source->inputs[i], form_in[form][i]) || !expr ||
+            if (!target_constraint_is(&source->inputs[i], form_in[form][i]) || !expr ||
                 !minic_type_unqualified(expr->type, &plain) ||
                 (!minic_type_equal(plain, minic_type_unsigned_int()) &&
                  !minic_type_equal(plain, minic_type_int())))
@@ -3844,9 +3840,9 @@ static bool qualified(const MinicC0Program *program,
         cpuid = true;
         n = 4U;
         for (i = 0U; i < n; ++i)
-            if (!c_is(&src->outputs[i], cpuid_out[i])) return false;
+            if (!target_constraint_is(&src->outputs[i], cpuid_out[i])) return false;
         for (i = 0U; i < src->input_count; ++i)
-            if (!c_is(&src->inputs[i],
+            if (!target_constraint_is(&src->inputs[i],
                       cpuid_in[src->input_count == 2U && i == 1U ? 2U : i]))
                 return false;
     } else if (src->is_volatile && src->output_count == 3U &&
@@ -3861,29 +3857,29 @@ static bool qualified(const MinicC0Program *program,
         *is_mulacc = true;
         n = 3U;
         for (i = 0U; i < n; ++i)
-            if (!c_is(&src->outputs[i], "=rm") ||
-                !c_is(&src->inputs[i], mul_in[i])) return false;
-        if (!c_is(&src->inputs[3], "a") ||
-            !c_is(&src->inputs[4], "m")) return false;
+            if (!target_constraint_is(&src->outputs[i], "=rm") ||
+                !target_constraint_is(&src->inputs[i], mul_in[i])) return false;
+        if (!target_constraint_is(&src->inputs[3], "a") ||
+            !target_constraint_is(&src->inputs[4], "m")) return false;
     } else if (src->output_count == 1U && src->input_count >= 1U &&
                !src->has_memory_clobber &&
                src->clobber_count == 0U && src->register_clobber_count == 0U &&
                (bit_form = minic_x86_64_asm_bit_scan_form(
                    src->template_text, src->template_length)) !=
                    MINIC_X86_BIT_SCAN_NONE &&
-               (c_is(&src->inputs[0], "r") || c_is(&src->inputs[0], "rm")) &&
+               (target_constraint_is(&src->inputs[0], "r") || target_constraint_is(&src->inputs[0], "rm")) &&
                (((bit_form == MINIC_X86_BIT_SCAN_BSF64 ||
                   bit_form == MINIC_X86_BIT_SCAN_BSR64) &&
                  src->input_count == 1U &&
-                 c_is(&src->outputs[0], "=r")) ||
+                 target_constraint_is(&src->outputs[0], "=r")) ||
                 ((bit_form == MINIC_X86_BIT_SCAN_BSF32_TIED ||
                   bit_form == MINIC_X86_BIT_SCAN_BSR32_TIED) &&
                  src->input_count == 2U &&
-                 c_is(&src->outputs[0], "=r") &&
-                 c_is(&src->inputs[1], "0")) ||
+                 target_constraint_is(&src->outputs[0], "=r") &&
+                 target_constraint_is(&src->inputs[1], "0")) ||
                 (bit_form == MINIC_X86_BIT_SCAN_BSR64_READWRITE &&
                  src->input_count == 1U &&
-                 c_is(&src->outputs[0], "+r")))) {
+                 target_constraint_is(&src->outputs[0], "+r")))) {
         bit_scan = true;
     } else if (src->is_volatile && src->has_memory_clobber &&
                src->clobber_count == 1U &&
@@ -3895,7 +3891,7 @@ static bool qualified(const MinicC0Program *program,
         generic = true;
         n = src->output_count;
         for (i = 0U; i < n; ++i)
-            if (!c_is(&src->outputs[i], "=r")) return false;
+            if (!target_constraint_is(&src->outputs[i], "=r")) return false;
         for (i = 0U; i < src->input_count; ++i) {
             const MinicInlineAsmOperand *op = &src->inputs[i];
             if (!op->constraint_text || op->constraint_length != 1U ||
@@ -3969,7 +3965,7 @@ static bool x86_linux_monitor_wait_source(const MinicTargetInvocation *invocatio
         const MinicExpression *value = minic_c0_program_expression(
             program, op->expression);
         MinicType plain;
-        if (!c_is(op, regs[i]) || !value ||
+        if (!target_constraint_is(op, regs[i]) || !value ||
             !minic_type_unqualified(value->type, &plain) ||
             (!minic_type_is_pointer(plain) &&
              !minic_type_is_integer(plain)))
@@ -3997,7 +3993,7 @@ static bool x86_linux_segment_read_source(const MinicTargetInvocation *invocatio
         source->clobber_count != (short_selector ? 1U : 0U) ||
         source->has_memory_clobber != short_selector ||
         source->register_clobber_count ||
-        !c_is(&source->outputs[0], "=r"))
+        !target_constraint_is(&source->outputs[0], "=r"))
         return false;
     dst = minic_c0_program_expression(
         program, source->outputs[0].expression);
@@ -4035,7 +4031,7 @@ static bool x86_linux_segment_load_extable_source(const MinicTargetInvocation *i
         source->input_count != 1U || !source->inputs ||
         source->label_count || source->clobber_count != 1U ||
         !source->has_memory_clobber || source->register_clobber_count ||
-        !c_is(&source->inputs[0], "rm"))
+        !target_constraint_is(&source->inputs[0], "rm"))
         return false;
     value = minic_c0_program_expression(program, source->inputs[0].expression);
     if (!value || !minic_type_unqualified(value->type, &type) ||
@@ -4061,7 +4057,7 @@ static bool x86_linux_lkgs_extable_source(const MinicTargetInvocation *invocatio
         source->output_count != 1U || !source->outputs ||
         source->input_count || source->label_count || source->clobber_count ||
         source->register_clobber_count || source->has_memory_clobber ||
-        !c_is(&source->outputs[0], "+D"))
+        !target_constraint_is(&source->outputs[0], "+D"))
         return false;
     selector = minic_c0_program_expression(
         program, source->outputs[0].expression);
@@ -4096,7 +4092,7 @@ static bool x86_linux_fsgsbase_source(const MinicTargetInvocation *invocation,
         return false;
     operand = reading ? (source->outputs ? &source->outputs[0] : NULL) :
         (source->inputs ? &source->inputs[0] : NULL);
-    if (!operand || !c_is(operand, reading ? "=r" : "r")) return false;
+    if (!operand || !target_constraint_is(operand, reading ? "=r" : "r")) return false;
     value = minic_c0_program_expression(program, operand->expression);
     if (!value || (reading && (value->value_category != MINIC_VALUE_LVALUE ||
                               minic_type_is_const(value->type))) ||
@@ -4946,7 +4942,7 @@ static bool x86_linux_segment_register_extable_source(const MinicTargetInvocatio
         source->input_count || source->label_count ||
         source->clobber_count != 1U || !source->has_memory_clobber ||
         source->register_clobber_count ||
-        !c_is(&source->outputs[0], "+r"))
+        !target_constraint_is(&source->outputs[0], "+r"))
         return false;
     selector = minic_c0_program_expression(
         program, source->outputs[0].expression);
