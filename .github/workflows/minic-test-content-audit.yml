@@ -53,9 +53,9 @@ jobs:
               if not path.endswith(".c") or not path.startswith(("src/","compiler/","tools/","assembler/","linker/","preprocessor/","elf/")):continue
               for match in signature.finditer(body):
                   name=match.group(1)
-                  if all_tokens[name] <= 2:
+                  if all_tokens[name] == 1:
                       scarce.append((name,path,body.count("\n",0,match.start())+1,all_tokens[name]))
           print("RARE_FUNCTION_DEFINITIONS",len(scarce),flush=True)
-          for name,path,line,count in scarce[:200]:
+          for name,path,line,count in scarce:
               print("RARE_DEF",name,f"{path}:{line}","HITS",count,flush=True)
           PY
