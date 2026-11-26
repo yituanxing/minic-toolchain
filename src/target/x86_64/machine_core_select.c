@@ -10576,7 +10576,9 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
             const MinicCoreStructuredInlineAsmOperand *role =
                 &ins->value.structured_inline_asm.operands[i];
             if (role->operand_index != i ||
-                role->value >= sel->core->value_count)
+                (role->kind == MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT
+                    ? role->value != MINIC_CORE_VALUE_INVALID
+                    : role->value >= sel->core->value_count))
                 return false;
         }
     }
