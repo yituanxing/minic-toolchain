@@ -120,6 +120,7 @@ static bool x86_source_legacy_memory_form(
     (void)context;
     return function != NULL && function->target != NULL &&
         (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE ||
          instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
          instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE) &&
         minic_x86_64_machine_validate_source_asm(function->target,
@@ -1467,6 +1468,7 @@ static bool x86_emit_source_asm(FILE *out,
         return fprintf(out,"  %s (%%r10)\n",forms[variant-1U]) >= 0;
     }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)
         return fputs("  ",out) != EOF &&
