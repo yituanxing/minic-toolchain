@@ -132,7 +132,8 @@ static bool x86_atomic_rmw_has_memory_role(const MinicInlineAsm *source) {
  * memory role when that target qualifier has rejected the constraints. */
 bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
     static const char *const reserved[] = {"movq %%gs:", "cmp",
-        "outb ", "outw ", "outl ", "inb ", "inw ", "inl ", "lidt", "lgdt"};
+        "outb ", "outw ", "outl ", "inb ", "inw ", "inl ",
+        "lidt", "lgdt", "sgdt", "sidt"};
     size_t i;
     /* GCC's x86 I is an ISA-specific 0..31 shift count, whereas lowercase
      * i is a generic compile-time constant. A valid I value is not license
