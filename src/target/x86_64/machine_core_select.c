@@ -3800,7 +3800,6 @@ static bool x86_source_crash_register(X86CoreSelector *sel,
     memory_output = variant <= 17U || variant == 19U;
     if (variant == 0U ||
         variant > 19U ||
-        (memory_output && !source->is_volatile) ||
         source->has_memory_clobber != (variant == 19U) ||
         !x86_source_without_extra_operands(source) ||
         role->kind != (memory_output ?
@@ -4027,7 +4026,6 @@ static bool x86_source_hweight(X86CoreSelector *sel,
         source->target_machine_form_variant != 0U ||
         /* The Source HWEIGHT qualifier requires original GNU nonvolatile
          * syntax; Core deliberately marks its produced output effectful. */
-        !source->is_volatile ||
         source->has_memory_clobber ||
         source->explicit_memory_clobber ||
         source->implicit_memory_effect ||
@@ -5431,7 +5429,6 @@ static bool x86_source_scalar_bitops(X86CoreSelector *sel,
     if (source->has_memory_clobber !=
             (required_barrier || desc->memory_output) ||
         source->explicit_memory_clobber != required_barrier ||
-        (desc->is_locked && !source->is_volatile) ||
         ins->value.structured_inline_asm.operand_count != count)
         return false;
     for (i = 0U; i < count; ++i) {
@@ -5575,7 +5572,6 @@ static bool x86_source_linux_lock_bitcc_sign(X86CoreSelector *sel,
         minic_x86_64_linux_lock_bitcc_form(source->template_text,
             source->template_length) != 2U ||
         source->target_machine_form_variant != 0U ||
-        source->is_goto ||
         !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
         !source->implicit_memory_effect ||
@@ -6983,7 +6979,6 @@ static bool x86_source_segment_load_extable(X86CoreSelector *sel,
     form = source->target_machine_form_variant;
     if (form < 1U ||
         form > 5U ||
-        source->is_goto ||
         !source->explicit_memory_clobber ||
         !source->has_memory_clobber ||
         !source->implicit_memory_effect ||
@@ -7797,7 +7792,6 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         /* Core marks every target-qualified ASM effect volatile to retain
          * observable results; original GNU nonvolatile syntax was checked
          * exclusively by the C Source contract before Core import. */
-        !source->is_volatile ||
         source->explicit_memory_clobber ||
         (source->has_memory_clobber &&
             !(is_partial && partial >= 2U && partial <= 5U)) ||
@@ -8055,7 +8049,7 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
         source->target_machine_form_variant != 0U ||
         !x86_source_without_extra_operands(source) ||
         (plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL &&
-            (!source->is_volatile || !source->has_memory_clobber ||
+            (!source->has_memory_clobber ||
              !source->explicit_memory_clobber)) ||
         (cmp && (!source->has_memory_clobber ||
                  !source->explicit_memory_clobber)))
@@ -8445,8 +8439,7 @@ static bool x86_source_vmware(X86CoreSelector *sel,
     
     /* Core may conservatively promote a source memory-clobber hypercall to
      * volatile. The C ingress has already sealed its original spelling. */
-    if ((alt && !src->is_volatile) || 
-        !src->has_memory_clobber || src->register_clobber_count ||
+    if (!src->has_memory_clobber || src->register_clobber_count ||
         src->target_machine_form_variant != 0U ||
         src->resolved_immediate_count != 0U ||
         src->goto_second_target != MINIC_CORE_BLOCK_INVALID) return false;
@@ -9386,7 +9379,6 @@ static bool x86_source_lowlevel_segment(X86CoreSelector *sel,
     form = src->target_machine_form_variant;
     if ((form != 3U && form != 4U) || !src->has_memory_clobber ||
         !src->implicit_memory_effect ||
-        (form == 4U && !src->is_volatile) ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         !x86_scalar_role(&roles[0],form == 3U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT :
