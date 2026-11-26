@@ -1034,20 +1034,23 @@ static bool x86_linux_lidt_source(const MinicTargetInvocation *invocation,
     const MinicExpression *descriptor;
     const MinicRecord *record;
     MinicType unqualified;
-    if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
-        !minic_x86_64_linux_descriptor_table_form(
-            src->template_text, src->template_length) ||
-        (src->output_count != 0U && src->input_count != 0U) ||
-        (src->output_count + src->input_count != 1U) ||
+    const unsigned int form = src ? minic_x86_64_linux_descriptor_table_form(
+        src->template_text, src->template_length) : 0U;
+    const bool output = form >= 3U;
+    if (!program || !src || !contract || !form || !src->is_volatile ||
+        src->is_goto ||
+        src->output_count != (output ? 1U : 0U) ||
+        src->input_count != (output ? 0U : 1U) ||
         src->label_count != 0U || src->clobber_count != 0U ||
         src->register_clobber_count != 0U || src->has_memory_clobber ||
-        (minic_x86_64_linux_descriptor_table_form(
-             src->template_text, src->template_length) >= 3U
+        (output
              ? (!src->outputs || !target_constraint_is(&src->outputs[0], "=m"))
-             : (!src->inputs || !target_constraint_is(&src->inputs[0], "m")))) return false;
+             : (!src->inputs || !target_constraint_is(&src->inputs[0], "m"))))
+        return false;
     descriptor = minic_c0_program_expression(
         program, src->input_count ? src->inputs[0].expression : src->outputs[0].expression);
     if (!descriptor || descriptor->value_category != MINIC_VALUE_LVALUE ||
+        (output && minic_type_is_const(descriptor->type)) ||
         !minic_type_unqualified(descriptor->type, &unqualified) ||
         !minic_type_is_record(unqualified)) return false;
     record = minic_c0_program_record(program, unqualified.record_id);
@@ -1062,14 +1065,12 @@ static bool x86_linux_lidt_source(const MinicTargetInvocation *invocation,
         !minic_type_equal(record->fields[1].type, minic_type_unsigned_long()))
         return false;
     contract->operand_count = 1U;
-    contract->kinds[0] = src->output_count
+    contract->kinds[0] = output
                              ? MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT
                              : MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
     /* Exact privileged instruction variant: 1=LIDT 2=LGDT 3=SGDT 4=SIDT.
      * Must remain target-owned across Core -> typed MachineIR. */
-    contract->target_machine_form_variant =
-        minic_x86_64_linux_descriptor_table_form(
-            src->template_text, src->template_length);
+    contract->target_machine_form_variant = form;
     contract->implicit_memory_effect = true;
     return true;
 }
