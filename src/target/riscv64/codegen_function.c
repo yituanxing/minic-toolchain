@@ -76,7 +76,7 @@ static bool rv64_emit_typed_function(
                 source->template_text, source->template_length)) goto done;
     }
     if (!minic_riscv64_core_function_admit_profile(
-            true, function, &abi, lp64_soft_float, facts, storage) ||
+            function, &abi, lp64_soft_float, facts, storage) ||
         !minic_riscv64_asm_function_plan_build(
             function, &old_frame.asm_plan) ||
         !minic_riscv64_core_frame_initialize_with_storage(
