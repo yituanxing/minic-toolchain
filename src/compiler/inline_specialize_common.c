@@ -1,4 +1,4 @@
-#include "compiler/inline_specialize_common.h"
+#include "compiler/inline_specialize_internal.h"
 #include "frontend/function_body.h"
 #include "core/symbol_identity.h"
 
@@ -180,6 +180,92 @@ bool minic_inline_call_plan_copy_source_owners(
             plan->source_owner_count = owner_count;
             plan->source_function_limit = function_limit;
         }
+    }
+    return true;
+}
+
+bool minic_static_integer_specialization_eligible(const MinicFunction *source) {
+    return source != NULL && source->is_defined && source->is_internal &&
+           !source->is_inline && !source->is_weak && !source->is_constructor &&
+           !source->force_emit && source->assembler_name == NULL &&
+           !source->is_variadic && source->alias_target == MINIC_FUNCTION_INVALID &&
+           source->local_count <= 256U;
+}
+
+bool minic_inline_spec_add_variant(
+    MinicC0Program *program, MinicFunctionId source_id,
+    const MinicFunction *caller, const MinicInlineSpecializationKey *key,
+    unsigned int fact_mask, size_t ordinal, MinicFunctionId *specialized_id) {
+    MinicFunction source;
+    MinicFunction *specialized;
+    const char *section;
+    size_t section_length;
+    char name[96];
+    int name_length;
+    size_t i;
+
+    if (program == NULL || source_id >= program->function_count ||
+        key == NULL || specialized_id == NULL ||
+        (fact_mask & ~(unsigned int)MINIC_INLINE_SPEC_FACT_ALL) != 0U) {
+        return false;
+    }
+    source = program->functions[source_id];
+    section = source.section_name != NULL ? source.section_name :
+        caller != NULL ? caller->section_name : NULL;
+    section_length = source.section_name != NULL ? source.section_name_length :
+        caller != NULL && caller->section_name != NULL ? caller->section_name_length : 0U;
+    if (source.parameter_count > MINIC_MAX_FUNCTION_PARAMETERS ||
+        !source.is_defined || !source.is_internal ||
+        (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
+        source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
+        return false;
+    }
+    /* A clone owns a new FunctionId and specialization facts, not a copied
+     * FunctionBody. Several clones intentionally share body_block/local IDs;
+     * an ExpressionId inside that body cannot identify a particular caller's
+     * CALL instance (the separate MC-006 provenance problem). */
+    name_length = snprintf(name, sizeof(name), "__minic_inline_spec_%zu_%zu",
+                           (size_t)source_id, ordinal);
+    if (name_length <= 0 || (size_t)name_length >= sizeof(name) ||
+        !minic_c0_program_add_function(program, name, (size_t)name_length,
+                                       source.local_begin, source.local_count,
+                                       source.body_block, specialized_id) ||
+        !minic_c0_program_set_function_signature(program, *specialized_id,
+                                                 source.return_type,
+                                                 source.parameter_types,
+                                                 source.parameter_count) ||
+        !minic_c0_program_set_function_calling_convention(
+            program, *specialized_id, source.calling_convention) ||
+        !minic_c0_program_set_function_internal(program, *specialized_id, true) ||
+        !minic_c0_program_set_function_inline(program, *specialized_id, source.is_inline) ||
+        (source.is_noreturn &&
+         !minic_c0_program_set_function_noreturn(program, *specialized_id, true)) ||
+        (section != NULL &&
+         !minic_c0_program_set_function_section(program, *specialized_id,
+                                                section, section_length))) {
+        return false;
+    }
+    specialized = &program->functions[*specialized_id];
+    specialized->visibility = source.visibility;
+    specialized->explicit_alignment = source.explicit_alignment;
+    /* The former source-AST finalizer propagated this to every clone.
+     * Do it at creation now: Core preparation is the sole later authority
+     * for pruning and must be able to lower each candidate variant. */
+    specialized->is_referenced = source.is_referenced;
+    specialized->specialization_source = source_id;
+    specialized->is_integer_specialization = true;
+    for (i = 0U; i < source.parameter_count; ++i) {
+        if ((fact_mask & MINIC_INLINE_SPEC_FACT_INTEGER) != 0U) {
+            specialized->specialization_integer_known[i] = key->integer_known[i];
+            specialized->specialization_integer_bits[i] = key->integer_bits[i];
+        }
+        if ((fact_mask & MINIC_INLINE_SPEC_FACT_SYMBOLIC) != 0U) {
+            specialized->specialization_symbolic_known[i] = key->symbolic_known[i];
+            specialized->specialization_symbolic_expression[i] =
+                key->symbolic_known[i] ? key->symbolic_expression[i] : MINIC_EXPRESSION_INVALID;
+        }
+        if ((fact_mask & MINIC_INLINE_SPEC_FACT_BOOLEAN) != 0U)
+            specialized->specialization_boolean_range_known[i] = key->boolean_range_known[i];
     }
     return true;
 }

@@ -61,14 +61,6 @@ static bool minic_inline_pure_statement_constant(const MinicC0Program *program,
                 expression->value.statement_expression.result, value);
 }
 
-static bool minic_static_integer_specialization_eligible(const MinicFunction *source) {
-    return source != NULL && source->is_defined && source->is_internal &&
-           !source->is_inline && !source->is_weak && !source->is_constructor &&
-           !source->force_emit && source->assembler_name == NULL &&
-           !source->is_variadic && source->alias_target == MINIC_FUNCTION_INVALID &&
-           source->local_count <= 256U;
-}
-
 static bool minic_static_integer_claim_block(
     MinicBlockId block_id, MinicFunctionId owner,
     MinicFunctionId *block_owners, MinicBlockId *queue,
@@ -355,79 +347,6 @@ static bool minic_inline_integer_unresolved_constant_query(
     return false;
 }
 
-bool minic_add_inline_integer_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const bool *known,
-    const uint64_t *bits,
-    size_t ordinal,
-    MinicFunctionId *specialized_id) {
-    MinicFunction source;
-    MinicFunction *specialized;
-    const char *section;
-    size_t section_length;
-    char name[96];
-    int name_length;
-    size_t i;
-
-    if (program == NULL || source_id >= program->function_count ||
-        specialized_id == NULL) {
-        return false;
-    }
-    source = program->functions[source_id];
-    section = source.section_name != NULL ? source.section_name :
-        caller != NULL ? caller->section_name : NULL;
-    section_length = source.section_name != NULL ? source.section_name_length :
-        caller != NULL && caller->section_name != NULL ? caller->section_name_length : 0U;
-    if (!source.is_defined || !source.is_internal ||
-        (!source.is_inline && !minic_static_integer_specialization_eligible(&source)) ||
-        source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID) {
-        return false;
-    }
-    /* A clone owns a new FunctionId and specialization facts, not a copied
-     * FunctionBody. Several clones intentionally share body_block/local IDs;
-     * an ExpressionId inside that body cannot identify a particular caller's
-     * CALL instance (the separate MC-006 provenance problem). */
-    name_length = snprintf(name, sizeof(name), "__minic_inline_spec_%zu_%zu",
-                           (size_t)source_id, ordinal);
-    if (name_length <= 0 || (size_t)name_length >= sizeof(name) ||
-        !minic_c0_program_add_function(program, name, (size_t)name_length,
-                                       source.local_begin, source.local_count,
-                                       source.body_block, specialized_id) ||
-        !minic_c0_program_set_function_signature(program, *specialized_id,
-                                                 source.return_type,
-                                                 source.parameter_types,
-                                                 source.parameter_count) ||
-        !minic_c0_program_set_function_calling_convention(
-            program, *specialized_id, source.calling_convention) ||
-        !minic_c0_program_set_function_internal(program, *specialized_id, true) ||
-        !minic_c0_program_set_function_inline(program, *specialized_id, source.is_inline) ||
-        (source.is_noreturn &&
-         !minic_c0_program_set_function_noreturn(program, *specialized_id, true)) ||
-        (section != NULL &&
-         !minic_c0_program_set_function_section(program, *specialized_id,
-                                                section, section_length))) {
-        return false;
-    }
-    specialized = &program->functions[*specialized_id];
-    specialized->visibility = source.visibility;
-    specialized->explicit_alignment = source.explicit_alignment;
-    /* The former source-AST finalizer propagated this to every clone.
-     * Do it at creation now: Core preparation is the sole later authority
-     * for pruning and must be able to lower each candidate variant. */
-    specialized->is_referenced = source.is_referenced;
-    specialized->specialization_source = source_id;
-    specialized->is_integer_specialization = true;
-    for (i = 0U; i < source.parameter_count; ++i) {
-        specialized->specialization_integer_known[i] = known[i];
-        specialized->specialization_integer_bits[i] = bits[i];
-    }
-    return true;
-}
-
-
-
 bool minic_inline_spec_integer_formal_admits_entry_fact(
     const MinicC0Program *program, const MinicFunction *source,
     size_t parameter_index) {
@@ -658,10 +577,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                 minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
-            if (!minic_add_inline_integer_specialization(program, source_id, caller,
-                                                         key.integer_known, key.integer_bits,
-                                                         specialization_count,
-                                                         &specialized_id)) {
+            if (!minic_inline_spec_add_variant(
+                    program, source_id, caller, &key, MINIC_INLINE_SPEC_FACT_INTEGER,
+                    specialization_count, &specialized_id)) {
                 (void)fprintf(stderr,
                               "MINIC_INLINE_INTEGER_SPECIALIZATION_ADD_FAILED count=%zu functions=%zu source=%zu\n",
                               specialization_count,
@@ -848,14 +766,9 @@ bool minic_specialize_inline_integer_calls(MinicC0Program *program,
                         minic_core_reentry_index_destroy(pure_guard_reentry_index);
                         return false;
                     }
-                    if (!minic_add_inline_integer_specialization(
-                            program,
-                            nested_source_id,
-                            &caller,
-                            nested_key.integer_known,
-                            nested_key.integer_bits,
-                            specialization_count,
-                            &refined_id)) {
+                    if (!minic_inline_spec_add_variant(
+                    program, nested_source_id, &caller, &nested_key, MINIC_INLINE_SPEC_FACT_INTEGER,
+                    specialization_count, &refined_id)) {
                         (void)fprintf(stderr,
                                       "MINIC_INLINE_INTEGER_SPECIALIZATION_TRANSITIVE_ADD_FAILED count=%zu functions=%zu source=%zu\n",
                                       specialization_count,

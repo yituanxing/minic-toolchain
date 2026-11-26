@@ -602,43 +602,6 @@ static bool minic_inline_symbolic_integer_inputs_are_closed(
     return true;
 }
 
-bool minic_add_inline_symbolic_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const bool *integer_known,
-    const uint64_t *integer_bits,
-    const bool *symbolic_known,
-    const MinicExpressionId *symbolic_expression,
-    MinicFunctionId *specialized_id) {
-    MinicFunction *specialized;
-    size_t i;
-    size_t ordinal;
-
-    if (program == NULL || source_id >= program->function_count ||
-        specialized_id == NULL) {
-        return false;
-    }
-    ordinal = program->function_count;
-    if (!minic_add_inline_integer_specialization(
-            program,
-            source_id,
-            caller,
-            integer_known,
-            integer_bits,
-            ordinal,
-            specialized_id)) {
-        return false;
-    }
-    specialized = &program->functions[*specialized_id];
-    for (i = 0U; i < specialized->parameter_count; ++i) {
-        specialized->specialization_symbolic_known[i] = symbolic_known[i];
-        specialized->specialization_symbolic_expression[i] =
-            symbolic_known[i] ? symbolic_expression[i] : MINIC_EXPRESSION_INVALID;
-    }
-    return true;
-}
-
 bool minic_specialize_inline_symbolic_calls(
     MinicC0Program *program,
     const MinicTargetInvocation *target, MinicInlineCallPlan *call_plan) {
@@ -756,15 +719,10 @@ bool minic_specialize_inline_symbolic_calls(
             MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC, 0U);
         if (variant_id == MINIC_FUNCTION_INVALID) {
             if (program->function_count >= SIZE_MAX - 1U ||
-                !minic_add_inline_symbolic_specialization(
-                    program,
-                    source_id,
-                    caller,
-                    key.integer_known,
-                    key.integer_bits,
-                    key.symbolic_known,
-                    key.symbolic_expression,
-                    &variant_id)) {
+                !minic_inline_spec_add_variant(
+                    program, source_id, caller, &key,
+                    MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC,
+                    program->function_count, &variant_id)) {
                 minic_inline_initial_owners_destroy(&initial_owners);
                 free(stable_locals);
                 return false;
@@ -895,15 +853,10 @@ bool minic_specialize_inline_symbolic_calls(
                         MINIC_INLINE_SPEC_FACT_SYMBOLIC,
                     0U);
                 if (variant_id == MINIC_FUNCTION_INVALID) {
-                    if (!minic_add_inline_symbolic_specialization(
-                            program,
-                            source_id,
-                            &caller,
-                            key.integer_known,
-                            key.integer_bits,
-                            key.symbolic_known,
-                            key.symbolic_expression,
-                            &variant_id)) {
+                    if (!minic_inline_spec_add_variant(
+                    program, source_id, &caller, &key,
+                    MINIC_INLINE_SPEC_FACT_INTEGER | MINIC_INLINE_SPEC_FACT_SYMBOLIC,
+                    program->function_count, &variant_id)) {
                         minic_inline_call_worklist_destroy(&worklist);
                         free(stable_locals);
                         return false;

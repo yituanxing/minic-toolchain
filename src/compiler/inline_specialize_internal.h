@@ -5,23 +5,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-/* Only two existing clone construction helpers cross specialization
- * families. They remain compiler-private, never backend or Core hooks. */
-bool minic_add_inline_integer_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const bool *known,
-    const uint64_t *bits,
-    size_t ordinal,
-    MinicFunctionId *specialized_id);
-bool minic_add_inline_symbolic_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const bool *integer_known,
-    const uint64_t *integer_bits,
-    const bool *symbolic_known,
-    const MinicExpressionId *symbolic_expression,
-    MinicFunctionId *specialized_id);
+/* One constructor for all source specialization facts. */
+bool minic_static_integer_specialization_eligible(const MinicFunction *source);
+bool minic_inline_spec_add_variant(
+    MinicC0Program *program, MinicFunctionId source_id,
+    const MinicFunction *caller, const MinicInlineSpecializationKey *key,
+    unsigned int fact_mask, size_t ordinal, MinicFunctionId *specialized_id);
 #endif

@@ -346,34 +346,6 @@ static bool minic_inline_boolean_range_argument(
     return false;
 }
 
-static bool minic_add_inline_boolean_range_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const MinicInlineSpecializationKey *key,
-    MinicFunctionId *specialized_id) {
-    MinicFunction *specialized;
-    size_t i;
-
-    if (!minic_add_inline_symbolic_specialization(
-            program,
-            source_id,
-            caller,
-            key->integer_known,
-            key->integer_bits,
-            key->symbolic_known,
-            key->symbolic_expression,
-            specialized_id)) {
-        return false;
-    }
-    specialized = &program->functions[*specialized_id];
-    for (i = 0U; i < specialized->parameter_count; ++i) {
-        specialized->specialization_boolean_range_known[i] =
-            key->boolean_range_known[i];
-    }
-    return true;
-}
-
 /* The direct-call plan selects a clone once per shared ExpressionId, but the
  * immutable source AST is also executed by its original inline owner. A
  * caller-specific section may select a clone in .init.text/.head.text that
@@ -431,9 +403,9 @@ static bool minic_close_original_inline_caller_sections(
             program, &source, &caller, source_id, &key,
             MINIC_INLINE_SPEC_FACT_ALL, 0U);
         if (variant_id == MINIC_FUNCTION_INVALID) {
-            if (added >= 1024U || !minic_add_inline_boolean_range_specialization(
-                    program, source_id, &caller, &key,
-                    &variant_id)) {
+            if (added >= 1024U || !minic_inline_spec_add_variant(
+                    program, source_id, &caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                    program->function_count, &variant_id)) {
                 minic_inline_initial_owners_destroy(&owners);
                 return false;
             }
@@ -548,12 +520,9 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
              * aborts ordinary legal C call sites here. The transitive
              * quota path below has the same failure contract. */
             if (direct_clone_count + transitive_clone_count >= 1024U ||
-                !minic_add_inline_boolean_range_specialization(
-                    program,
-                    source_id,
-                    caller,
-                    &key,
-                    &variant_id)) {
+                !minic_inline_spec_add_variant(
+                    program, source_id, caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                    program->function_count, &variant_id)) {
                 minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
@@ -693,8 +662,9 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                     MINIC_INLINE_SPEC_FACT_ALL, 0U);
                 if (variant_id == MINIC_FUNCTION_INVALID) {
                     if (direct_clone_count + transitive_clone_count >= 1024U ||
-                        !minic_add_inline_boolean_range_specialization(
-                            program, source_id, &caller, &key, &variant_id)) {
+                        !minic_inline_spec_add_variant(
+                    program, source_id, &caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                    program->function_count, &variant_id)) {
                         minic_inline_call_worklist_destroy(&worklist);
                         return false;
                     }
