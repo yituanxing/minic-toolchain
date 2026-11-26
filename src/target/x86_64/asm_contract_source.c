@@ -175,14 +175,65 @@ bool minic_x86_64_requires_qualified_input_asm(const MinicInlineAsm *src) {
          minic_x86_64_linux_cmpxchg128_form(src->template_text,
              src->template_length) != 0U))
         return true;
-    /* SGDT/SIDT have a GNU output but no input, so the input-only
-     * prefix gate cannot reserve them from generic source fallback. */
+    /* Reserve exact hardware/exception-table forms even when their GNU
+     * inputs are empty. An invalid output memory width must not fall back
+     * to generic ASM (FXSAVE, for example, writes a 512-byte image). */
     if (src && src->template_text &&
-        minic_x86_64_linux_descriptor_table_form(
-            src->template_text, src->template_length) >= 3U)
-        return true;
-    if (src && src->template_text &&
-        (minic_x86_64_linux_crash_segment_snapshot_form(
+        (minic_x86_64_linux_descriptor_table_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_iret_to_self_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_gen_endbr_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_preempt_gs_dec_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_preempt_static_call_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_tlb_cache_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_segment_read_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_lkgs_extable_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_unwind_context_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_random_seed_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_rep_movsb_alternative_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_segment_register_extable_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_debug_register_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_fxsave_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_x87_probe_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_fsgsbase_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_mxcsr_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_pkru_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_kvm_movdqa_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_task_control_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_pat_clflushopt_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_futex_extable_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_fpu_user_frame_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_fxrstor_safe_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_xstate_fault_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_xrstor_alternative_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_xsave_triple_alternative_form(
+             src->template_text, src->template_length) != 0U ||
+         minic_x86_64_linux_crash_segment_snapshot_form(
              src->template_text, src->template_length) != 0U ||
          minic_x86_64_linux_efi_kernel_transfer_form(
              src->template_text, src->template_length) ||
