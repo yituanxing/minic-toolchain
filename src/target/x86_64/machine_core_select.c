@@ -11523,7 +11523,6 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         [MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE] = x86_source_segment_load_extable,
         [MINIC_X86_MACHINE_ASM_LKGS_EXTABLE] = x86_source_lkgs_extable,
         [MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD] = x86_source_load_unaligned_zeropad,
-        [MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO] = x86_source_kernel_nofault_goto,
         [MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE] = x86_source_rep_uaccess_alternative,
         [MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE] = x86_source_rep_uaccess_alternative,
         [MINIC_X86_MACHINE_ASM_FPU_USER_FRAME] = x86_source_fpu_user_frame,
@@ -11584,6 +11583,8 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         id >= sel->core->inline_asm_count) return false;
     form = sel->core->inline_asms[id].target_machine_form_id;
     switch (form) {
+    case MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO:
+        return x86_source_kernel_nofault_goto(sel, ins, instruction_id);
     case MINIC_X86_MACHINE_ASM_NONE:
         return x86_source_jump_label(sel, ins, instruction_id) ||
             x86_source_cpu_has_goto(sel, ins, instruction_id) ||
