@@ -2,7 +2,6 @@
 #include "target/x86_64/asm_contract_internal.h"
 #include "target/data_layout_source.h"
 #include "frontend/ast.h"
-#include <stdio.h>
 #include <string.h>
 
 /* C/GNU inline-ASM source admission owns C types, AST expression checks,
@@ -634,8 +633,13 @@ static bool x86_linux_raid6_simd_source(const MinicTargetInvocation *invocation,
         source->register_clobber_count ||
         (source->clobber_count != 0U && !source->has_memory_clobber))
         return false;
+    if (source->output_count > 8U ||
+        source->input_count > 8U - source->output_count ||
+        (source->output_count != 0U && source->outputs == NULL) ||
+        (source->input_count != 0U && source->inputs == NULL))
+        return false;
     count = source->output_count + source->input_count;
-    if (count > 8U || !minic_x86_64_raid6_simd_template(
+    if (!minic_x86_64_raid6_simd_template(
             source->template_text, source->template_length, count))
         return false;
     for (i = 0U; i < count; ++i) {
@@ -793,9 +797,9 @@ static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invoca
 static bool x86_linux_atomic_xchg_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const MinicExpression *reg, *mem;
     MinicType reg_type, mem_type;
+    size_t object_bytes, object_alignment;
     const unsigned int width = src ? minic_x86_64_linux_atomic_xchg_form(
         src->template_text, src->template_length) : 0U;
     if (!src || !program || !contract || !width || !src->is_volatile ||
@@ -809,10 +813,13 @@ static bool x86_linux_atomic_xchg_source(const MinicTargetInvocation *invocation
     mem = minic_c0_program_expression(program, src->outputs[1].expression);
     if (!reg || !mem || reg->value_category != MINIC_VALUE_LVALUE ||
         mem->value_category != MINIC_VALUE_LVALUE ||
+        minic_type_is_const(reg->type) || minic_type_is_const(mem->type) ||
         !minic_type_unqualified(reg->type, &reg_type) ||
         !minic_type_unqualified(mem->type, &mem_type) ||
         !minic_type_equal(reg_type, mem_type) ||
-        !(minic_type_is_integer(reg_type) || minic_type_is_pointer(reg_type)))
+        !(minic_type_is_integer(reg_type) || minic_type_is_pointer(reg_type)) ||
+        !minic_data_layout_type(invocation, program, reg_type,
+            &object_bytes, &object_alignment) || object_bytes != width)
         return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_READWRITE;
@@ -957,7 +964,7 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
         !minic_x86_64_linux_iret_to_self_form(src->template_text, src->template_length) ||
         src->output_count != 2U || !src->outputs || src->input_count ||
         !src->has_memory_clobber || src->clobber_count != 2U ||
-        src->register_clobber_count != 1U ||
+        src->register_clobber_count != 1U || !src->register_clobbers ||
         !clobber_is(&src->register_clobbers[0], "cc") || src->label_count ||
         !target_constraint_is(&src->outputs[0], "=&r") ||
         !target_constraint_is(&src->outputs[1], "+r")) return false;
@@ -1106,8 +1113,7 @@ static bool x86_linux_muldiv_u64_source(const MinicTargetInvocation *invocation,
         !source->outputs || !source->inputs || source->has_memory_clobber ||
         source->clobber_count != 1U || source->register_clobber_count != 1U ||
         !source->register_clobbers ||
-        source->register_clobbers[0].name_length != 3U ||
-        memcmp(source->register_clobbers[0].name, "rdx", 3U) != 0)
+        !clobber_is(&source->register_clobbers[0], "rdx"))
         return false;
     for (i = 0U; i < 4U; ++i) {
         const MinicInlineAsmOperand *op = i == 0U ?
@@ -3166,6 +3172,7 @@ static bool x86_linux_identity_load_source(const MinicTargetInvocation *invocati
         !source->inputs || !target_constraint_is(&source->inputs[0], "g") ||
         source->clobber_count != 2U || !source->has_memory_clobber ||
         source->register_clobber_count != 1U ||
+        !source->register_clobbers ||
         !clobber_is(&source->register_clobbers[0], "r9")) return false;
     expr = minic_c0_program_expression(program, source->inputs[0].expression);
     if (!expr || expr->value_category != MINIC_VALUE_LVALUE ||
@@ -3527,6 +3534,7 @@ static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocatio
         source->clobber_count != (clock_form ? 2U : 1U) ||
         source->has_memory_clobber == clock_form ||
         source->register_clobber_count != (clock_form ? 2U : 0U) ||
+        (clock_form && !source->register_clobbers) ||
         (clock_form &&
          (!clobber_is(&source->register_clobbers[0], "rcx") ||
           !clobber_is(&source->register_clobbers[1], "r11"))) ||
@@ -3889,7 +3897,8 @@ static bool qualified(const MinicC0Program *program,
                c_is(&src->inputs[1], "rm") &&
                c_is(&src->inputs[2], "rm")) {
         is_muldiv = true;
-    } else if (src->output_count == 1U && !src->has_memory_clobber &&
+    } else if (src->output_count == 1U && src->input_count >= 1U &&
+               !src->has_memory_clobber &&
                src->clobber_count == 0U && src->register_clobber_count == 0U &&
                (bit_form = minic_x86_64_asm_bit_scan_form(
                    src->template_text, src->template_length)) !=
@@ -4913,7 +4922,8 @@ static bool x86_linux_smap_alternative_source(const MinicTargetInvocation *invoc
         !source->register_clobbers ||
         !clobber_is(&source->register_clobbers[0], "cc") ||
         source->output_count != (form == 3U ? 1U : 0U) ||
-        source->input_count != (form == 4U ? 1U : 0U))
+        source->input_count != (form == 4U ? 1U : 0U) ||
+        (form == 3U ? source->outputs == NULL : source->inputs == NULL))
         return false;
     operand = form == 3U ? &source->outputs[0] : &source->inputs[0];
     if (!target_constraint_is(operand, form == 3U ? "=rm" : "g"))
