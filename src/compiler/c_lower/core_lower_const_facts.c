@@ -247,25 +247,6 @@ bool minic_core_lower_known_null_pointer(
     return core_expression_known_null_pointer_depth(context, expression_id, 0U);
 }
 
-bool core_const_signed_value(const MinicCoreLowerContext *context,
-                                    const MinicConstValue *value,
-                                    int64_t *result) {
-    unsigned int width;
-    uint64_t bits;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || value == NULL || result == NULL ||
-        !minic_type_is_signed_integer(value->type) ||
-        !minic_target_info_integer_width(
-            context->target, context->body->program, value->type, &width) ||
-        width == 0U || width > 64U) {
-        return false;
-    }
-    bits = minic_integer_sign_extend64(value->bits, width);
-    (void)memcpy(result, &bits, sizeof(*result));
-    return true;
-}
-
 
 
 bool minic_core_lower_boolean_range_expression(

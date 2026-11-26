@@ -6203,10 +6203,7 @@ cleanup:
     return ok;
 }
 
-bool minic_aarch64_machine_select_core_subset(
-    MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx) {
-    return a64_machine_select_core_impl(machine, ctx, false);
-}
+
 
 bool minic_aarch64_machine_select_core_for_production(
     MinicMachineFunction *machine, const MinicDirectLP64BlockContext *ctx) {

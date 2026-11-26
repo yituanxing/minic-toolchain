@@ -150,23 +150,7 @@ bool minic_riscv_machine_select_frame_transfer(MinicMachineBuilder *builder,
     return rv_emit(builder, opcode, args, 2U);
 }
 
-bool minic_riscv_machine_select_frame_object(MinicMachineBuilder *builder,
-    size_t frame_index, size_t byte_displacement, unsigned register_number,
-    bool load, unsigned bytes) {
-    const unsigned xlen = rv_xlen(builder);
-    uint32_t opcode;
-    MinicMachineOperand args[2] = {{0}};
-    if (xlen == 0U || register_number >= 32U ||
-        byte_displacement > (size_t)INT64_MAX ||
-        (opcode = minic_riscv_machine_memory_opcode(xlen, load, bytes, true, true)) == 0U)
-        return false;
-    args[0] = minic_riscv_machine_gpr(xlen, register_number,
-        load ? MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ);
-    args[1].kind = MINIC_MACHINE_OPERAND_FRAME;
-    args[1].value.frame.index = frame_index;
-    args[1].value.frame.displacement = (int64_t)byte_displacement;
-    return rv_emit(builder, opcode, args, 2U);
-}
+
 
 static bool rv_delta_sp(MinicMachineBuilder *builder, size_t bytes,
                         bool allocate) {

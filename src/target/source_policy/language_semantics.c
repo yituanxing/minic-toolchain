@@ -760,12 +760,7 @@ bool minic_target_info_inline_asm_readwrite_hardreg_supported(
            policy->readwrite_hardreg(reg, reg_length, constraint, length, operand_type);
 }
 
-bool minic_target_info_inline_asm_register_clobber_supported(
-    const MinicTargetInvocation *target, const char *name, size_t name_length) {
-    const MinicTargetAsmSourcePolicy *policy = minic_target_source_policy(target);
-    return policy != NULL && name != NULL && policy->register_clobber != NULL &&
-           policy->register_clobber(name, name_length);
-}
+
 
 bool minic_target_info_inline_asm_source_clobber_supported(
     const MinicTargetInvocation *target, const char *name, size_t length) {

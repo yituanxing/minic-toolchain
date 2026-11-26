@@ -223,8 +223,7 @@ bool minic_target_info_inline_asm_readwrite_hardreg_supported(
     const char *, size_t, MinicType);
 bool minic_target_info_inline_asm_source_clobber_supported(
     const MinicTargetInvocation *target, const char *name, size_t name_length);
-bool minic_target_info_inline_asm_register_clobber_supported(
-    const MinicTargetInvocation *target, const char *name, size_t name_length);
+
 bool minic_target_info_inline_asm_memory_input_constraint_supported(
     const MinicTargetInvocation *target, const char *constraint, size_t constraint_length);
 bool minic_target_info_inline_asm_vector_register_input_constraint_supported(

@@ -4352,10 +4352,7 @@ done:
     return success;
 }
 
-bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
-    const MinicRiscvCoreMachinePlan *plan) {
-    return riscv_machine_select_core_impl(machine, plan, false);
-}
+
 
 bool minic_riscv_machine_select_core_for_production(
     MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan) {

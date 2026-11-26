@@ -175,8 +175,7 @@ bool minic_core_cfg_nonnegative_range(const MinicCoreLowerContext *,
                                       MinicExpressionId, uint64_t *, uint64_t *);
 bool minic_core_cfg_bounded_comparison_is_false(const MinicCoreLowerContext *,
                                                 MinicExpressionId);
-bool core_const_signed_value(const MinicCoreLowerContext *,
-                             const MinicConstValue *, int64_t *);
+
 
 /* Conservatively shared between fact oracle and source-to-Core lowering. */
 bool minic_core_lower_direct_local_read(const MinicCoreLowerContext *,
