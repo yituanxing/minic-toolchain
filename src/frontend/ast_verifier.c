@@ -821,67 +821,25 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
-        const MinicExpression *builtin_operand;
-        MinicType expected_operand_type;
-
-        builtin_operand =
+        const MinicExpression *builtin_operand =
             expression_before(program, expression->value.builtin_unary.operand, expression_index);
-        switch (expression->value.builtin_unary.operator_kind) {
-        case MINIC_BUILTIN_UNARY_CLZ:
-        case MINIC_BUILTIN_UNARY_CTZ:
-        case MINIC_BUILTIN_UNARY_POPCOUNT:
-            expected_operand_type = minic_type_unsigned_int();
-            break;
-        case MINIC_BUILTIN_UNARY_CLZL:
-        case MINIC_BUILTIN_UNARY_CTZL:
-        case MINIC_BUILTIN_UNARY_POPCOUNTL:
-            expected_operand_type = minic_type_unsigned_long();
-            break;
-        case MINIC_BUILTIN_UNARY_CLZLL:
-        case MINIC_BUILTIN_UNARY_CTZLL:
-        case MINIC_BUILTIN_UNARY_POPCOUNTLL:
-            expected_operand_type = minic_type_unsigned_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_FFSLL:
-            expected_operand_type = minic_type_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_ISDIGIT:
-            expected_operand_type = minic_type_int();
-            break;
-        case MINIC_BUILTIN_UNARY_ISNAN:
-            return builtin_operand != NULL &&
-                   (minic_type_is_float(builtin_operand->type) ||
-                    minic_type_is_double(builtin_operand->type)) &&
-                   expression->value_category == MINIC_VALUE_RVALUE &&
-                   minic_type_equal(expression->type, minic_type_int());
-        case MINIC_BUILTIN_UNARY_BSWAP16:
-            expected_operand_type = minic_type_unsigned_short();
-            break;
-        case MINIC_BUILTIN_UNARY_BSWAP32:
-            expected_operand_type = minic_type_unsigned_int();
-            break;
-        case MINIC_BUILTIN_UNARY_BSWAP64:
-            expected_operand_type = minic_type_unsigned_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_CONSTANT_P:
-            /* GCC permits __builtin_constant_p on non-integer expressions too.
-             * The operand is unevaluated; its type does not constrain the int
-             * result.  Returning here avoids imposing the ordinary unary-builtin
-             * operand-type equality contract. */
-            return builtin_operand != NULL &&
-                   expression->value_category == MINIC_VALUE_RVALUE &&
-                   minic_type_equal(expression->type, minic_type_int());
-        default:
+        MinicBuiltinUnaryOperator operation = expression->value.builtin_unary.operator_kind;
+        MinicType expected_operand_type;
+        MinicType expected_result_type;
+
+        if (builtin_operand == NULL || expression->value_category != MINIC_VALUE_RVALUE)
             return false;
-        }
-        return builtin_operand != NULL &&
+        if (operation == MINIC_BUILTIN_UNARY_ISNAN)
+            return (minic_type_is_float(builtin_operand->type) ||
+                    minic_type_is_double(builtin_operand->type)) &&
+                   minic_type_equal(expression->type, minic_type_int());
+        /* constant_p has an unevaluated operand of any type. */
+        if (operation == MINIC_BUILTIN_UNARY_CONSTANT_P)
+            return minic_type_equal(expression->type, minic_type_int());
+        return minic_c0_integer_builtin_signature(operation, &expected_operand_type,
+                                                   &expected_result_type) &&
                minic_type_equal(builtin_operand->type, expected_operand_type) &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type,
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
-                       ? expected_operand_type : minic_type_int());
+               minic_type_equal(expression->type, expected_result_type);
     }
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD: {
         const MinicExpression *address =

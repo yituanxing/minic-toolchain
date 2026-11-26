@@ -438,28 +438,22 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
     return normalize_bits(program, target, expression->type, operand_bits, bits);
 }
 
-static bool eval_builtin_unary(const MinicC0Program *program,
-                               const MinicTargetInvocation *target,
-                               const MinicExpression *expression,
-                               unsigned int depth,
-                               MinicConstValue *value) {
-    MinicConstValue operand;
-    MinicBuiltinUnaryOperator operator_kind;
+bool minic_const_eval_integer_builtin_value(const MinicC0Program *program,
+                                            const MinicTargetInvocation *target,
+                                            MinicBuiltinUnaryOperator operator_kind,
+                                            MinicType result_type,
+                                            MinicConstValue operand,
+                                            MinicConstValue *value) {
     uint64_t bits;
     uint64_t count;
     unsigned int width;
 
-    if (program == NULL || target == NULL || expression == NULL || value == NULL ||
-        expression->kind != MINIC_EXPRESSION_BUILTIN_UNARY ||
-        !eval_expression(
-            program, target, expression->value.builtin_unary.operand, depth + 1U, &operand) ||
+    if (program == NULL || target == NULL || value == NULL ||
         !minic_type_is_integer(operand.type) ||
-        !integer_width(program, target, operand.type, &width) || width == 0U || width > 64U ||
-        !normalize_bits(program, target, operand.type, operand.bits, &bits)) {
+        !integer_width(program, target, operand.type, &width) || width == 0U ||
+        !normalize_bits(program, target, operand.type, operand.bits, &bits))
         return false;
-    }
 
-    operator_kind = expression->value.builtin_unary.operator_kind;
     count = 0U;
     switch (operator_kind) {
     case MINIC_BUILTIN_UNARY_CLZ:
@@ -517,7 +511,7 @@ static bool eval_builtin_unary(const MinicC0Program *program,
             operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ? 4U : 8U;
         unsigned int index;
         if (width != bytes * 8U ||
-            !minic_type_equal(expression->type, operand.type))
+            !minic_type_equal(result_type, operand.type))
             return false;
         for (index = 0U; index < bytes; ++index) {
             count = (count << 8U) | (bits & UINT64_C(255));
@@ -529,8 +523,23 @@ static bool eval_builtin_unary(const MinicC0Program *program,
         return false;
     }
 
-    value->type = expression->type;
+    value->type = result_type;
     return normalize_bits(program, target, value->type, count, &value->bits);
+}
+
+static bool eval_builtin_unary(const MinicC0Program *program,
+                               const MinicTargetInvocation *target,
+                               const MinicExpression *expression,
+                               unsigned int depth,
+                               MinicConstValue *value) {
+    MinicConstValue operand;
+    return program != NULL && target != NULL && expression != NULL && value != NULL &&
+           expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY &&
+           eval_expression(program, target, expression->value.builtin_unary.operand,
+                           depth + 1U, &operand) &&
+           minic_const_eval_integer_builtin_value(
+               program, target, expression->value.builtin_unary.operator_kind,
+               expression->type, operand, value);
 }
 
 typedef struct MinicConstWideInteger {

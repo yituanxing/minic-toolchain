@@ -79,6 +79,52 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
     return minic_data_layout_type(invocation, program, pointee, element_size, &alignment);
 }
 
+bool minic_c0_integer_builtin_signature(MinicBuiltinUnaryOperator operator_kind,
+                                        MinicType *argument_type,
+                                        MinicType *result_type) {
+    if (argument_type == NULL || result_type == NULL)
+        return false;
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZ:
+    case MINIC_BUILTIN_UNARY_CTZ:
+    case MINIC_BUILTIN_UNARY_POPCOUNT:
+        *argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_CLZL:
+    case MINIC_BUILTIN_UNARY_CTZL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTL:
+        *argument_type = minic_type_unsigned_long();
+        break;
+    case MINIC_BUILTIN_UNARY_CLZLL:
+    case MINIC_BUILTIN_UNARY_CTZLL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTLL:
+        *argument_type = minic_type_unsigned_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        *argument_type = minic_type_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        *argument_type = minic_type_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP16:
+        *argument_type = minic_type_unsigned_short();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP32:
+        *argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP64:
+        *argument_type = minic_type_unsigned_long_long();
+        break;
+    default:
+        return false;
+    }
+    *result_type = operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+                   operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+                   operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+                       ? *argument_type : minic_type_int();
+    return true;
+}
+
 bool minic_c0_integer_type_is_signed(const MinicC0Program *program, MinicType type) {
     MinicType effective_type;
 

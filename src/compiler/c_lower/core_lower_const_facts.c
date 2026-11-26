@@ -2000,69 +2000,20 @@ statement_expression_done:
     if (expression->kind == MINIC_EXPRESSION_BUILTIN_UNARY) {
         const MinicExpression *operand = minic_c0_program_expression(
             context->body->program, expression->value.builtin_unary.operand);
-        MinicBuiltinUnaryOperator operation =
-            expression->value.builtin_unary.operator_kind;
-        unsigned int width;
-        uint64_t bits;
-        unsigned int count = 0U;
-        bool recognized =
-            operation == MINIC_BUILTIN_UNARY_CLZ ||
-            operation == MINIC_BUILTIN_UNARY_CLZL ||
-            operation == MINIC_BUILTIN_UNARY_CLZLL ||
-            operation == MINIC_BUILTIN_UNARY_CTZ ||
-            operation == MINIC_BUILTIN_UNARY_CTZL ||
-            operation == MINIC_BUILTIN_UNARY_CTZLL ||
-            operation == MINIC_BUILTIN_UNARY_POPCOUNT ||
-            operation == MINIC_BUILTIN_UNARY_POPCOUNTL ||
-            operation == MINIC_BUILTIN_UNARY_POPCOUNTLL ||
-            operation == MINIC_BUILTIN_UNARY_FFSLL;
-
-        /* The frontend folds an ICE operand already. During a constant-call
-         * evaluation the same intrinsic may instead read a specialized
-         * callee parameter. Compute the exact target-width integer result
-         * without introducing an ISA-specific KVM/fixmap exception. */
-        if (recognized && operand != NULL &&
+        MinicType argument_type, result_type;
+        if (operand != NULL &&
+            minic_c0_integer_builtin_signature(expression->value.builtin_unary.operator_kind,
+                                               &argument_type, &result_type) &&
+            minic_type_equal(operand->type, argument_type) &&
+            minic_type_equal(expression->type, result_type) &&
             core_const_eval_integer_with_locals(
                 context, expression->value.builtin_unary.operand, &operand_value) &&
-            minic_target_info_integer_width(context->target,
-                                            context->body->program,
-                                            operand->type, &width) &&
-            width > 0U && width <= 64U) {
-            bits = operand_value.bits & minic_integer_mask64(width);
-            if (operation == MINIC_BUILTIN_UNARY_CLZ ||
-                operation == MINIC_BUILTIN_UNARY_CLZL ||
-                operation == MINIC_BUILTIN_UNARY_CLZLL) {
-                if (bits == 0U) return false; /* GCC: undefined on zero */
-                while ((bits & (UINT64_C(1) << (width - 1U))) == 0U) {
-                    bits <<= 1U;
-                    ++count;
-                }
-            } else if (operation == MINIC_BUILTIN_UNARY_CTZ ||
-                       operation == MINIC_BUILTIN_UNARY_CTZL ||
-                       operation == MINIC_BUILTIN_UNARY_CTZLL) {
-                if (bits == 0U) return false;
-                while ((bits & UINT64_C(1)) == 0U) {
-                    bits >>= 1U;
-                    ++count;
-                }
-            } else if (operation == MINIC_BUILTIN_UNARY_FFSLL) {
-                if (bits != 0U) {
-                    count = 1U;
-                    while ((bits & UINT64_C(1)) == 0U) {
-                        bits >>= 1U;
-                        ++count;
-                    }
-                }
-            } else {
-                while (bits != 0U) {
-                    bits &= bits - UINT64_C(1);
-                    ++count;
-                }
-            }
-            value->type = expression->type;
-            value->bits = count;
+            minic_const_value_convert_integer(context->body->program, context->target,
+                                               &operand_value, argument_type, &operand_value) &&
+            minic_const_eval_integer_builtin_value(
+                context->body->program, context->target,
+                expression->value.builtin_unary.operator_kind, result_type, operand_value, value))
             return true;
-        }
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
