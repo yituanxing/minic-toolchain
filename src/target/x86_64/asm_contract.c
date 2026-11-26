@@ -3,6 +3,21 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Full-template comparison removes only the four historical whitespace
+ * characters; embedded NULs and buffer overflow still fail closed. */
+static bool x86_compact_template(const char *text, size_t length,
+                                 char *compact, size_t capacity) {
+    size_t i, n = 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || n + 1U >= capacity) return false;
+        compact[n++] = c;
+    }
+    compact[n] = '\0';
+    return true;
+}
+
 /* Core's form ID is transport metadata, not a trusted capability. A future
  * pass, serialized IR, or standalone Core client can manufacture it. Check
  * the exact admitted source spelling/variant once at the target boundary;
@@ -554,15 +569,9 @@ unsigned int minic_x86_64_linux_testcc_form(const char *text, size_t length) {
         "testb%2,%1/*outputconditioncodez*/"
     };
     char compact[120];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -577,15 +586,9 @@ unsigned int minic_x86_64_linux_gs_testcc_form(
         "btq%%gs:%2,%1/*outputconditioncodec*/"
     };
     char compact[120];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -1068,15 +1071,9 @@ bool minic_x86_64_linux_boot_segments_template(
     static const char expected[] =
         "movl%%eax,%%dsmovl%%eax,%%ssmovl%%eax,%%es";
     char compact[120];
-    size_t n = 0U, i;
+
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -1107,15 +1104,9 @@ unsigned int minic_x86_64_linux_privileged_zero_form(
 bool minic_x86_64_linux_amx_tilerelease_form(const char *text, size_t length) {
     static const char bytes[] = ".byte0xc4,0xe2,0x78,0x49,0xc0";
     char compact[64];
-    size_t i, n = 0U;
+
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, bytes) == 0;
 }
 
@@ -1127,15 +1118,9 @@ bool minic_x86_64_linux_x87_fwait_fault_form(const char *text, size_t length) {
         "1:fwait2:.pushsection\"__ex_table\",\"a\""
         ".balign4.long(1b)-..long(2b)-..long1.popsection";
     char compact[192];
-    size_t i, n = 0U;
+
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -1153,15 +1138,9 @@ bool minic_x86_64_linux_weak_wrmsr_fence_form(const char *text, size_t length) {
         ".pushsection.altinstr_replacement,\"ax\""
         "#ALT:replacement16641:6651:.popsection";
     char compact[512];
-    size_t i, n = 0U;
+
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -1431,15 +1410,9 @@ unsigned int minic_x86_64_linux_irq_stack_call_form(
         ".long998b.popsectionpopq%%rsp"
     };
     char compact[512];
-    size_t i, n = 0U;
+    size_t i;
     if (text == NULL || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < 3U; ++i)
         if (strcmp(compact, named[i]) == 0 ||
             strcmp(compact, numeric[i]) == 0 ||
@@ -2328,15 +2301,9 @@ static size_t x86_linux_percpu_xadd_width(const char *text, size_t length) {
     };
     static const size_t widths[] = {1U, 2U, 4U, 8U, 1U, 2U, 4U, 8U};
     char compact[80];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(widths)/sizeof(widths[0]); ++i)
         if (strcmp(compact, patterns[i]) == 0) return widths[i];
     return 0U;
@@ -2917,15 +2884,9 @@ unsigned int minic_x86_64_linux_monitor_wait_form(
         "sti;.byte0x0f,0x01,0xc9;"    /* STI; MWAIT */
     };
     char compact[96];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -2975,15 +2936,9 @@ unsigned int minic_x86_64_linux_segment_load_extable_form(
         "2:.pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(2b)-..long5.popsection";
     char compact[180], expected[180];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(segment_names)/sizeof(segment_names[0]); ++i) {
         int written = snprintf(expected, sizeof(expected),
             "1:movw%%0,%%%%%s%s", segment_names[i], tail);
@@ -3060,15 +3015,9 @@ unsigned int minic_x86_64_linux_fsgsbase_form(
         "rdfsbase%0", "rdgsbase%0", "wrfsbase%0", "wrgsbase%0"
     };
     char compact[40];
-    size_t n = 0U, i;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(exact)/sizeof(exact[0]); ++i)
         if (strcmp(compact, exact[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -3085,16 +3034,10 @@ unsigned int minic_x86_64_linux_kernel_nofault_goto_form(
         ".pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(%l2)-..long3.popsection";
     char compact[200], expected[200];
-    size_t i, n = 0U, variant;
+    size_t variant;
     static const char widths[] = "bwlq";
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (variant = 0U; variant < 8U; ++variant) {
         const bool load = variant < 4U;
         int written = snprintf(expected, sizeof(expected),
@@ -3135,15 +3078,9 @@ bool minic_x86_64_linux_rep_movsb_alternative_form(
         "2:.pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(2b)-..long3.popsection";
     char compact[560];
-    size_t i, n = 0U;
+
     if (!text || length != 506U) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -3164,15 +3101,9 @@ bool minic_x86_64_linux_rep_stosb_alternative_form(
         "2:.pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(2b)-..long3.popsection";
     char compact[560];
-    size_t i, n = 0U;
+
     if (!text || length != 506U) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -3204,15 +3135,9 @@ unsigned int minic_x86_64_linux_fpu_user_frame_form(
         ".pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(2b)-..long15.popsection";
     char compact[1100], expected[1100];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(instructions)/sizeof(instructions[0]); ++i) {
         const int wanted = snprintf(expected, sizeof(expected),
             "%s%s1:%s2:%s%s%s",
@@ -3279,15 +3204,9 @@ bool minic_x86_64_linux_x87_fild_prepare_form(const char *text, size_t length) {
         "fnclexemmsfildl%[addr]", "fnclexemmsfildl%0"
     };
     char compact[80];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return true;
     return false;
@@ -3300,15 +3219,9 @@ unsigned int minic_x86_64_linux_mxcsr_form(const char *text, size_t length) {
         "ldmxcsr%0", "ldmxcsr%[val]", "stmxcsr%0", "stmxcsr%[val]"
     };
     char compact[80];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return i < 2U ? 1U : 2U;
     return 0U;
@@ -3320,15 +3233,9 @@ unsigned int minic_x86_64_linux_mxcsr_form(const char *text, size_t length) {
 bool minic_x86_64_linux_unwind_context_form(const char *text, size_t length) {
     static const char expected[] = "lea(%%rip),%0mov%%rsp,%1mov%%rbp,%2";
     char compact[128];
-    size_t i, n = 0U;
+
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -3357,15 +3264,9 @@ bool minic_x86_64_linux_task_size_alt_form(const char *text, size_t length) {
         ".pushsection.altinstr_replacement,\"ax\""
         "#ALT:replacement16641:movq%3,%06651:.popsection";
     char compact[512];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0 ||
            strcmp(compact, expected_numeric) == 0;
 }
@@ -3383,16 +3284,10 @@ unsigned int minic_x86_64_linux_fpu_kernel_restore_form(
         "2:.pushsection\"__ex_table\",\"a\".balign4"
         ".long(1b)-..long(2b)-..long6.popsection";
     char compact[256], expected[256];
-    size_t i, j, n = 0U;
+    size_t i, j;
     if (text == NULL || length == 0U || length >= sizeof(compact))
         return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(names)/sizeof(names[0]); ++i) {
         for (j = 0U; j < sizeof(operands)/sizeof(operands[0]); ++j) {
             const int size = snprintf(expected, sizeof(expected),
@@ -3425,15 +3320,9 @@ unsigned int minic_x86_64_linux_xstate_fault_form(
         "%[err]", "%0"
     };
     char compact[256], expected[256];
-    size_t i, j, n = 0U;
+    size_t i, j;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < sizeof(opcodes)/sizeof(opcodes[0]); ++i) {
         for (j = 0U; j < sizeof(error_operands)/
                            sizeof(error_operands[0]); ++j) {
@@ -3468,15 +3357,9 @@ bool minic_x86_64_linux_xrstor_alternative_form(
         ".pushsection\"__ex_table\",\"a\".balign4"
         ".long(661b)-..long(3b)-..long6.popsection";
     char compact[570];
-    size_t i, n = 0U;
+
     if (!text || length != 500U) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -3521,15 +3404,9 @@ unsigned int minic_x86_64_linux_jump_label_form(
         "jmp%l2#objtoolNOPsthis", "jmp%l2"
     };
     char compact[220], expected[220], table[180];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (i = 0U; i < 4U; ++i) {
         const char *label = i < 2U ? "%l[l_yes]" : "%l2";
         const int table_len = snprintf(table, sizeof(table), shared, label);
@@ -3552,15 +3429,9 @@ unsigned int minic_x86_64_linux_jump_label_form(
 unsigned int minic_x86_64_linux_pkru_form(
     const char *text, size_t length) {
     char compact[96];
-    size_t i, n = 0U;
+
     if (!text || length < 12U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     if (strcmp(compact, ".byte0x0f,0x01,0xee") == 0) return 1U;
     if (strcmp(compact, ".byte0x0f,0x01,0xef") == 0) return 2U;
     return 0U;
@@ -3616,16 +3487,10 @@ unsigned int minic_x86_64_linux_smap_alternative_form(
         "pushf;pop%0;.byte0x0f,0x01,0xca", "push%0;popf"
     };
     char compact[700], expected[700];
-    size_t i, n = 0U;
+
     unsigned int form;
     if (!text || length > 680U || length < 300U) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return 0U;
     for (form = 1U; form <= 4U; ++form) {
         const int required = snprintf(expected, sizeof(expected), "%s%s%s%s",
             prefixes[form - 1U], shared, bodies[form - 1U],
@@ -3948,19 +3813,13 @@ bool minic_x86_64_linux_idle_clflush_alt_form(
     static const char *const operand[] = {"%[addr]", "%1"};
     char compact[512];
     char expected[512];
-    size_t i, n = 0U;
+
     const int count = snprintf(expected, sizeof(expected), "%s%s%s",
         prefix, operand[core_numeric ? 1U : 0U], suffix);
     if (!text || !length || length >= sizeof(compact) ||
         count <= 0 || (size_t)count >= sizeof(expected))
         return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -3981,16 +3840,10 @@ bool minic_x86_64_linux_pat_clflushopt_form(
         "#ALT:replacement16641:.byte0x66;clflush%P0"
         "6651:.popsection";
     char compact[512];
-    size_t i, n = 0U;
+
     if (text == NULL || length == 0U || length >= sizeof(compact))
         return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0;
 }
 

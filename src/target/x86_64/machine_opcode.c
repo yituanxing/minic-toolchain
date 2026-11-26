@@ -8,6 +8,27 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Common physical-register checks for exact source-assembly contracts.
+ * The individual form still owns operand access and effects. */
+static bool x86_has_only_flags_clobber(const MinicMachineInstruction *ins) {
+    return ins->implicit_count == 1U && ins->implicit != NULL &&
+           ins->implicit[0].reg.bank == MINIC_MACHINE_REGISTER_FLAGS &&
+           ins->implicit[0].reg.number == 0U &&
+           ins->implicit[0].reg.width_bits == 64U &&
+           ins->implicit[0].access == MINIC_MACHINE_REGISTER_CLOBBER;
+}
+
+static bool x86_fixed_gpr_operand(const MinicMachineOperand *op,
+                                  const char *constraint,
+                                  unsigned int reg, unsigned int width) {
+    return op->kind == MINIC_MACHINE_OPERAND_REGISTER &&
+           op->asm_name == NULL && op->asm_constraint != NULL &&
+           strcmp(op->asm_constraint, constraint) == 0 &&
+           op->value.physical.reg.bank == MINIC_MACHINE_REGISTER_GENERAL &&
+           op->value.physical.reg.number == reg &&
+           op->value.physical.reg.width_bits == width;
+}
+
 enum X86ImplicitKind {
     X86_IMPLICIT_NONE = 0,
     X86_IMPLICIT_FLAGS_DEF,
@@ -1324,11 +1345,7 @@ static bool x86_source_matched_memory_contract(
             ins->source_asm_machine_form_id,
             ins->source_asm_machine_form_variant,
             ins->source_asm_template, ins->source_asm_length) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        !x86_has_only_flags_clobber(ins))
         return false;
     for (i = 0U; i < count; ++i) {
         const bool output = i < noutputs;
@@ -1374,11 +1391,7 @@ static bool x86_source_bit_scan_contract(
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id, variant,
             ins->source_asm_template, ins->source_asm_length) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        !x86_has_only_flags_clobber(ins))
         return false;
     op = &ins->operands[0];
     if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
@@ -1534,12 +1547,7 @@ static bool x86_source_cmpxchg128_contract(
         const unsigned int access = i < 2U ?
             MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
             MINIC_MACHINE_REGISTER_READ;
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != registers[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], registers[i], 64U) ||
             op->value.physical.access != access) return false;
     }
     return true;
@@ -1895,11 +1903,7 @@ static bool x86_source_gs_tied_alu_contract(
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,form,
             ins->source_asm_template,ins->source_asm_length) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        !x86_has_only_flags_clobber(ins))
         return false;
     out = &ins->operands[0];
     mem = &ins->operands[1];
@@ -2051,11 +2055,7 @@ static bool x86_source_checksum_carry_contract(
         ((ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) != 0U &&
             !(partial && form >= 2U && form <= 5U)) ||
         ins->operand_count != count || ins->operands == NULL ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        !x86_has_only_flags_clobber(ins))
         return false;
     for (i = 0U; i < count; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
@@ -2150,11 +2150,7 @@ static bool x86_source_gs_atomic_extended_contract(
                      MINIC_MACHINE_EFFECT_COMPILER_BARRIER)) ||
         (cmp && (ins->effects & MINIC_MACHINE_EFFECT_COMPILER_BARRIER) == 0U) ||
         ins->operand_count != count || ins->operands == NULL ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER)
+        !x86_has_only_flags_clobber(ins))
         return false;
     acc = &ins->operands[0];
     mem = &ins->operands[1];
@@ -2235,11 +2231,7 @@ static bool x86_source_carry_xadd_contract(const MinicTargetInfo *target,
         (!csum &&
          (ins->effects & MINIC_MACHINE_EFFECT_VOLATILE) == 0U) ||
         ins->operand_count != count || ins->operands == NULL ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,
             ins->source_asm_machine_form_variant,
@@ -2310,12 +2302,7 @@ static bool x86_source_hweight_contract(const MinicMachineInstruction *ins) {
         return false;
     for (i = 0U; i < 2U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != registers[i] ||
-            op->value.physical.reg.width_bits != bits ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], registers[i], bits) ||
             op->value.physical.access != (i == 0U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -2351,12 +2338,7 @@ static bool x86_source_efi_kernel_transfer_contract(
         return false;
     for (i = 0U; i < 2U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 64U) ||
             op->value.physical.access != MINIC_MACHINE_REGISTER_READ)
             return false;
     }
@@ -2521,12 +2503,7 @@ static bool x86_source_rep_string_io_contract(
         return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != (i == 2U ? 16U : 64U) ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], (i == 2U ? 16U : 64U)) ||
             op->value.physical.access != (i < 2U ?
                 MINIC_MACHINE_REGISTER_READ | MINIC_MACHINE_REGISTER_WRITE :
                 MINIC_MACHINE_REGISTER_READ))
@@ -2755,12 +2732,7 @@ static bool x86_source_iomem_copy_contract(
         return false;
     for (i = 0U; i < count; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint, constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 64U) ||
             op->value.physical.access != (i < outputs ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -2877,12 +2849,7 @@ static bool x86_source_counter_contract(const MinicMachineInstruction *ins) {
         return false;
     for (i = 0U; i < count; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != registers[i] ||
-            op->value.physical.reg.width_bits != (i < 2U ? width : 32U) ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], registers[i], (i < 2U ? width : 32U)) ||
             op->value.physical.access != (i < 2U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -3136,11 +3103,7 @@ static bool x86_source_random_seed_contract(
         ins->source_asm_permits_fallthrough ||
         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
             MINIC_MACHINE_EFFECT_VOLATILE) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,
             ins->source_asm_machine_form_variant,
@@ -3657,12 +3620,7 @@ static bool x86_source_pkru_contract(const MinicMachineInstruction *ins) {
         return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != registers[i] ||
-            op->value.physical.reg.width_bits != 32U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], registers[i], 32U) ||
             op->value.physical.access != (i < outputs ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -3696,12 +3654,7 @@ static bool x86_source_alternative_wrmsr_contract(
         return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 32U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 32U) ||
             op->value.physical.access != MINIC_MACHINE_REGISTER_READ)
             return false;
     }
@@ -3783,12 +3736,7 @@ static bool x86_source_xsetbv_contract(const MinicMachineInstruction *ins) {
         return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 32U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 32U) ||
             op->value.physical.access != MINIC_MACHINE_REGISTER_READ)
             return false;
     }
@@ -4064,11 +4012,7 @@ static bool x86_source_preempt_gs_dec_contract(
             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
             MINIC_MACHINE_EFFECT_MEMORY_READ |
             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,0U,
             ins->source_asm_template,ins->source_asm_length))
@@ -4119,11 +4063,7 @@ static bool x86_source_boot_cmpsb_contract(
             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
             MINIC_MACHINE_EFFECT_MEMORY_READ |
             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,1U,
             ins->source_asm_template,ins->source_asm_length)) return false;
@@ -4168,22 +4108,13 @@ static bool x86_source_boot_divl_contract(
         ins->source_asm_terminates_block || ins->source_asm_permits_fallthrough ||
         ins->effects != (MINIC_MACHINE_EFFECT_SOURCE_ASM |
             MINIC_MACHINE_EFFECT_VOLATILE) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,2U,
             ins->source_asm_template,ins->source_asm_length)) return false;
     for (i = 0U; i < 5U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 32U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 32U) ||
             op->value.physical.access != (i < 2U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -4217,12 +4148,7 @@ static bool x86_source_boot_movs_contract(
             ins->source_asm_template,ins->source_asm_length)) return false;
     for (i = 0U; i < 7U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 64U) ||
             op->value.physical.access != (i < 3U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -5206,12 +5132,7 @@ static bool x86_source_pvclock_scale_contract(const MinicMachineInstruction *ins
             ins->source_asm_template,ins->source_asm_length)) return false;
     for (i = 0U; i < 4U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 64U) ||
             op->value.physical.access != (i < 2U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
@@ -5539,11 +5460,7 @@ static bool x86_source_boot_test_bit_contract(
             MINIC_MACHINE_EFFECT_VOLATILE |
             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
             MINIC_MACHINE_EFFECT_MEMORY_READ) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,1U,
             ins->source_asm_template,ins->source_asm_length)) return false;
@@ -5592,22 +5509,13 @@ static bool x86_source_boot_eflags_contract(
             MINIC_MACHINE_EFFECT_COMPILER_BARRIER |
             MINIC_MACHINE_EFFECT_MEMORY_READ |
             MINIC_MACHINE_EFFECT_MEMORY_WRITE) ||
-        ins->implicit_count != 1U || ins->implicit == NULL ||
-        ins->implicit[0].reg.bank != MINIC_MACHINE_REGISTER_FLAGS ||
-        ins->implicit[0].reg.number != 0U ||
-        ins->implicit[0].reg.width_bits != 64U ||
-        ins->implicit[0].access != MINIC_MACHINE_REGISTER_CLOBBER ||
+        !x86_has_only_flags_clobber(ins) ||
         !minic_x86_64_typed_machine_form_matches_template(
             ins->source_asm_machine_form_id,4U,
             ins->source_asm_template,ins->source_asm_length)) return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicMachineOperand *op = &ins->operands[i];
-        if (op->kind != MINIC_MACHINE_OPERAND_REGISTER ||
-            op->asm_name != NULL || op->asm_constraint == NULL ||
-            strcmp(op->asm_constraint,constraints[i]) != 0 ||
-            op->value.physical.reg.bank != MINIC_MACHINE_REGISTER_GENERAL ||
-            op->value.physical.reg.number != regs[i] ||
-            op->value.physical.reg.width_bits != 64U ||
+        if (!x86_fixed_gpr_operand(op, constraints[i], regs[i], 64U) ||
             op->value.physical.access != (i < 2U ?
                 MINIC_MACHINE_REGISTER_WRITE : MINIC_MACHINE_REGISTER_READ))
             return false;
