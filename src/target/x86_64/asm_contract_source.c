@@ -1974,10 +1974,16 @@ static bool x86_linux_legacy_fnsave_source(const MinicTargetInvocation *invocati
         source->output_count != 1U || source->input_count || !source->outputs ||
         source->has_memory_clobber || source->clobber_count ||
         source->register_clobber_count ||
-        !c_is(&source->outputs[0], "=m") ||
-        !source->outputs[0].name ||
-        source->outputs[0].name_length != 2U ||
-        memcmp(source->outputs[0].name, "fp", 2U)) return false;
+        !c_is(&source->outputs[0], "=m")) return false;
+    /* Only the two exact FNSAVE templates are accepted. The named form
+     * requires GNU [fp], while the positional %0 form has no operand name. */
+    if (memchr(source->template_text, '[', source->template_length) != NULL) {
+        if (source->outputs[0].name == NULL ||
+            source->outputs[0].name_length != 2U ||
+            memcmp(source->outputs[0].name, "fp", 2U) != 0)
+            return false;
+    } else if (source->outputs[0].name != NULL ||
+               source->outputs[0].name_length != 0U) return false;
     image = minic_c0_program_expression(program,
         source->outputs[0].expression);
     if (!image || image->value_category != MINIC_VALUE_LVALUE ||
