@@ -12029,6 +12029,7 @@ bool minic_x86_64_machine_select_core_for_production(
             MinicCoreInstructionId id;
             const MinicCoreInstruction *ins;
             X86AuxBlocks *aux;
+            unsigned int aux_count = 0U;
             if (!minic_core_block_instruction_at(core, block, j,
                     &id, &ins) || id >= core->instruction_count)
                 goto cleanup;
@@ -12053,39 +12054,20 @@ bool minic_x86_64_machine_select_core_for_production(
                      ins->value.structured_inline_asm.inline_asm_id
                  ].target_machine_form_id ==
                      MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO))) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second)) goto cleanup;
+                aux_count = 2U;
             } else if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->third)) goto cleanup;
+                aux_count = 3U;
             } else if (ins->kind ==
                     MINIC_CORE_INSTRUCTION_DYNAMIC_STACK_ALLOC) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second)) goto cleanup;
+                aux_count = 2U;
             } else if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
                 ins->value.call.extended_float_operation ==
                     MINIC_CORE_EXT_FLOAT_FROM_UNSIGNED64) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second)) goto cleanup;
+                aux_count = 2U;
             } else if (ins->kind == MINIC_CORE_INSTRUCTION_CALL &&
                 ins->value.call.extended_float_operation ==
                     MINIC_CORE_EXT_FLOAT_TO_UNSIGNED64) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->third)) goto cleanup;
+                aux_count = 3U;
             } else if ((ins->kind ==
                     MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_LEFT ||
                     ins->kind ==
@@ -12094,12 +12076,7 @@ bool minic_x86_64_machine_select_core_for_production(
                 x86_i128_type(&sel,
                     core->values[ins->value.binary.left].core_type_id,
                     NULL)) {
-                if (!minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->first) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->second) ||
-                    !minic_machine_builder_create_block(&sel.builder,
-                        NULL, false, true, &aux->third)) goto cleanup;
+                aux_count = 3U;
             } else if (ins->kind ==
                     MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
                     ins->kind ==
@@ -12107,18 +12084,19 @@ bool minic_x86_64_machine_select_core_for_production(
                 MinicCoreFloatingShape shape = {0};
                 if (!minic_core_floating_shape(core, ins, &shape))
                     goto cleanup;
-                if (shape.integer_bytes == 8U &&
-                    !shape.integer_signed) {
-                    if (!minic_machine_builder_create_block(&sel.builder,
-                            NULL, false, true, &aux->first) ||
-                        !minic_machine_builder_create_block(&sel.builder,
-                            NULL, false, true, &aux->second)) goto cleanup;
-                    if (ins->kind ==
-                            MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER &&
-                        !minic_machine_builder_create_block(&sel.builder,
-                            NULL, false, true, &aux->third)) goto cleanup;
-                }
+                if (shape.integer_bytes == 8U && !shape.integer_signed)
+                    aux_count = ins->kind ==
+                        MINIC_CORE_INSTRUCTION_DOUBLE_TO_INTEGER ? 3U : 2U;
             }
+            if ((aux_count >= 1U &&
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->first)) ||
+                (aux_count >= 2U &&
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->second)) ||
+                (aux_count >= 3U &&
+                    !minic_machine_builder_create_block(&sel.builder,
+                        NULL, false, true, &aux->third))) goto cleanup;
         }
         if (block->has_terminator &&
             block->terminator.kind ==
