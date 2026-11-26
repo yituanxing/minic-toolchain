@@ -37,16 +37,15 @@ typedef struct X86AuxBlocks {
 
 typedef struct X86CoreSelector {
     MinicMachineBuilder builder;
-    MinicMachineGNUAsmPolicy policy;
     const MinicCoreFunction *core;
     const MinicX86Frame *frame;
     const MinicTargetInfo *target;
     MinicX86MachineFrameView frame_view;
     size_t *blocks;
     size_t *false_blocks;
-    bool *reachable;
-    /* Common Core semantic use census; never inferred from Machine registers. */
-    size_t *value_uses;
+    const bool *reachable;
+    /* Immutable Common Core use census; never inferred from Machine registers. */
+    const size_t *value_uses;
     X86AuxBlocks *instruction_aux;
     /* Restore the proven one-instruction %rax transport from the pre-MIR
      * backend. It never crosses a Core instruction or basic-block boundary. */
@@ -12388,10 +12387,9 @@ static bool x86_adjacent_gp_forward(X86CoreSelector *sel,
     return true;
 }
 
-static bool x86_machine_select_core_impl(
+bool minic_x86_64_machine_select_core_for_production(
     MinicMachineFunction *machine, const MinicTargetInfo *target,
-    const MinicCoreFunction *core, const MinicX86Frame *frame,
-    bool defer_physical_preflight) {
+    const MinicCoreFunction *core, const MinicX86Frame *frame) {
     X86CoreSelector sel = {0};
     MinicX86MachinePrologue prologue = {0};
     size_t i, count;
@@ -12411,6 +12409,8 @@ static bool x86_machine_select_core_impl(
     sel.core = core;
     sel.frame = frame;
     sel.target = target;
+    sel.reachable = frame->reachable_blocks;
+    sel.value_uses = frame->function_value_use_counts;
     sel.enable_adjacent_gp_forward =
         getenv("MINIC_X86_DISABLE_ADJACENT_GP_FORWARD") == NULL;
     /* Same-compiler diagnostic A/B, read once per function rather than for
@@ -12419,11 +12419,6 @@ static bool x86_machine_select_core_impl(
         getenv("MINIC_X86_DISABLE_DIRECT_OBJECT_ADDRESS") == NULL;
     sel.blocks = malloc(count * sizeof(*sel.blocks));
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
-    sel.reachable = calloc(count, sizeof(*sel.reachable));
-    if (core->value_count > SIZE_MAX / sizeof(*sel.value_uses))
-        goto cleanup;
-    sel.value_uses = calloc(core->value_count != 0U ?
-        core->value_count : 1U, sizeof(*sel.value_uses));
     if (core->instruction_count > SIZE_MAX /
             sizeof(*sel.instruction_aux)) goto cleanup;
     sel.instruction_aux = calloc(core->instruction_count != 0U ?
@@ -12431,12 +12426,7 @@ static bool x86_machine_select_core_impl(
     if (sel.blocks == NULL || sel.false_blocks == NULL ||
         sel.reachable == NULL || sel.value_uses == NULL ||
         sel.instruction_aux == NULL ||
-        !minic_core_function_value_use_counts(core, sel.value_uses,
-            core->value_count) ||
-        !minic_core_function_mark_reachable_blocks(core,
-            sel.reachable, count) ||
         !sel.reachable[core->entry_block] ||
-        !minic_x86_64_machine_gnu_asm_policy(target, &sel.policy) ||
         !minic_x86_64_machine_frame_view(frame,
             minic_core_function_calling_convention(core), &sel.frame_view) ||
         !minic_machine_function_initialize(machine, target, core->name,
@@ -12686,9 +12676,9 @@ static bool x86_machine_select_core_impl(
             goto cleanup;
         }
     }
-    phase = "gnu-asm-preflight";
-    ok = defer_physical_preflight ||
-        minic_machine_gnu_asm_preflight(machine, &sel.policy);
+    /* The caller's mandatory machine_production_preflight_prepare owns
+     * physical ISA/ASM verification once, after selection and before output. */
+    ok = true;
 cleanup:
     if (!ok && getenv("MINIC_X86_TYPED_REJECT_TRACE") != NULL)
         fprintf(stderr,
@@ -12696,21 +12686,7 @@ cleanup:
             core->name, phase);
     free(sel.blocks);
     free(sel.false_blocks);
-    free(sel.reachable);
-    free(sel.value_uses);
     free(sel.instruction_aux);
     if (!ok) minic_machine_function_destroy(machine);
     return ok;
-}
-
-bool minic_x86_64_machine_select_core_subset(
-    MinicMachineFunction *machine, const MinicTargetInfo *target,
-    const MinicCoreFunction *core, const MinicX86Frame *frame) {
-    return x86_machine_select_core_impl(machine, target, core, frame, false);
-}
-
-bool minic_x86_64_machine_select_core_for_production(
-    MinicMachineFunction *machine, const MinicTargetInfo *target,
-    const MinicCoreFunction *core, const MinicX86Frame *frame) {
-    return x86_machine_select_core_impl(machine, target, core, frame, true);
 }

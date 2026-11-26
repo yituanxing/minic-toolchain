@@ -24,10 +24,9 @@ typedef struct MinicX86Frame {
     const MinicCoreModule *module;
     size_t value_count;
     size_t *value_offsets;
-    /* Borrowed from the function's canonical use census while emitting
-     * its blocks. A NULL census retains the standalone emitter's
-     * conservative always-spill behavior. This is not a register allocator:
-     * live Core values still use their original ABI-safe frame slots. */
+    /* Exact immutable Core facts lent by the prepared FunctionPlan;
+     * the Machine selector must never redo CFG or SSA-use analysis. */
+    const bool *reachable_blocks;
     const size_t *function_value_use_counts;
     size_t *object_offsets;
     const MinicCoreObjectStoragePlan *object_storage; /* borrowed */

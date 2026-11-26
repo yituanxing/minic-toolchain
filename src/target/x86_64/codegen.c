@@ -1191,6 +1191,7 @@ static bool x86_emit_function(FILE *out,
         x86_error(diag, path, "x86-64 prepared Core value-use census missing");
         goto done;
     }
+    frame.reachable_blocks = reachable;
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
         (inherited_head_address_context ||
