@@ -312,48 +312,27 @@ minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
                       statement->span.begin.column);
         return status;
     }
+    /* Both fallthrough and continue converge at the explicit update block
+       when one exists. Lower the update once, then emit the backedge. */
     if (for_update != NULL && update_block != MINIC_CORE_BLOCK_INVALID) {
-        /* M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER: converge both natural
-           body fallthrough and every continue edge at one update owner, then
-           evaluate the update exactly once before the condition backedge. */
         if (!body_terminated) {
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, update_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
+            status = minic_core_lower_internal_set_branch(context, context->block_id,
+                                                          statement->span, update_block);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
         context->block_id = update_block;
+        body_terminated = false;
+    }
+    if (!body_terminated && for_update != NULL) {
         status = minic_core_lower_internal_lower_expression_statement(context, for_update);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (context->block_id < context->function->block_count &&
-            context->function->blocks[context->block_id].has_terminator) {
-            body_terminated = true;
-        } else {
-            body_terminated = false;
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-        }
-    } else {
-        if (!body_terminated && for_update != NULL) {
-            status = minic_core_lower_internal_lower_expression_statement(context, for_update);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (context->block_id < context->function->block_count &&
-                context->function->blocks[context->block_id].has_terminator) {
-                body_terminated = true;
-            }
-        }
-        if (!body_terminated) {
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-        }
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        body_terminated = context->block_id < context->function->block_count &&
+                          context->function->blocks[context->block_id].has_terminator;
+    }
+    if (!body_terminated) {
+        status = minic_core_lower_internal_set_branch(context, context->block_id,
+                                                      statement->span, condition_block);
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
     context->block_id = exit_block;
     /* M133_CONSTANT_TRUE_LOOP_REACHABILITY: reachability, not syntax spelling,

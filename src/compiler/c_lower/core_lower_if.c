@@ -427,8 +427,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     /* M182_TERMINATING_GUARD_FACTS: a pure terminating taken arm does not
        contribute state to the following statement. */
     preserve_guard_facts = false;
-    if (else_source == NULL && then_source->statement_count == 1U &&
-        minic_core_cfg_pure_call_argument(context, statement->expression, 0U)) {
+    if (else_source == NULL && then_source->statement_count == 1U && condition_is_pure) {
         const MinicStatement *guard_statement = minic_c0_program_statement(
             context->body->program, then_source->statements[0]);
         preserve_guard_facts =
@@ -460,8 +459,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             if ((minic_const_eval_integer(context->body->program,
                                           context->target,
                                           statement->expression, &condition_value) ||
-                 (minic_core_cfg_pure_call_argument(
-                      context, statement->expression, 0U) &&
+                 (condition_is_pure &&
                   !core_block_contains_inline_asm(context, then_source) &&
                   (else_source == NULL ||
                    !core_block_contains_inline_asm(context, else_source)) &&

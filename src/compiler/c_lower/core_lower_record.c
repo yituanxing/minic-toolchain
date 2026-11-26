@@ -17,6 +17,30 @@
    literal already owns one frontend local backing object and one initializer
    block. Materialize that exact semantic object so all aggregate consumers
    (copy, call, return) share one ownership seam. */
+static bool record_object_address(MinicCoreLowerContext *context, MinicSourceSpan span,
+                                  MinicType pointer_type, MinicCoreObjectId object,
+                                  MinicCoreValueId *address) {
+    MinicCoreInstruction operation = {0};
+    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
+    operation.span = span;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.object_id = object;
+    return minic_core_function_append_source_value_instruction(
+        context->source, context->block_id, &operation, pointer_type, address);
+}
+
+static bool record_copy(MinicCoreLowerContext *context, MinicSourceSpan span,
+                        MinicType type, MinicCoreValueId destination, MinicCoreValueId source) {
+    MinicCoreInstruction operation = {0};
+    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
+    operation.span = span;
+    operation.result = MINIC_CORE_VALUE_INVALID;
+    operation.value.record_copy.destination_address = destination;
+    operation.value.record_copy.source_address = source;
+    return minic_core_function_append_source_effect_instruction(
+        context->source, context->block_id, &operation, type);
+}
+
 MinicCoreLowerStatus minic_core_lower_record_compound_literal_object(
     MinicCoreLowerContext *context,
     const MinicExpression *expression,
@@ -80,8 +104,6 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
     if (expression->kind == MINIC_EXPRESSION_ASSIGNMENT) {
         const MinicExpression *source;
         const MinicExpression *target;
-        MinicCoreInstruction operation;
-        MinicType operation_source_type = minic_type_void();
         MinicCoreObjectId snapshot_object;
         MinicCoreValueId destination_address;
         MinicCoreValueId snapshot_address;
@@ -124,25 +146,10 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
             !minic_type_pointer_to(expression_type, &pointer_type)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        operation.span = expression->span;
-        operation_source_type = pointer_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.object_id = snapshot_object;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &operation, operation_source_type, &snapshot_address)) {
+        if (!record_object_address(context, expression->span, pointer_type, snapshot_object, &snapshot_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
-        operation.span = expression->span;
-        operation_source_type = expression_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.record_copy.destination_address = snapshot_address;
-        operation.value.record_copy.source_address = source_address;
-        if (!minic_core_function_append_source_effect_instruction(
-                context->source, context->block_id, &operation, operation_source_type)) {
+        if (!record_copy(context, expression->span, expression_type, snapshot_address, source_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         status = lower_address(
@@ -150,25 +157,10 @@ static MinicCoreLowerStatus lower_record_value_address(MinicCoreLowerContext *co
         if (status != MINIC_CORE_LOWER_OK) {
             return status;
         }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-        operation.span = expression->span;
-        operation_source_type = pointer_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.object_id = snapshot_object;
-        if (!minic_core_function_append_source_value_instruction(
-                context->source, context->block_id, &operation, operation_source_type, &snapshot_address)) {
+        if (!record_object_address(context, expression->span, pointer_type, snapshot_object, &snapshot_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
-        (void)memset(&operation, 0, sizeof(operation));
-        operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
-        operation.span = expression->span;
-        operation_source_type = expression_type;
-        operation.result = MINIC_CORE_VALUE_INVALID;
-        operation.value.record_copy.destination_address = destination_address;
-        operation.value.record_copy.source_address = snapshot_address;
-        if (!minic_core_function_append_source_effect_instruction(
-                context->source, context->block_id, &operation, operation_source_type)) {
+        if (!record_copy(context, expression->span, expression_type, destination_address, snapshot_address)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         *address_id = snapshot_address;
@@ -438,25 +430,10 @@ static MinicCoreLowerStatus lower_record_va_arg_object(
             context->source, expression->span, record_type, object_id)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-    operation.span = expression->span;
-    operation_source_type = record_pointer_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.object_id = *object_id;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &operation, operation_source_type, &destination_address)) {
+    if (!record_object_address(context, expression->span, record_pointer_type, *object_id, &destination_address)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
-    operation.span = expression->span;
-    operation_source_type = record_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.record_copy.destination_address = destination_address;
-    operation.value.record_copy.source_address = source_address;
-    if (!minic_core_function_append_source_effect_instruction(
-            context->source, context->block_id, &operation, operation_source_type)) {
+    if (!record_copy(context, expression->span, record_type, destination_address, source_address)) {
         return MINIC_CORE_LOWER_ERROR;
     }
 
@@ -599,8 +576,6 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     MinicCoreBlockId false_block;
     MinicCoreBlockId merge_block;
     MinicCoreBlockId true_block;
-    MinicCoreInstruction operation;
-    MinicType operation_source_type = minic_type_void();
     MinicCoreLowerStatus status;
     MinicCoreValueId destination_address;
     MinicCoreValueId source_address;
@@ -663,26 +638,11 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     if (status != MINIC_CORE_LOWER_OK) {
         goto record_conditional_done;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-    operation.span = true_expression->span;
-    operation_source_type = pointer_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.object_id = *result_object;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &operation, operation_source_type, &destination_address)) {
+    if (!record_object_address(context, true_expression->span, pointer_type, *result_object, &destination_address)) {
         status = MINIC_CORE_LOWER_ERROR;
         goto record_conditional_done;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
-    operation.span = true_expression->span;
-    operation_source_type = result_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.record_copy.destination_address = destination_address;
-    operation.value.record_copy.source_address = source_address;
-    if (!minic_core_function_append_source_effect_instruction(
-            context->source, context->block_id, &operation, operation_source_type)) {
+    if (!record_copy(context, true_expression->span, result_type, destination_address, source_address)) {
         status = MINIC_CORE_LOWER_ERROR;
         goto record_conditional_done;
     }
@@ -703,26 +663,11 @@ MinicCoreLowerStatus minic_core_lower_record_conditional_object(
     if (status != MINIC_CORE_LOWER_OK) {
         goto record_conditional_done;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS;
-    operation.span = false_expression->span;
-    operation_source_type = pointer_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.object_id = *result_object;
-    if (!minic_core_function_append_source_value_instruction(
-            context->source, context->block_id, &operation, operation_source_type, &destination_address)) {
+    if (!record_object_address(context, false_expression->span, pointer_type, *result_object, &destination_address)) {
         status = MINIC_CORE_LOWER_ERROR;
         goto record_conditional_done;
     }
-    (void)memset(&operation, 0, sizeof(operation));
-    operation.kind = MINIC_CORE_INSTRUCTION_RECORD_COPY;
-    operation.span = false_expression->span;
-    operation_source_type = result_type;
-    operation.result = MINIC_CORE_VALUE_INVALID;
-    operation.value.record_copy.destination_address = destination_address;
-    operation.value.record_copy.source_address = source_address;
-    if (!minic_core_function_append_source_effect_instruction(
-            context->source, context->block_id, &operation, operation_source_type)) {
+    if (!record_copy(context, false_expression->span, result_type, destination_address, source_address)) {
         status = MINIC_CORE_LOWER_ERROR;
         goto record_conditional_done;
     }
