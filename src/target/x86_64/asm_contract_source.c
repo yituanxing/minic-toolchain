@@ -14,6 +14,25 @@ static bool x86_linux_jump_label_source(
 static bool target_constraint_is(const MinicInlineAsmOperand *, const char *);
 static bool clobber_is(const MinicInlineAsmRegisterClobber *, const char *);
 
+/* Source register bindings are checked centrally; each form still selects
+ * whether a GNU local and a percent-prefixed spelling are allowed. */
+static bool x86_source_register_is(const MinicC0Program *program,
+    const MinicExpression *expression, const char *name,
+    bool allow_local, bool allow_percent) {
+    const MinicFixedRegisterBinding *binding;
+    if (!program || !expression || !name) return false;
+    binding = expression->kind == MINIC_EXPRESSION_FIXED_REGISTER ?
+        minic_c0_program_fixed_register_binding(
+            program, expression->value.fixed_register_binding_id) :
+        allow_local && expression->kind == MINIC_EXPRESSION_LOCAL ?
+        minic_c0_program_local_fixed_register_binding(
+            program, expression->value.local_id) : NULL;
+    return binding && binding->register_name &&
+        (strcmp(binding->register_name, name) == 0 ||
+         (allow_percent && binding->register_name[0] == '%' &&
+          strcmp(binding->register_name + 1, name) == 0));
+}
+
 
 static bool x86_linux_gs_testcc_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
@@ -350,7 +369,6 @@ static bool x86_linux_exception_stack_call_source(const MinicTargetInvocation *i
         "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10"
     };
     const MinicExpression *tos, *sp, *fn, *arg, *tos_input;
-    const MinicFixedRegisterBinding *sp_fixed;
     size_t i;
     if (!program || !src || !contract || src->is_goto || !src->is_volatile ||
         !minic_x86_64_linux_exception_stack_call_form(
@@ -380,10 +398,8 @@ static bool x86_linux_exception_stack_call_source(const MinicTargetInvocation *i
         !tos_input || tos_input->kind != MINIC_EXPRESSION_LOCAL ||
         tos->value.local_id != tos_input->value.local_id ||
         sp->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    sp_fixed = minic_c0_program_fixed_register_binding(
-        program, sp->value.fixed_register_binding_id);
-    if (!sp_fixed || !sp_fixed->register_name ||
-        strcmp(sp_fixed->register_name, "rsp")) return false;
+    if (!x86_source_register_is(program, sp, "rsp", false, false))
+        return false;
     for (i = 1U; i < 5U; ++i) {
         arg = minic_c0_program_expression(program, src->inputs[i].expression);
         if (!arg || (!minic_type_is_pointer(arg->type) &&
@@ -872,7 +888,6 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
     static const char *const input_regs[] = {"D", "S", "d", "c"};
     static const char *const clobbers[] = {"cc", "rax", "r8", "r9", "r10", "r11"};
     const MinicExpression *address, *type_number, *stack;
-    const MinicFixedRegisterBinding *fixed;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_pv_indirect_call_form(src->template_text,
@@ -912,10 +927,8 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
      * an ordinary scalar input. Count it as a Core output while enforcing
      * that the C declaration really binds architectural RSP. */
     if (stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    fixed = minic_c0_program_fixed_register_binding(
-        program, stack->value.fixed_register_binding_id);
-    if (!fixed || !fixed->register_name ||
-        strcmp(fixed->register_name,"rsp") != 0) return false;
+    if (!x86_source_register_is(program, stack, "rsp", false, false))
+        return false;
     contract->operand_count = 5U + src->input_count;
     for (i = 0U; i < 4U; ++i)
         contract->kinds[i] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -962,7 +975,6 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
                                           MinicTargetInlineAsmContract *contract) {
     (void)invocation;
     const MinicExpression *tmp, *stack;
-    const MinicFixedRegisterBinding *stack_fixed;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_iret_to_self_form(src->template_text, src->template_length) ||
         src->output_count != 2U || !src->outputs || src->input_count ||
@@ -977,10 +989,8 @@ static bool x86_linux_iret_to_self_source(const MinicTargetInvocation *invocatio
         !minic_type_equal(tmp->type, minic_type_unsigned_int()) ||
         !minic_type_equal(stack->type, minic_type_unsigned_long()) ||
         stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    stack_fixed = minic_c0_program_fixed_register_binding(
-        program, stack->value.fixed_register_binding_id);
-    if (!stack_fixed || !stack_fixed->register_name ||
-        strcmp(stack_fixed->register_name, "rsp") != 0) return false;
+    if (!x86_source_register_is(program, stack, "rsp", false, false))
+        return false;
     contract->operand_count = 2U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1] =
@@ -994,7 +1004,6 @@ static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocati
                                             MinicTargetInlineAsmContract *contract) {
     (void)invocation;
     const MinicExpression *stack, *address;
-    const MinicFixedRegisterBinding *stack_fixed;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_int3_selftest_form(src->template_text, src->template_length) ||
         src->output_count != 1U || !src->outputs || src->input_count != 1U ||
@@ -1008,10 +1017,8 @@ static bool x86_linux_int3_selftest_source(const MinicTargetInvocation *invocati
         !minic_type_equal(stack->type, minic_type_unsigned_long()) ||
         !minic_type_is_pointer(address->type) ||
         stack->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    stack_fixed = minic_c0_program_fixed_register_binding(
-        program, stack->value.fixed_register_binding_id);
-    if (!stack_fixed || !stack_fixed->register_name ||
-        strcmp(stack_fixed->register_name, "rsp") != 0) return false;
+    if (!x86_source_register_is(program, stack, "rsp", false, false))
+        return false;
     contract->operand_count = 2U;
     contract->kinds[0] =
         MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
@@ -1327,7 +1334,6 @@ static bool x86_linux_preempt_static_call_source(const MinicTargetInvocation *in
     const unsigned int form = source ? minic_x86_64_linux_preempt_static_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *stack;
-    const MinicFixedRegisterBinding *fixed;
     MinicType type;
     if (!program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto || source->label_count ||
@@ -1344,14 +1350,8 @@ static bool x86_linux_preempt_static_call_source(const MinicTargetInvocation *in
      * pointer, so the exact fixed RSP register is the sufficient gate. */
     if (!stack || !minic_type_unqualified(stack->type, &type) ||
         !minic_type_equal(type, minic_type_unsigned_long())) return false;
-    fixed = stack->kind == MINIC_EXPRESSION_FIXED_REGISTER ?
-        minic_c0_program_fixed_register_binding(
-            program, stack->value.fixed_register_binding_id) :
-        stack->kind == MINIC_EXPRESSION_LOCAL ?
-        minic_c0_program_local_fixed_register_binding(
-            program, stack->value.local_id) : NULL;
-    if (!fixed || !fixed->register_name ||
-        strcmp(fixed->register_name, "rsp") != 0) return false;
+    if (!x86_source_register_is(program, stack, "rsp", true, false))
+        return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_FIXED_REGISTER_READWRITE;
     /* Like an ordinary externally visible call, the trampoline can modify
@@ -1419,7 +1419,6 @@ static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocat
         "cc", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10"
     };
     const MinicExpression *tos, *stack, *callee, *input, *regs;
-    const MinicFixedRegisterBinding *binding;
     MinicType type;
     const unsigned int form = src ? minic_x86_64_linux_irq_stack_call_form(
         src->template_text, src->template_length) : 0U;
@@ -1456,22 +1455,9 @@ static bool x86_linux_irq_stack_call_source(const MinicTargetInvocation *invocat
         !minic_type_is_pointer(callee->type) ||
         !minic_type_equal(tos->type, input->type) ||
         (form != 3U && !minic_type_is_pointer(regs->type))) return false;
-    binding = stack->kind == MINIC_EXPRESSION_FIXED_REGISTER ?
-        minic_c0_program_fixed_register_binding(
-            program, stack->value.fixed_register_binding_id) :
-        stack->kind == MINIC_EXPRESSION_LOCAL ?
-        minic_c0_program_local_fixed_register_binding(
-            program, stack->value.local_id) : NULL;
-    if (!binding || !binding->register_name ||
-        strcmp(binding->register_name, "rsp") != 0) return false;
-    binding = tos->kind == MINIC_EXPRESSION_FIXED_REGISTER ?
-        minic_c0_program_fixed_register_binding(
-            program, tos->value.fixed_register_binding_id) :
-        tos->kind == MINIC_EXPRESSION_LOCAL ?
-        minic_c0_program_local_fixed_register_binding(
-            program, tos->value.local_id) : NULL;
-    if (!binding || !binding->register_name ||
-        strcmp(binding->register_name, "r11") != 0) return false;
+    if (!x86_source_register_is(program, stack, "rsp", true, false) ||
+        !x86_source_register_is(program, tos, "r11", true, false))
+        return false;
     if (form == 2U) {
         input = minic_c0_program_expression(program, src->inputs[3].expression);
         if (!input || !minic_type_is_integer(input->type)) return false;
@@ -1497,7 +1483,6 @@ static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation 
     (void)invocation;
     const MinicExpression *value;
     const MinicExpression *address;
-    const MinicFixedRegisterBinding *fixed;
     size_t i;
     if (!program || !src || !contract || !src->is_volatile || src->is_goto ||
         !minic_x86_64_linux_three_call_alternative_form(
@@ -1524,10 +1509,8 @@ static bool x86_linux_three_call_alternative_source(const MinicTargetInvocation 
     /* +r on current_stack_pointer must truly bind RSP, never a freely
      * allocated general register or synthesized read/write C temporary. */
     if (address->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    fixed = minic_c0_program_fixed_register_binding(
-        program, address->value.fixed_register_binding_id);
-    if (!fixed || !fixed->register_name ||
-        strcmp(fixed->register_name, "rsp") != 0) return false;
+    if (!x86_source_register_is(program, address, "rsp", false, false))
+        return false;
     for (i = 0U; i < 3U; ++i) {
         const MinicExpression *fn = minic_c0_program_expression(
             program, src->inputs[i].expression);
@@ -4178,7 +4161,6 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
     (void)invocation;
     static const char *const constraints[] = {"+c", "+D", "+r"};
     const MinicExpression *expr;
-    const MinicFixedRegisterBinding *stack;
     size_t i;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_rep_stosb_alternative_form(
@@ -4205,10 +4187,7 @@ static bool x86_linux_rep_stosb_alternative_source(const MinicTargetInvocation *
     /* Physical +r RSP is a global fixed-register dependency, not an
      * addressable local or a scalar input masquerading as an output. */
     if (expr->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    stack = minic_c0_program_fixed_register_binding(
-        program, expr->value.fixed_register_binding_id);
-    if (!stack || !stack->register_name ||
-        strcmp(stack->register_name, "rsp") != 0)
+    if (!x86_source_register_is(program, expr, "rsp", false, false))
         return false;
     expr = minic_c0_program_expression(
         program, source->inputs[0].expression);
@@ -4902,7 +4881,6 @@ static bool x86_linux_rep_movsb_alternative_source(const MinicTargetInvocation *
     (void)invocation;
     static const char *const constraints[] = {"+c", "+D", "+S", "+r"};
     const MinicExpression *expression;
-    const MinicFixedRegisterBinding *stack_binding;
     size_t i;
     if (!program || !source || !contract ||
         !minic_x86_64_linux_rep_movsb_alternative_form(
@@ -4929,10 +4907,7 @@ static bool x86_linux_rep_movsb_alternative_source(const MinicTargetInvocation *
             return false;
     }
     if (expression->kind != MINIC_EXPRESSION_FIXED_REGISTER) return false;
-    stack_binding = minic_c0_program_fixed_register_binding(
-        program, expression->value.fixed_register_binding_id);
-    if (!stack_binding || !stack_binding->register_name ||
-        strcmp(stack_binding->register_name, "rsp") != 0)
+    if (!x86_source_register_is(program, expression, "rsp", false, false))
         return false;
     contract->operand_count = 4U;
     for (i = 0U; i < 4U; ++i)
@@ -5049,7 +5024,6 @@ static bool x86_linux_put_user_call_source(const MinicTargetInvocation *invocati
     const unsigned int form = source ? minic_x86_64_linux_put_user_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *error, *stack, *user, *value, *size;
-    const MinicFixedRegisterBinding *binding;
     MinicType plain;
     if (!program || !source || !contract || !source->is_volatile ||
         source->is_goto || (form != 0x100U && form != 0x400U) ||
@@ -5090,24 +5064,11 @@ static bool x86_linux_put_user_call_source(const MinicTargetInvocation *invocati
                    !minic_type_is_pointer(value->type)) ||
         !size || !minic_type_is_integer(size->type))
         return false;
-    binding = minic_c0_program_fixed_register_binding(
-        program, stack->value.fixed_register_binding_id);
-    if (!binding || !binding->register_name ||
-        strcmp(binding->register_name, "rsp") != 0)
+    if (!x86_source_register_is(program, stack, "rsp", false, false))
         return false;
     /* The source's explicit RAX binding is material: this private helper
      * does not use the ordinary System V argument register allocator. */
-    if (value->kind == MINIC_EXPRESSION_FIXED_REGISTER)
-        binding = minic_c0_program_fixed_register_binding(
-            program, value->value.fixed_register_binding_id);
-    else if (value->kind == MINIC_EXPRESSION_LOCAL)
-        binding = minic_c0_program_local_fixed_register_binding(
-            program, value->value.local_id);
-    else
-        return false;
-    if (!binding || !binding->register_name ||
-        (strcmp(binding->register_name, "rax") != 0 &&
-         strcmp(binding->register_name, "%rax") != 0))
+    if (!x86_source_register_is(program, value, "rax", true, true))
         return false;
     contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
@@ -5130,7 +5091,6 @@ static bool x86_linux_get_user_call_source(const MinicTargetInvocation *invocati
     const unsigned int form = source ? minic_x86_64_linux_get_user_call_form(
         source->template_text, source->template_length) : 0U;
     const MinicExpression *error, *value, *stack, *pointer, *size;
-    const MinicFixedRegisterBinding *binding;
     MinicType plain;
     if (!program || !source || !contract || (form != 1U && form != 2U) ||
         !source->is_volatile || source->is_goto ||
@@ -5167,22 +5127,9 @@ static bool x86_linux_get_user_call_source(const MinicTargetInvocation *invocati
         !pointer || !minic_type_is_pointer(pointer->type) ||
         !size || !minic_type_is_integer(size->type))
         return false;
-    binding = minic_c0_program_fixed_register_binding(
-        program, stack->value.fixed_register_binding_id);
-    if (!binding || !binding->register_name ||
-        strcmp(binding->register_name, "rsp") != 0)
+    if (!x86_source_register_is(program, stack, "rsp", false, false))
         return false;
-    if (value->kind == MINIC_EXPRESSION_FIXED_REGISTER)
-        binding = minic_c0_program_fixed_register_binding(
-            program, value->value.fixed_register_binding_id);
-    else if (value->kind == MINIC_EXPRESSION_LOCAL)
-        binding = minic_c0_program_local_fixed_register_binding(
-            program, value->value.local_id);
-    else
-        return false;
-    if (!binding || !binding->register_name ||
-        (strcmp(binding->register_name, "rdx") != 0 &&
-         strcmp(binding->register_name, "%rdx") != 0))
+    if (!x86_source_register_is(program, value, "rdx", true, true))
         return false;
     contract->operand_count = 5U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
