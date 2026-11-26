@@ -20,3 +20,39 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+
+  temporary-linker-reachability-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Identify unreachable MiniC functions with linker GC
+        shell: bash
+        run: |
+          set -uo pipefail
+          make -j4 MODE=release BUILD_DIR=build/gc-audit CFLAGS="-Werror -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" build/gc-audit/bin/minic build/gc-audit/bin/minic-cc > /tmp/minic-gc-stdout.log 2> /tmp/minic-gc-stderr.log
+          rc=$?
+          echo "GC_BUILD_EXIT=$rc"
+          if [ "$rc" -ne 0 ]; then tail -140 /tmp/minic-gc-stderr.log; exit "$rc"; fi
+          echo "GC_LINKER_TOTAL=$(grep -c 'removing unused section' /tmp/minic-gc-stderr.log || true)"
+          echo '=== GC SECTION SAMPLE ==='
+          grep 'removing unused section' /tmp/minic-gc-stderr.log | head -12 || true
+          echo '=== GC REACHABILITY RANKED ==='
+          python3 - <<'PY'
+          import re
+          from collections import defaultdict
+          lines=open('/tmp/minic-gc-stderr.log',errors='replace').read().splitlines()
+          pat=re.compile(r"removing unused section [\x60\x27\"]\.text\.([\w.$]+)[\x60\x27\"] in file [\x60\x27\"]([^\x60\x27\"]+)")
+          d=defaultdict(set)
+          for line in lines:
+              m=pat.search(line)
+              if not m: continue
+              func,obj=m.groups()
+              if '/obj/src/' in obj:
+                  d[(obj,func)].add('seen')
+          print('GC_SOURCE_FUNCTION_CANDIDATES',len(d))
+          ranked=sorted(d,key=lambda x:(not bool(re.search(r'/obj/src/(compiler|frontend|core)/',x[0])),x[0],x[1]))
+          for obj,fn in ranked[:280]:
+              print('GC_FN',obj,fn)
+          PY
+          echo '=== GC END ==='
