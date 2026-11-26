@@ -9011,7 +9011,7 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
     MinicMachineOperand binding;
     MinicMachineRegisterEffect flags = x86_scalar_flags_clobber();
     unsigned int form, effects;
-    bool fx, verw, tlb;
+    bool fx, verw, tlb, fnsave;
     if (sel == NULL || ins == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
@@ -9026,14 +9026,18 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
     fx = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE;
     verw = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR;
     tlb = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE;
-    if (!fx && !verw && !tlb) return false;
+    fnsave = source->target_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE;
+    if (!fx && !verw && !tlb && !fnsave) return false;
     form = fx ? minic_x86_64_linux_fxsave_form(
             source->template_text,source->template_length) :
         verw ? (minic_x86_64_linux_verw_clear_form(
             source->template_text,source->template_length) ? 1U : 0U) :
+        fnsave ? (minic_x86_64_linux_legacy_fnsave_form(
+            source->template_text,source->template_length) ? 1U : 0U) :
         minic_x86_64_linux_tlb_cache_form(
             source->template_text,source->template_length);
-    if (form == 0U || source->target_machine_form_variant != form ||
+    if (form == 0U || source->target_machine_form_variant !=
+            (fnsave ? 0U : form) ||
         source->is_goto ||
         !source->is_volatile ||
         source->resolved_immediate_count != 0U ||
@@ -9064,7 +9068,10 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
                 sel->core->values[role->value].core_type_id,&pointee_id) ||
             (object = x86_type(sel,pointee_id)) == NULL ||
             !object->has_layout ||
-            (fx ? (object->size < 512U || object->alignment < 16U ||
+            (fnsave ? (object->size < 108U ||
+                role->kind != MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT ||
+                role->physical_read_write) :
+             fx ? (object->size < 512U || object->alignment < 16U ||
                    role->kind != (form == 1U ?
                        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE :
                        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT)) :
@@ -9075,11 +9082,14 @@ static bool x86_source_legacy_memory(X86CoreSelector *sel,
                         MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE))
             return false;
         binding = x86_addr(MINIC_X86_REG_R10,0);
-        binding.asm_constraint = fx ? (form == 1U ? "+m" : "=m") :
-            verw ? "m" : "+m";
+        binding.asm_constraint = fnsave ? "=m" :
+            fx ? (form == 1U ? "+m" : "=m") : verw ? "m" : "+m";
+        if (fnsave && strstr(source->template_text,"%[fp]") != NULL)
+            binding.asm_name = "fp";
         if (fx && form == 2U) binding.asm_name = "fx";
         if (verw) binding.asm_name = "ds";
-        effects = fx && form == 2U ? MINIC_MACHINE_EFFECT_MEMORY_WRITE :
+        effects = fnsave || (fx && form == 2U) ?
+            MINIC_MACHINE_EFFECT_MEMORY_WRITE :
             verw ? MINIC_MACHINE_EFFECT_MEMORY_READ :
             MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE;
     }
@@ -11380,6 +11390,7 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
         [MINIC_X86_MACHINE_ASM_ZERO_BARRIER] = x86_source_zero_barrier,
         [MINIC_X86_MACHINE_ASM_ZSTD_PADDING] = x86_source_zstd_padding,
         [MINIC_X86_MACHINE_ASM_FXSAVE] = x86_source_legacy_memory,
+        [MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE] = x86_source_legacy_memory,
         [MINIC_X86_MACHINE_ASM_LAR_SELECTOR] = x86_source_legacy_scalar,
         [MINIC_X86_MACHINE_ASM_IDENTITY_LOAD] = x86_source_legacy_scalar,
         [MINIC_X86_MACHINE_ASM_VERW_CLEAR] = x86_source_legacy_memory,
@@ -11545,7 +11556,7 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_compiler_barrier(sel, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-return x86_source_dispatch(sel, ins, instruction_id);
+        return x86_source_dispatch(sel, ins, instruction_id);
 
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return x86_fixed_register_read(sel, ins);
