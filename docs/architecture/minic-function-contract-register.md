@@ -43,7 +43,7 @@
 | --- | --- | --- | --- |
 | `minic_c0_program_add_expression` | R2 | U2 | E1；稳定 ID 和可失效元素地址已在源码注释中明确 |
 | `minic_parser_resolve_tag` | R2 | U2 | E1；返回的 Parser tags 借用指针会被 bind 扩容失效 |
-| `minic_semantic_snapshot_rollback_probe_expression_types` | R2 | U2 | E1；计数回退不会释放 owned CALL payload（MC-009）；更正过度承诺安全的旧注释 |
+| `minic_semantic_snapshot_rollback_probe_expression_types` | R2 | U2 | E1；先校验所有其他语义 arena 无变化，再正确销毁未发布的 owned CALL expression tail 后回退计数，禁止普通已发布 ExpressionId 回滚 |
 | `minic_core_function_verify:verify_block` | R2 | U2 | E1；ValueId 全函数唯一、Value 可用性按块重置的不同职责 |
 | `minic_backend_asm_source_form_id` | R2 | U2 | E1；仅记录 source 形式来源，不是实例 cache key（MC-026 已排除） |
 | `minic_riscv_emit_record_copy_bytes` | R2 | U2 | E1；forward-copy、scratch 与多 chunk 改写调用方寄存器的契约 |
@@ -112,7 +112,7 @@
 | `FN-F10` `parse_static_record_constant` — `src/frontend/parser_static_initializer.c` | R Program RecordId，W 全局 initializer | 递归前 snapshot `MinicRecord` 值型头；fields 指向独立分配区，故 Program.records 扩容不影响当前快照。**不能误报为 UAF**。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F11` `parse_static_union_constant` — 同上 | 同 F10 | 递归前 snapshot record 与 ID；与未快照的 backward overwrite 分支不是同一个实现。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F12` `overwrite_static_zero_record_value` / `_constant` — 同上 | R `Program.records[id]`，递归处理已有零初始化 aggregate | 借用的 `MinicRecord*` 在可能新增记录的嵌套表达式后被继续访问；尚无执行反例，**INVESTIGATING**（MC-023），不应称已证 UAF。 | PARTIAL · INVESTIGATE |
-| `FN-F13` `minic_parser_inspect_array_initializer_extent` / `probe_static_array_designator_extent` — 同上 | 以 Parser value snapshot 做 array extent 语义探测 | semantic_snapshot 只按计数恢复 Expression；CALL owned overflow 的未释放问题 MC-009。另有 Parser 元表浅拷贝可能性 MC-017，未证 UAF。 | PARTIAL · INVESTIGATE |
+| `FN-F13` `minic_parser_inspect_array_initializer_extent` / `probe_static_array_designator_extent` — `src/frontend/parser_static_initializer.c` | 使用严格的 semantic_snapshot 暂态表达式 probe | 当前会拒绝其他 arena 变化并释放 owned CALL payload（MC-009 已修）；Parser 元表浅拷贝可能性 MC-017 仍独立待查，不以 probe 回滚视为通用事务 | PARTIAL · INVESTIGATE |
 | `FN-F14` `minic_c0_program_normalize_casts` — `src/frontend/cast_normalization.c` | W Program；OWN 暂态表达式表与 remap 映射 | 深拷贝 owned CALL payload、核验外部 ExpressionId 映射，成功时替换旧表；失败保留原表；不应因复制/重排而判为双重所有者。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F15` `minic_c0_program_remap_external_expression_ids` — `src/frontend/ast_traversal.c` | W Program 的 statement/ASM/cleanup 等外部 ExpressionId | 先验证整份映射，后无失败地统一 apply；维护稳定 ID 契约。 | TRACE · CONFIRMED-DESIGN |
 | `FN-F16` `minic_c0_program_validate_function_body_ownership` — `src/frontend/function_body.c` | R Program；OWN 临时 block/statement/local/ASM/cleanup owner 索引 | 按函数根和语义边查 cross-function 违规，释放临时索引；允许不属于任何 FunctionBody 的 parse-time 常量表达式。 | TRACE · CONFIRMED-DESIGN |
@@ -511,18 +511,15 @@
 | --- | --- | --- |
 | `F5-M01` `minic_program_function_selected` — `target/common/program_visit.h` | R Function 定义、内部引用状态及选择策略；三个 selection 消费者共用过滤规则，跳过未引用 internal definition 不改变 FunctionId。 | R2/U2/E1 |
 | `F5-M02` `minic_program_visit_prepared_functions` — 同上 | R Program/Core/Target，逐定义 OWN 暂态 `MinicCoreFunctionPlan`，借给目标 visit 仅本次 callback 生命周期；无论 ready/visit 结果均 destroy，census 可以继续遍历但不能称文件发射成功。 | R2/U2/E1 |
-| `F5-M03` `minic_core_function_facts_analyze_collect` — `target/common/core_function_facts.c` | R Core 全指令，W caller facts、OWN 可选 `va_start` ValueId 数组；需要保存返回地址/动态栈等是 ABI-neutral facts，OOM 清零、释放而不能导致残留半成品。 | R2/U2/E1 |
+| `F5-M03` `minic_core_function_facts_analyze` — `target/common/core_function_facts.c` | R Core 全指令，W caller facts 与 OWN `va_start` ValueId 数组；统一一次扫描，无 standalone facts-only wrapper；失败时归零并回收数组 | R2/U2/E1 · CLEANED |
 | `F5-M04` `minic_core_call_view_build` — `target/common/core_call_view.c` | R direct/indirect CALL Core signature，构 borrowed call/argument view；先检查 callee/signature ID、return object/SSA、调用约定及参数区间，不写目标寄存器布局。 | R2/U2/E1 |
 | `F5-M05` `minic_core_call_argument_actual_type` — 同上 | R Core VALUE/OBJECT argument，返回准确 source type；Record 只能由 OBJECT 载体提供，VALUE 不能假充 aggregate；不分配。 | R2/U2/E1 |
 | `F5-M06` `minic_core_call_view_argument_type` — 同上 | R call view、callee fixed parameter types 和参数 ID，W caller actual type；对固定 Record 做严格身份检查，scalar promotion/ABI class 明确保留给目标。 | R2/U2/E1 |
-| `F5-M07` `minic_core_call_index_build` — `target/common/core_call_index.c` | R Core 全指令，OWN ordered CALL site + borrowed view；验证预估 call 数及每个 view，失败 destroy 整份，供 prepared visitor 与独立 frame ABI 消费。 | R2/U2/E1 |
+| `F5-M07` `minic_core_call_index_build` — `target/common/core_call_index.c` | R Core 全指令，OWN 唯一有序 CALL site + borrowed views；由 Common FunctionPlan 建一次，验证预估 CALL 数和所有 Core view，失败时完整销毁，目标后端仅借 | R2/U2/E1 · CLEANED |
 | `F5-M08` `minic_core_call_index_find` — 同上 | R 按 InstructionId 单调排列的已验证索引，binary search 返回 borrowed view/ordinal；不把非 CALL instruction 错当 ordinal。 | R2/U2/E1 |
-| `F5-M09` `minic_core_call_index_handle_prepare` — 同上 | 优先 R 借 visitor-owned index；standalone RV32/RV64/A64/Loong consumer 无借用时 OWN 同一布局索引；handle 明确区分 `index` 与 `owned`，不能对 borrowed 调 free。 | R2/U2/E1 |
-| `F5-M10` `minic_core_call_index_handle_destroy` — 同上 | OWN 仅释放 handle.owned 和清 borrowed index pointer；无效重复 destroy 安全，生产 consumer 的共享 index 不在此释放。 | R2/U2/E1 |
-| `F5-M11` `minic_core_object_storage` — `target/common/core_object_storage.c` | R Object 的 CType、数组 count、显式对齐和 DataLayout，计算字节 extent/align 与溢出门；不涉及任何目标栈槽身份。 | R2/U2/E1 |
+| `F5-M11` `minic_core_object_storage_resolved` — `target/common/core_object_storage.c` | R sealed CoreType + 显式对象对齐，计算稳定 byte extent/align 与溢出门；不再查 C frontend 的 DataLayout，也不含目标栈槽语义 | R2/U2/E1 |
 | `F5-M12` `minic_core_object_storage_plan_build` — 同上 | R Core 对象表，OWN 单次完整 object layout snapshot；若第 N 项布局不合法则 destroy 已分配表，不发布部分有效的 plan。 | R2/U2/E1 |
-| `F5-M13` `minic_core_object_storage_plan_acquire` — 同上 | Common prepared visitor 提供 `shared` 时**浅借只读存储表**，独立消费者则 OWN 本地建表；R/W flag `borrowed` 是 release 的唯一所有权判据。 | R2/U2/E1 |
-| `F5-M14` `minic_core_object_storage_plan_release` — 同上 | 借用时只清除本地 plan 视图，拥有时 destroy；已核对 RV32/RV64/x86/LP64 frame 的各处 destructor 使用，没有双重释放的已证反例。 | R2/U2/E1 · 排误报 |
+| `F5-M13` `minic_core_object_storage_plan_borrow` — `target/common/core_object_storage.c` | 只接受 Common FunctionPlan 已准备的 nonnull storage，核验对象数和 backing 数组；x86/RV32/RV64/A64/Loong 只借同一只读计划。无可选自建表、借用标志或条件释放 | R2/U2/E1 · CLEANED |
 | `F5-M15` `minic_lp64_plan_types` — `target/common/direct_call_plan.c` | R Target+ABI policy+参数类型，W caller POD argument location；A64 WholeOrStack/even pair 与 Loong SplitWithStack/variadic pair 分别由 policy 决定，不能机械归成一个固定 GPR 算法。 | R2/U2/E1 |
 | `F5-M16` `minic_lp64_plan_incoming_parameters` — 同上 | R function fixed parameter signature/target ABI；sret 是否消费物理第一个 GPR 由 policy，复用 M15 但不把 hidden pointer 写入 Core 参数数组。 | R2/U2/E1 |
 | `F5-M17` `minic_lp64_admit_call` — 同上 | R immutable `MinicCoreCallView`、VALUE/OBJECT 和 return shape；记录是否 indirect record、是否 variadic，严格拒绝 unsupported ABI；只填写暂态 types[64]，不缓存指向栈内类型数组的地址。 | R2/U2/E1 |
@@ -1406,7 +1403,7 @@ RV 三目录 71 个，RV 另核对 Common 55 个、Core 约 30,063 行。
 | `F11-F02` `ast_global.c:1359–1527`，A11-01 | 八个 `src/` 无 caller 的旧 wrapper；仍有三个 parser 真调用入口 `:1329,:1342,:1452` 共享 `:1204` relocation validator | 可准备只删八个 wrapper；历史 `tools/dev` template 有字面依赖，先迁/退役脚本；不能删通用验证及其真实调用 |
 | `F11-F03` `ast.c:1077`、`function_body.c:73`，A11-02/03 | AST parameter setter 生产零 caller、CI text-patch 现役；Body local-owns helper `src/tests/tools` 全零 caller | setter 先改 CI 工作流引用；Body helper 可单独删除，不能按“零 C caller”同等处理 |
 | `F11-F04` `ast_traversal.c:195,221–240`，A11-04 | 上层 visitor 无 caller，但下层 unchecked visitor 为两阶段 external-id remap 提供生产核心算法 | 先定公共 API 政策，只删无消费者 wrapper，不破坏验证后原子 remap |
-| `F11-F05` `semantic_snapshot.h:68,116,154`，A11-05 | 三个旧 wrapper 无生产调用、白盒 `semantic_snapshot_test.c` 活；真实 initializer 调 `rollback_probe_expression_types` | 迁测试再删 wrapper；MC-009 的 owned CALL rollback 内存问题仍开放 |
+| `F11-F05` `semantic_snapshot.h`，A11-05 | 三个无消费者旧 wrapper 已在 R5 退休；真实 initializer 仍调 `rollback_probe_expression_types`，所有其它 arena 变化的检查现有唯一 helper | owned CALL tail 会先释放，快照仍严格限制为未发布表达式/值型声明类型，禁止变成通用 Program rollback；当前 Native/Parser 基线通过 |
 | `F11-F06` `parser_function.c:912–1099`，A11-07 | 一个声明解析入口依次调用声明前/类型后 specifier 解析，各自拥有不同 token 位置语义 | 共享 storage/inline/TLS 冲突策略但保留位置判断、诊断、不同 attribute 次序 |
 | `F11-F07` Parser 三套 names index，A11-08 | tag/global/enum 各有 grow/probe hash、scope 覆盖与 OOM 慢路径仍真实使用 | 共享底层探针，不合并 declaration precedence 或 scope 可见性 |
 | `F11-F08` `parser_string.c` 五 parse family，A11-09 | probe 拷贝 Lexer 解码长度后各阶段分别 commit 成字符串对象、initializer 或 ASM template | Lexer lookahead 不等于所有权 UAF；可抽长度 scanner，保持不同 semantic commit |
