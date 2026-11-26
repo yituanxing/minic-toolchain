@@ -84,8 +84,8 @@ static bool rv64_emit_typed_function(
             minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
-    if (!minic_riscv64_core_frame_mark_reachable_blocks(
-            function, facts, &old_frame) ||
+    old_frame.reachable_blocks = facts->reachable_blocks;
+    if (old_frame.reachable_blocks == NULL ||
         !minic_riscv64_machine_physical_frame(&old_frame,
             &physical, callee_saved, 12U)) goto done;
     bridge.target = target;
