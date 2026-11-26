@@ -3411,6 +3411,54 @@ static bool x86_source_kvm_movdqa_contract(
             MINIC_MACHINE_REGISTER_READ);
 }
 
+/* The RAID6 grammar is finite, but it can execute arbitrary combinations
+ * of the admitted XMM/YMM/ZMM and mask operations. Seal every memory carrier
+ * and conservatively invalidate the complete vector bank used by this x86
+ * machine representation. No generic unverified source-ASM path is allowed. */
+static bool x86_source_raid6_simd_contract(
+    const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
+    static const unsigned int memory_regs[8] = {
+        MINIC_X86_REG_R10, MINIC_X86_REG_R11,
+        MINIC_X86_REG_R8, MINIC_X86_REG_R9,
+        MINIC_X86_REG_RCX, MINIC_X86_REG_RDX,
+        MINIC_X86_REG_RAX, MINIC_X86_REG_RDI
+    };
+    const unsigned int effects = MINIC_MACHINE_EFFECT_SOURCE_ASM |
+        MINIC_MACHINE_EFFECT_VOLATILE |
+        MINIC_MACHINE_EFFECT_MEMORY_READ |
+        MINIC_MACHINE_EFFECT_MEMORY_WRITE |
+        MINIC_MACHINE_EFFECT_COMPILER_BARRIER;
+    size_t i, count;
+    if (ins->source_asm_machine_form_id != MINIC_X86_MACHINE_ASM_RAID6_SIMD ||
+        ins->source_asm_terminates_block ||
+        ins->source_asm_permits_fallthrough ||
+        ins->effects != effects ||
+        (count = ins->operand_count) > 8U ||
+        ins->source_asm_machine_form_variant != count ||
+        (count != 0U && ins->operands == NULL) ||
+        ins->implicit_count != 16U || ins->implicit == NULL ||
+        !minic_x86_64_typed_machine_form_matches_template(
+            MINIC_X86_MACHINE_ASM_RAID6_SIMD, (uint32_t)count,
+            ins->source_asm_template, ins->source_asm_length))
+        return false;
+    for (i = 0U; i < count; ++i) {
+        const MinicMachineOperand *op = &ins->operands[i];
+        const bool output = op->asm_constraint != NULL &&
+            strcmp(op->asm_constraint, "=m") == 0;
+        if (!x86_scalar_machine_mem(target, op, memory_regs[i],
+                output ? "=m" : "m", NULL))
+            return false;
+    }
+    for (i = 0U; i < 16U; ++i) {
+        const MinicMachineRegisterEffect *reg = &ins->implicit[i];
+        if (reg->reg.bank != MINIC_MACHINE_REGISTER_VECTOR ||
+            reg->reg.number != i || reg->reg.width_bits != 128U ||
+            reg->access != MINIC_MACHINE_REGISTER_CLOBBER)
+            return false;
+    }
+    return true;
+}
+
 static bool x86_source_testcc_contract(
     const MinicTargetInfo *target, const MinicMachineInstruction *ins) {
     const unsigned int form = minic_x86_64_linux_testcc_form(
@@ -6454,6 +6502,9 @@ bool minic_x86_64_machine_validate_source_asm(const MinicTargetInfo *target,
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_KVM_MOVDQA)
         return x86_source_kvm_movdqa_contract(target,instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RAID6_SIMD)
+        return x86_source_raid6_simd_contract(target,instruction);
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_ATOMIC_CC)
         return x86_source_scalar_atomic_cc_contract(target,instruction);
