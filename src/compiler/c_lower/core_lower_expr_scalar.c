@@ -748,6 +748,42 @@ MinicCoreLowerStatus minic_core_lower_try_comparisons(
             { *handled = true; return MINIC_CORE_LOWER_OK; }
         }
         /* Direct IEEE-754 predicates keep unordered NaNs false. */
+        if (minic_type_is_double(left_type) || minic_type_is_double(right_type)) {
+            MinicCoreValueId left;
+            MinicCoreValueId right;
+            MinicCoreLowerStatus status;
+            bool swap;
+
+            if (!minic_type_equal(expression->type, minic_type_int())) {
+                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
+            }
+            status = minic_core_lower_internal_lower_floating_binary_operands(context,
+                                                  expression->value.binary.left,
+                                                  expression->value.binary.right,
+                                                  minic_type_double(),
+                                                  &left,
+                                                  &right);
+            if (status != MINIC_CORE_LOWER_OK) {
+                { *handled = true; return status; }
+            }
+            swap = expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
+                   expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL;
+            (void)memset(&instruction, 0, sizeof(instruction));
+            instruction.kind =
+                expression->value.binary.operator_kind == MINIC_BINARY_LESS ||
+                        expression->value.binary.operator_kind == MINIC_BINARY_GREATER
+                    ? MINIC_CORE_INSTRUCTION_DOUBLE_LESS
+                    : MINIC_CORE_INSTRUCTION_DOUBLE_LESS_EQUAL;
+            instruction.span = expression->span;
+            instruction_source_type = minic_type_int();
+            instruction.result = MINIC_CORE_VALUE_INVALID;
+            instruction.value.binary.left = swap ? right : left;
+            instruction.value.binary.right = swap ? left : right;
+            { *handled = true; return minic_core_function_append_source_value_instruction(
+                       context->source, context->block_id, &instruction, instruction_source_type, value_id)
+                       ? MINIC_CORE_LOWER_OK
+                       : MINIC_CORE_LOWER_ERROR; }
+        }
     }
 
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
