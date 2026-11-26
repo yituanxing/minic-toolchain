@@ -20,3 +20,92 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+
+  temporary-minic-whole-project-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - name: AST function census across the complete project
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/minic-audit-venv
+          /tmp/minic-audit-venv/bin/pip -q install tree-sitter tree-sitter-c
+          /tmp/minic-audit-venv/bin/python - <<'PY'
+          import collections, hashlib, pathlib, re
+          from tree_sitter import Language, Parser
+          import tree_sitter_c
+          root=pathlib.Path('.')
+          exclude={'third_party','build','.git','tests','docs','node_modules','out','artifacts'}
+          production=sorted(p for p in root.rglob('*.c') if not (set(p.parts)&exclude))
+          ref_files=sorted(p for p in root.rglob('*') if p.is_file() and not (set(p.parts)&{'third_party','build','.git','node_modules'}) and p.suffix in {'.c','.h','.sh','.py','.yml','.yaml'})
+          parser=Parser(Language(tree_sitter_c.language()))
+          refs=collections.Counter()
+          for p in ref_files:
+              try: refs.update(re.findall(r'\b[A-Za-z_][A-Za-z_0-9]*\b',p.read_text(errors='replace')))
+              except Exception: continue
+          defs=[]
+          exact=collections.defaultdict(list)
+          shape=collections.defaultdict(list)
+          for p in production:
+              b=p.read_bytes()
+              ast=parser.parse(b)
+              for n in ast.root_node.named_children:
+                  if n.type!='function_definition': continue
+                  dec=n.child_by_field_name('declarator')
+                  def extract(z):
+                      if z is None: return ''
+                      if z.type=='identifier': return b[z.start_byte:z.end_byte].decode(errors='replace')
+                      for attr in ['declarator','name']:
+                          x=z.child_by_field_name(attr)
+                          if x:
+                              result=extract(x)
+                              if result: return result
+                      return ''
+                  name=extract(dec)
+                  if not name: continue
+                  body=n.child_by_field_name('body')
+                  if body is None: continue
+                  raw=b[body.start_byte:body.end_byte].decode(errors='replace')
+                  no_comments=re.sub(r'/\*.*?\*/|//[^\n]*','',raw,flags=re.S)
+                  compact=re.sub(r'\s+','',no_comments)
+                  entry=(str(p),n.start_point.row+1,n.end_point.row+1,name)
+                  defs.append(entry)
+                  if len(compact)>120: exact[hashlib.sha1(compact.encode()).hexdigest()].append(entry)
+                  if n.end_point.row-n.start_point.row>=16:
+                      normalized=re.sub(r'\b[A-Za-z_][A-Za-z_0-9]*\b','ID',compact)
+                      shape[hashlib.sha1(normalized.encode()).hexdigest()].append(entry)
+          duplicates=[group for group in exact.values() if len(group)>1]
+          dupshape=[group for group in shape.values() if len(group)>1]
+          print('AUDIT_FILE_COUNT',len(production))
+          print('AUDIT_REFERENCE_FILE_COUNT',len(ref_files))
+          print('AUDIT_FUNCTION_COUNT',len(defs))
+          print('AUDIT_EXACT_FUNCTION_CLONES',len(duplicates))
+          print('AUDIT_IDENTIFIER_NORMALIZED_CLONES',len(dupshape))
+          for group in sorted(duplicates,key=lambda g:-sum(x[2]-x[1] for x in g))[:80]:
+              print('EXACT_FUNCTION_GROUP',str(group))
+          for group in sorted(dupshape,key=lambda g:-sum(x[2]-x[1] for x in g))[:80]:
+              print('SHAPE_FUNCTION_GROUP',str(group))
+          singleton=[e for e in defs if refs[e[3]]<=1]
+          print('AUDIT_NAME_SINGLETON_CANDIDATES',len(singleton))
+          for e in sorted(singleton,key=lambda x:x[1]-x[2])[:120]:
+              print('SINGLETON_FUNCTION',e)
+          print('=== DIAGNOSTIC_FLAGS IN COMPILER PRODUCTION ===')
+          for p in production:
+              if not str(p).startswith(('src/compiler/','src/frontend/','src/core/','src/target/')): continue
+              content=p.read_text(errors='replace')
+              for ln,line in enumerate(content.splitlines(),1):
+                  if 'getenv(' in line or 'TRACE' in line and 'getenv' in line:
+                      print('DIAG_ENV',p,ln,line.strip()[:155])
+          PY
+      - name: Whole source tree repeated-code census
+        shell: bash
+        run: |
+          set -uo pipefail
+          npx --yes jscpd@5 --format c --min-lines 20 --min-tokens 90 --similarity 0.80 --reporters console src > /tmp/minic-whole-jscpd.log 2>&1
+          rc=$?
+          echo "JSCPD_RESULT=$rc"
+          echo "JSCPD_CLONES=$(grep -c 'Clone found' /tmp/minic-whole-jscpd.log || true)"
+          grep -E 'Clone found|\[.*\].*\([[:digit:]]+ lines|Found [[:digit:]]+ clones|Total lines|Files analyzed' /tmp/minic-whole-jscpd.log | head -340 || true
+          echo '=== WHOLE PROJECT DUPLICATES END ==='
