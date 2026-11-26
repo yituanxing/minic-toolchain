@@ -11366,8 +11366,9 @@ static bool x86_source_dispatch(X86CoreSelector *sel,
     if (sel->core->inline_asms == NULL ||
         id >= sel->core->inline_asm_count ||
         (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM &&
-         ins->value.structured_inline_asm.operand_count != 0U &&
-         ins->value.structured_inline_asm.operands == NULL))
+         ins->value.structured_inline_asm.operand_count >
+             sizeof(ins->value.structured_inline_asm.operands) /
+             sizeof(ins->value.structured_inline_asm.operands[0])))
         return false;
     source = &sel->core->inline_asms[id];
     form = source->target_machine_form_id;
