@@ -230,37 +230,37 @@ static bool unsigned_type_fits(MinicParser *parser, MinicType type, uint64_t max
     return maximum <= type_maximum;
 }
 
-static bool
-enum_value_type(MinicParser *parser, const MinicEnumNumericValue *value, MinicType *type) {
-    if (value->negative) {
-        MinicType candidates[] = {minic_type_int(), minic_type_long(), minic_type_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (signed_type_fits(parser, candidates[index], value->signed_value, 0U)) {
-                *type = candidates[index];
-                return true;
-            }
-        }
-        return false;
-    }
-    if ((uint64_t)INT32_MAX >= value->unsigned_value) {
-        *type = minic_type_int();
-        return true;
-    }
-    {
-        MinicType candidates[] = {
-            minic_type_unsigned_int(), minic_type_unsigned_long(), minic_type_unsigned_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (unsigned_type_fits(parser, candidates[index], value->unsigned_value)) {
-                *type = candidates[index];
-                return true;
-            }
+static bool choose_enum_compatible_type(MinicParser *parser,
+                                        bool saw_negative, bool packed,
+                                        int64_t minimum, uint64_t maximum,
+                                        MinicType *compatible_type) {
+    const MinicType candidates[] = {
+        saw_negative ? minic_type_signed_char() : minic_type_unsigned_char(),
+        saw_negative ? minic_type_short() : minic_type_unsigned_short(),
+        saw_negative ? minic_type_int() : minic_type_unsigned_int(),
+        saw_negative ? minic_type_long() : minic_type_unsigned_long(),
+        saw_negative ? minic_type_long_long() : minic_type_unsigned_long_long()
+    };
+    size_t index;
+    for (index = packed ? 0U : 2U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
+        if (saw_negative ? signed_type_fits(parser, candidates[index], minimum, maximum)
+                         : unsigned_type_fits(parser, candidates[index], maximum)) {
+            *compatible_type = candidates[index];
+            return true;
         }
     }
     return false;
+}
+
+static bool
+enum_value_type(MinicParser *parser, const MinicEnumNumericValue *value, MinicType *type) {
+    if (!value->negative && value->unsigned_value <= (uint64_t)INT32_MAX) {
+        *type = minic_type_int();
+        return true;
+    }
+    return choose_enum_compatible_type(parser, value->negative, false,
+        value->negative ? value->signed_value : 0,
+        value->negative ? 0U : value->unsigned_value, type);
 }
 
 static bool normalize_value_bits(MinicParser *parser,
@@ -357,77 +357,6 @@ static bool next_enum_numeric(MinicParser *parser,
     }
     return enum_value_type(parser, next, next_type) &&
            normalize_value_bits(parser, next, *next_type, next_bits);
-}
-
-static bool choose_enum_compatible_type(MinicParser *parser,
-                                        bool saw_negative,
-                                        int64_t minimum,
-                                        uint64_t maximum,
-                                        MinicType *compatible_type) {
-    if (saw_negative) {
-        MinicType candidates[] = {minic_type_int(), minic_type_long(), minic_type_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (signed_type_fits(parser, candidates[index], minimum, maximum)) {
-                *compatible_type = candidates[index];
-                return true;
-            }
-        }
-        return false;
-    }
-    {
-        MinicType candidates[] = {
-            minic_type_unsigned_int(), minic_type_unsigned_long(), minic_type_unsigned_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (unsigned_type_fits(parser, candidates[index], maximum)) {
-                *compatible_type = candidates[index];
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool choose_packed_enum_compatible_type(MinicParser *parser,
-                                               bool saw_negative,
-                                               int64_t minimum,
-                                               uint64_t maximum,
-                                               MinicType *compatible_type) {
-    if (saw_negative) {
-        MinicType candidates[] = {minic_type_signed_char(),
-                                  minic_type_short(),
-                                  minic_type_int(),
-                                  minic_type_long(),
-                                  minic_type_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (signed_type_fits(parser, candidates[index], minimum, maximum)) {
-                *compatible_type = candidates[index];
-                return true;
-            }
-        }
-        return false;
-    }
-    {
-        MinicType candidates[] = {minic_type_unsigned_char(),
-                                  minic_type_unsigned_short(),
-                                  minic_type_unsigned_int(),
-                                  minic_type_unsigned_long(),
-                                  minic_type_unsigned_long_long()};
-        size_t index;
-
-        for (index = 0U; index < sizeof(candidates) / sizeof(candidates[0]); ++index) {
-            if (unsigned_type_fits(parser, candidates[index], maximum)) {
-                *compatible_type = candidates[index];
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 typedef struct MinicEnumAttributeContext {
@@ -657,17 +586,12 @@ bool minic_parser_parse_enum_specifier(MinicParser *parser, MinicType *enum_type
                 minic_parser_error(parser, "enum mode(byte) cannot represent enumerator values");
                 return false;
             }
-        } else if (attribute_context.has_packed) {
-            if (!choose_packed_enum_compatible_type(
-                    parser, saw_negative, minimum, maximum, &compatible_type)) {
-                minic_parser_error(parser,
-                                   "packed enum values do not fit a supported integer type");
-                return false;
-            }
         } else if (!choose_enum_compatible_type(
-                       parser, saw_negative, minimum, maximum, &compatible_type)) {
-            minic_parser_error(parser,
-                               "enum values do not fit a supported compatible integer type");
+                       parser, saw_negative, attribute_context.has_packed,
+                       minimum, maximum, &compatible_type)) {
+            minic_parser_error(parser, attribute_context.has_packed
+                ? "packed enum values do not fit a supported integer type"
+                : "enum values do not fit a supported compatible integer type");
             return false;
         }
         if (!minic_c0_program_finish_enum(parser->program, enum_id, compatible_type)) {

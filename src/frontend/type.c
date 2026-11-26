@@ -319,14 +319,8 @@ bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
 
 bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
                                             MinicType *result) {
-    MinicType left_value, right_value;
-    if (result == NULL || !minic_type_is_fixed_vector128_storage(left) ||
-        !minic_type_unqualified(left, &left_value) ||
-        !minic_type_unqualified(right, &right_value) ||
-        !minic_type_equal(left_value, right_value))
-        return false;
-    *result = left_value;
-    return true;
+    return minic_type_is_fixed_vector128_storage(left) &&
+           minic_type_fixed_vector_binary_result(left, right, result);
 }
 
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {

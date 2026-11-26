@@ -148,6 +148,18 @@ static bool decode_string_escape(const char *source, size_t *cursor, size_t end,
     return true;
 }
 
+static bool decode_string_character(MinicParser *parser, size_t *cursor,
+                                    size_t end, int *value) {
+    if (parser->source[*cursor] != '\\') {
+        *value = (int)(unsigned char)parser->source[(*cursor)++];
+        return true;
+    }
+    ++*cursor;
+    if (decode_string_escape(parser->source, cursor, end, value)) return true;
+    minic_parser_error(parser, "unsupported string escape");
+    return false;
+}
+
 static bool decoded_string_length(MinicParser *parser,
                                   MinicSourceSpan span,
                                   MinicTokenKind kind,
@@ -162,17 +174,8 @@ static bool decoded_string_length(MinicParser *parser,
     }
     result = 0U;
     while (cursor < end) {
-        if (parser->source[cursor] == '\\') {
-            int value;
-
-            cursor += 1U;
-            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
-                minic_parser_error(parser, "unsupported string escape");
-                return false;
-            }
-        } else {
-            cursor += 1U;
-        }
+        int value;
+        if (!decode_string_character(parser, &cursor, end, &value)) return false;
         if (result == SIZE_MAX) {
             minic_parser_error(parser, "string literal is too long");
             return false;
@@ -240,16 +243,7 @@ static bool add_string_payload(MinicParser *parser,
     while (cursor < end) {
         int value;
 
-        if (parser->source[cursor] == '\\') {
-            cursor += 1U;
-            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
-                minic_parser_error(parser, "unsupported string escape");
-                return false;
-            }
-        } else {
-            value = (int)(unsigned char)parser->source[cursor];
-            cursor += 1U;
-        }
+        if (!decode_string_character(parser, &cursor, end, &value)) return false;
         if (!minic_c0_global_object_add_initializer(parser->program, object_id, value)) {
             minic_parser_error(parser, "out of memory while storing string literal");
             return false;
@@ -258,19 +252,11 @@ static bool add_string_payload(MinicParser *parser,
     return true;
 }
 
-bool minic_parser_add_string_literal_initializer(MinicParser *parser,
-                                                 MinicGlobalObjectId object_id,
-                                                 size_t *element_count) {
+static bool probe_concatenated_string_length(MinicParser *parser,
+                                             MinicTokenKind literal_kind, size_t *length) {
     MinicParser probe;
-    MinicTokenKind literal_kind;
     size_t decoded_length;
     size_t total_length;
-
-    if (parser == NULL || element_count == NULL ||
-        !string_literal_kind(parser->current.kind)) {
-        return false;
-    }
-    literal_kind = parser->current.kind;
     probe = *parser;
     total_length = 0U;
     while (probe.current.kind == literal_kind) {
@@ -285,6 +271,22 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
         minic_parser_error(parser, "mixed string literal encodings are not supported yet");
         return false;
     }
+    *length = total_length;
+    return true;
+}
+
+bool minic_parser_add_string_literal_initializer(MinicParser *parser,
+                                                 MinicGlobalObjectId object_id,
+                                                 size_t *element_count) {
+    MinicTokenKind literal_kind;
+    size_t total_length;
+
+    if (parser == NULL || element_count == NULL ||
+        !string_literal_kind(parser->current.kind)) {
+        return false;
+    }
+    literal_kind = parser->current.kind;
+    if (!probe_concatenated_string_length(parser, literal_kind, &total_length)) return false;
     if (total_length == SIZE_MAX) {
         minic_parser_error(parser, "concatenated string literal is too long");
         return false;
@@ -309,9 +311,7 @@ bool minic_parser_add_string_literal_initializer(MinicParser *parser,
 bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
                                                       size_t element_capacity,
                                                       int *values) {
-    MinicParser probe;
     MinicTokenKind literal_kind;
-    size_t decoded_length;
     size_t total_length;
     size_t stored_count;
 
@@ -321,20 +321,7 @@ bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
         return false;
     }
     literal_kind = parser->current.kind;
-    probe = *parser;
-    total_length = 0U;
-    while (probe.current.kind == literal_kind) {
-        if (!decoded_string_length(
-                &probe, probe.current.span, literal_kind, &decoded_length) ||
-            total_length > SIZE_MAX - decoded_length || !minic_parser_advance(&probe)) {
-            return false;
-        }
-        total_length += decoded_length;
-    }
-    if (string_literal_kind(probe.current.kind) && probe.current.kind != literal_kind) {
-        minic_parser_error(parser, "mixed string literal encodings are not supported yet");
-        return false;
-    }
+    if (!probe_concatenated_string_length(parser, literal_kind, &total_length)) return false;
     if (total_length > element_capacity) {
         minic_parser_error(parser, "string initializer is too long for character array");
         return false;
@@ -358,16 +345,7 @@ bool minic_parser_parse_bounded_string_literal_values(MinicParser *parser,
             if (stored_count >= element_capacity) {
                 return false;
             }
-            if (parser->source[cursor] == '\\') {
-                cursor += 1U;
-                if (!decode_string_escape(parser->source, &cursor, literal_end, &value)) {
-                    minic_parser_error(parser, "unsupported string escape");
-                    return false;
-                }
-            } else {
-                value = (int)(unsigned char)parser->source[cursor];
-                cursor += 1U;
-            }
+            if (!decode_string_character(parser, &cursor, literal_end, &value)) return false;
             values[stored_count++] = value;
         }
         if (!minic_parser_advance(parser)) {
@@ -426,16 +404,7 @@ static bool replace_zero_string_payload(MinicParser *parser,
         if (*slot_index >= slot_limit) {
             return false;
         }
-        if (parser->source[cursor] == '\\') {
-            cursor += 1U;
-            if (!decode_string_escape(parser->source, &cursor, end, &value)) {
-                minic_parser_error(parser, "unsupported string escape");
-                return false;
-            }
-        } else {
-            value = (int)(unsigned char)parser->source[cursor];
-            cursor += 1U;
-        }
+        if (!decode_string_character(parser, &cursor, end, &value)) return false;
         if (!minic_c0_global_object_replace_zero_initializer_bits(
                 parser->program, object_id, *slot_index, (uint64_t)(int64_t)value)) {
             minic_parser_error(parser,
