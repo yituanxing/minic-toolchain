@@ -21,11 +21,13 @@ static const MinicRegisteredMachineOptions registered_policies[] = {
 };
 
 static const MinicRegisteredMachineOptions *machine_options_policy(
-    MinicTargetArchitecture architecture) {
+    MinicTargetArchitecture architecture, char *reason, size_t reason_capacity) {
     size_t index;
-    return minic_target_catalog_index(architecture,
-        sizeof(registered_policies) / sizeof(registered_policies[0]), &index)
-        ? &registered_policies[index] : NULL;
+    if (minic_target_catalog_index(architecture,
+        sizeof(registered_policies) / sizeof(registered_policies[0]), &index))
+        return &registered_policies[index];
+    (void)snprintf(reason, reason_capacity, "unregistered target invocation");
+    return NULL;
 }
 
 bool minic_target_machine_options_resolve(MinicTargetInfo *invocation_target,
@@ -40,12 +42,8 @@ bool minic_target_machine_options_resolve(MinicTargetInfo *invocation_target,
     }
     /* No explicit ISA flags preserve the canonical machine descriptor. */
     if (march == NULL && mabi == NULL) return true;
-    policy = machine_options_policy(invocation_target->architecture);
-    if (policy == NULL) {
-        (void)snprintf(reason, reason_capacity,
-                       "unregistered target invocation");
-        return false;
-    }
+    policy = machine_options_policy(invocation_target->architecture, reason, reason_capacity);
+    if (policy == NULL) return false;
     return policy->resolve(invocation_target, march, mabi,
                            reason, reason_capacity);
 }
@@ -60,11 +58,7 @@ bool minic_target_codegen_option_apply(MinicTargetInfo *invocation_target,
         (void)snprintf(reason, reason_capacity, "invalid machine codegen option");
         return false;
     }
-    policy = machine_options_policy(invocation_target->architecture);
-    if (policy == NULL) {
-        (void)snprintf(reason, reason_capacity,
-                       "unregistered target invocation");
-        return false;
-    }
+    policy = machine_options_policy(invocation_target->architecture, reason, reason_capacity);
+    if (policy == NULL) return false;
     return policy->codegen(invocation_target, option, reason, reason_capacity);
 }

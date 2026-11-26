@@ -488,8 +488,7 @@ bool minic_target_info_va_cursor_source_copy_types_compatible(
 }
 
 bool minic_target_info_plain_char_sign(const MinicTargetInvocation *target, MinicIntegerSign *sign) {
-    if (target == NULL || target->source_info.integer_model == NULL ||
-        target->source_info.integer_model == NULL || sign == NULL ||
+    if (target == NULL || target->source_info.integer_model == NULL || sign == NULL ||
         (target->source_info.integer_model->plain_char_sign != MINIC_INTEGER_SIGN_SIGNED &&
          target->source_info.integer_model->plain_char_sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
         return false;
@@ -521,8 +520,7 @@ bool minic_target_info_wide_character_type(const MinicTargetInvocation *target, 
 bool minic_target_info_word_integer_type(const MinicTargetInvocation *target,
                                          MinicIntegerSign sign,
                                          MinicType *type) {
-    if (target == NULL || target->source_info.integer_model == NULL ||
-        target->source_info.integer_model == NULL || type == NULL ||
+    if (target == NULL || target->source_info.integer_model == NULL || type == NULL ||
         target->source_info.word_integer_rank <= MINIC_INTEGER_RANK_NONE ||
         target->source_info.word_integer_rank > MINIC_INTEGER_RANK_INT128 ||
         (sign != MINIC_INTEGER_SIGN_SIGNED && sign != MINIC_INTEGER_SIGN_UNSIGNED)) {
@@ -707,62 +705,37 @@ bool minic_target_info_integer_literal_type(const MinicTargetInvocation *target,
                                             unsigned int long_count,
                                             uint64_t value,
                                             MinicType *result) {
-    MinicType candidates[6];
-    size_t candidate_count;
+    static const MinicIntegerRank ranks[] = {
+        MINIC_INTEGER_RANK_INT, MINIC_INTEGER_RANK_LONG, MINIC_INTEGER_RANK_LONG_LONG
+    };
     size_t index;
-    bool decimal;
+    MinicType candidate;
+    const bool decimal = base == MINIC_INTEGER_LITERAL_BASE_DECIMAL;
 
     if (target == NULL || target->source_info.integer_model == NULL ||
-        target->source_info.integer_model == NULL || result == NULL || long_count > 2U ||
+        result == NULL || long_count > 2U ||
         (base != MINIC_INTEGER_LITERAL_BASE_BINARY &&
          base != MINIC_INTEGER_LITERAL_BASE_DECIMAL &&
          base != MINIC_INTEGER_LITERAL_BASE_OCTAL &&
          base != MINIC_INTEGER_LITERAL_BASE_HEXADECIMAL)) {
         return false;
     }
-    candidate_count = 0U;
-    decimal = base == MINIC_INTEGER_LITERAL_BASE_DECIMAL;
 
-    if (has_unsigned_suffix) {
-        if (long_count == 0U) {
-            candidates[candidate_count++] = minic_type_unsigned_int();
+    /* C's literal candidate order is rank ascending, signed before unsigned
+     * at each rank. A suffix only removes candidates from that order. */
+    for (index = long_count; index < sizeof(ranks) / sizeof(ranks[0]); ++index) {
+        if (!has_unsigned_suffix &&
+            minic_target_source_integer_type_with_rank(MINIC_INTEGER_SIGN_SIGNED,
+                ranks[index], &candidate) &&
+            integer_literal_fits(target->source_info.integer_model, candidate, value)) {
+            *result = candidate;
+            return true;
         }
-        if (long_count <= 1U) {
-            candidates[candidate_count++] = minic_type_unsigned_long();
-        }
-        candidates[candidate_count++] = minic_type_unsigned_long_long();
-    } else if (long_count == 0U) {
-        candidates[candidate_count++] = minic_type_int();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_int();
-        }
-        candidates[candidate_count++] = minic_type_long();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_long();
-        }
-        candidates[candidate_count++] = minic_type_long_long();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_long_long();
-        }
-    } else if (long_count == 1U) {
-        candidates[candidate_count++] = minic_type_long();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_long();
-        }
-        candidates[candidate_count++] = minic_type_long_long();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_long_long();
-        }
-    } else {
-        candidates[candidate_count++] = minic_type_long_long();
-        if (!decimal) {
-            candidates[candidate_count++] = minic_type_unsigned_long_long();
-        }
-    }
-
-    for (index = 0U; index < candidate_count; ++index) {
-        if (integer_literal_fits(target->source_info.integer_model, candidates[index], value)) {
-            *result = candidates[index];
+        if ((has_unsigned_suffix || !decimal) &&
+            minic_target_source_integer_type_with_rank(MINIC_INTEGER_SIGN_UNSIGNED,
+                ranks[index], &candidate) &&
+            integer_literal_fits(target->source_info.integer_model, candidate, value)) {
+            *result = candidate;
             return true;
         }
     }

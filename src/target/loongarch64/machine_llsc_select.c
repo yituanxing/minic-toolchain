@@ -88,6 +88,49 @@ static bool ll_roles(const MinicCoreFunction *fn,
     return true;
 }
 
+/* Subword exchange and compare/exchange have the same first six roles.
+ * The compare form adds only the third scalar input. */
+static bool ll_subword(MinicMachineBuilder *builder,
+    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
+    const MinicCoreInlineAsm *source, bool compare,
+    bool (*load)(void *, MinicCoreValueId, unsigned int, bool),
+    bool (*store)(void *, MinicCoreValueId, unsigned int, size_t),
+    void *opaque) {
+    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
+        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
+    };
+    static const size_t widths[] = {4U,4U,4U,4U,4U,4U,4U};
+    const size_t count = compare ? 7U : 6U;
+    const MinicCoreStructuredInlineAsmOperand *b =
+        ins->value.structured_inline_asm.operands;
+    MinicMachineOperand bindings[7] = {{0}};
+    if (!ll_roles(fn,ins,count,kinds,widths) ||
+        !load(opaque,b[3].value,LL_T4,true) ||
+        !load(opaque,b[2].value,LL_T7,true) ||
+        !load(opaque,b[4].value,LL_T0,false) ||
+        !load(opaque,b[5].value,LL_T1,false) ||
+        (compare && !load(opaque,b[6].value,LL_T2,false))) return false;
+    bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    bindings[1] = minic_loong_machine_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
+    bindings[2] = ll_memory(LL_T7,"=ZC",NULL);
+    bindings[3] = ll_memory(LL_T4,"ZC",NULL);
+    bindings[4] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    bindings[5] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    if (compare)
+        bindings[6] = minic_loong_machine_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
+    return minic_machine_builder_emit_core_source_asm(builder,source,
+            MINIC_MACHINE_EFFECT_MEMORY_READ | MINIC_MACHINE_EFFECT_MEMORY_WRITE,
+            bindings,count,NULL,0U,false,false) &&
+        store(opaque,b[0].value,LL_T5,4U) &&
+        store(opaque,b[1].value,LL_T6,4U);
+}
+
 static bool ll_cmpxchg(MinicMachineBuilder *builder,
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreInlineAsm *source,
@@ -105,37 +148,8 @@ static bool ll_cmpxchg(MinicMachineBuilder *builder,
         !source->explicit_memory_clobber ||
         !ll_source(source, LOONG_DESC_CMPXCHG, form == 3U ? 0U : 1U))
         return false;
-    if (form == 3U) {
-        static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
-            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
-            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
-        };
-        static const size_t widths[] = {4U,4U,4U,4U,4U,4U,4U};
-        if (!ll_roles(fn,ins,7U,kinds,widths) ||
-            !load(opaque,b[3].value,LL_T4,true) ||
-            !load(opaque,b[2].value,LL_T7,true) ||
-            !load(opaque,b[4].value,LL_T0,false) ||
-            !load(opaque,b[5].value,LL_T1,false) ||
-            !load(opaque,b[6].value,LL_T2,false)) return false;
-        bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-        bindings[1] = minic_loong_machine_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-        bindings[2] = ll_memory(LL_T7,"=ZC",NULL);
-        bindings[3] = ll_memory(LL_T4,"ZC",NULL);
-        bindings[4] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-        bindings[5] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-        bindings[6] = minic_loong_machine_gp(LL_T2,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-        return minic_machine_builder_emit_core_source_asm(builder,source,
-                MINIC_MACHINE_EFFECT_MEMORY_READ |
-                    MINIC_MACHINE_EFFECT_MEMORY_WRITE,
-                bindings,7U,NULL,0U,false,false) &&
-            store(opaque,b[0].value,LL_T5,4U) &&
-            store(opaque,b[1].value,LL_T6,4U);
-    }
+    if (form == 3U)
+        return ll_subword(builder,fn,ins,source,true,load,store,opaque);
     {
         const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
@@ -218,39 +232,10 @@ static bool ll_xchg_small(MinicMachineBuilder *builder,
     bool (*load)(void *, MinicCoreValueId, unsigned int, bool),
     bool (*store)(void *, MinicCoreValueId, unsigned int, size_t),
     void *opaque) {
-    static const MinicCoreStructuredInlineAsmOperandKind kinds[] = {
-        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
-        MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
-        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_OUTPUT,
-        MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT,
-        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
-        MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT
-    };
-    static const size_t widths[] = {4U,4U,4U,4U,4U,4U};
-    const MinicCoreStructuredInlineAsmOperand *b =
-        ins->value.structured_inline_asm.operands;
-    MinicMachineOperand bindings[6] = {{0}};
-    if (!source->explicit_memory_clobber ||
-        !loong_linux_xchg_small_form(source->template_text,
-            source->template_length) ||
-        !ll_source(source, LOONG_DESC_XCHG_SMALL,0U) ||
-        !ll_roles(fn,ins,6U,kinds,widths) ||
-        !load(opaque,b[3].value,LL_T4,true) ||
-        !load(opaque,b[2].value,LL_T7,true) ||
-        !load(opaque,b[4].value,LL_T0,false) ||
-        !load(opaque,b[5].value,LL_T1,false)) return false;
-    bindings[0] = minic_loong_machine_gp(LL_T5,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-    bindings[1] = minic_loong_machine_gp(LL_T6,MINIC_MACHINE_REGISTER_WRITE,"=&r",NULL);
-    bindings[2] = ll_memory(LL_T7,"=ZC",NULL);
-    bindings[3] = ll_memory(LL_T4,"ZC",NULL);
-    bindings[4] = minic_loong_machine_gp(LL_T0,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    bindings[5] = minic_loong_machine_gp(LL_T1,MINIC_MACHINE_REGISTER_READ,"Jr",NULL);
-    return minic_machine_builder_emit_core_source_asm(builder,source,
-            MINIC_MACHINE_EFFECT_MEMORY_READ |
-                MINIC_MACHINE_EFFECT_MEMORY_WRITE,
-            bindings,6U,NULL,0U,false,false) &&
-        store(opaque,b[0].value,LL_T5,4U) &&
-        store(opaque,b[1].value,LL_T6,4U);
+    return source->explicit_memory_clobber &&
+        loong_linux_xchg_small_form(source->template_text, source->template_length) &&
+        ll_source(source, LOONG_DESC_XCHG_SMALL,0U) &&
+        ll_subword(builder,fn,ins,source,false,load,store,opaque);
 }
 
 bool minic_loongarch64_machine_select_llsc(
