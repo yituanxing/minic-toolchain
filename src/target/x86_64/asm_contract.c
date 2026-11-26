@@ -3264,7 +3264,6 @@ bool minic_x86_64_linux_task_size_alt_form(const char *text, size_t length) {
         ".pushsection.altinstr_replacement,\"ax\""
         "#ALT:replacement16641:movq%3,%06651:.popsection";
     char compact[512];
-    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return false;
     if (!x86_compact_template(text, length, compact, sizeof(compact))) return false;
     return strcmp(compact, expected) == 0 ||
