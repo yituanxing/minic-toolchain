@@ -16,7 +16,6 @@ typedef struct ModuleObjectSymbol {
 
 typedef struct ModuleClosure {
     MinicCoreFunctionSet *set;
-    bool reachable_blocks_only;
     bool *functions_live, *functions_seen, *objects_live;
     size_t *function_queue, *object_queue, *owned_heads, *owned_next;
     size_t function_head, function_count, object_head, object_count;
@@ -248,10 +247,8 @@ static bool scan_core_function(ModuleClosure *c, size_t id) {
     reach = calloc(fn->block_count, sizeof(*reach));
     queue = malloc(fn->block_count * sizeof(*queue));
     if (reach == NULL || queue == NULL) goto done;
-    if (c->reachable_blocks_only) {
-        if (!minic_core_function_mark_reachable_blocks(fn, reach, fn->block_count))
-            goto done;
-    } else memset(reach, 1, fn->block_count * sizeof(*reach));
+    if (!minic_core_function_mark_reachable_blocks(fn, reach, fn->block_count))
+        goto done;
     for (i = 0U; i < fn->block_count; ++i)
         if (reach[i]) queue[count++] = (MinicCoreBlockId)i;
     while (cursor < count) {
@@ -365,8 +362,7 @@ static bool initialize_closure(ModuleClosure *c) {
     return true;
 }
 
-bool minic_core_function_set_close_reachability(
-    MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only) {
+bool minic_core_function_set_close_reachability(MinicCoreFunctionSet *set) {
     ModuleClosure c;
     MinicCoreModule *m;
     bool *canonical_owner_live = NULL;
@@ -381,7 +377,6 @@ bool minic_core_function_set_close_reachability(
         return false;
     memset(&c, 0, sizeof(c));
     c.set = set;
-    c.reachable_blocks_only = emit_reachable_core_blocks_only;
     m = &set->module;
     if (!initialize_closure(&c)) goto done;
 

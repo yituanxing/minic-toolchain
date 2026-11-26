@@ -227,7 +227,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
 
 bool minic_complete_core_function_set_reachability(
     const MinicC0Program *program, const MinicTargetInvocation *target,
-    MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only) {
+    MinicCoreFunctionSet *set) {
     MinicCoreReentryIndex *index = NULL;
     size_t round, total_late_lowered = 0U;
 
@@ -254,8 +254,7 @@ bool minic_complete_core_function_set_reachability(
         size_t function_index;
         bool added = false;
 
-        if (!minic_core_function_set_close_reachability(
-                set, emit_reachable_core_blocks_only))
+        if (!minic_core_function_set_close_reachability(set))
             goto failed;
         for (function_index = 0U; function_index < set->function_count;
              ++function_index) {

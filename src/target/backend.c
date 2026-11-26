@@ -23,23 +23,18 @@ static bool emit_riscv64_module(
  * A new ISA cannot fall through to another target's code generator. */
 static const MinicBackend riscv64_backend = {
     .emit_module = emit_riscv64_module,
-    .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend riscv32_backend = {
     .emit_module = minic_riscv32_write_core_module,
-    .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend x86_64_backend = {
     .emit_module = minic_x86_64_write_core_module,
-    .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend aarch64_backend = {
     .emit_module = minic_aarch64_write_core_module,
-    .emit_reachable_core_blocks_only = true,
 };
 static const MinicBackend loongarch64_backend = {
     .emit_module = minic_loongarch64_write_core_module,
-    .emit_reachable_core_blocks_only = true,
 };
 
 static const MinicBackend *const minic_registered_backends[] = {

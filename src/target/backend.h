@@ -37,9 +37,6 @@ typedef struct MinicBackend {
      * typed admission never falls back to direct emission. The separate
      * RV64 LP64D legacy ABI branch remains explicitly outside that seal. */
     MinicBackendEmitModule emit_module;
-    /* True only when the machine emitter omits unreachable Core blocks.
-     * Core call-graph pruning must use exactly the same emitted CFG roots. */
-    bool emit_reachable_core_blocks_only;
 } MinicBackend;
 
 /* Fail closed on unknown architecture. No default or host fallback. */
