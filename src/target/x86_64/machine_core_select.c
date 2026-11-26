@@ -3280,7 +3280,7 @@ static bool x86_source_zstd_cpuid(X86CoreSelector *sel,
         source->implicit_memory_effect ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_source_provenance_sealed(source) || !roles)
+        !x86_source_provenance_sealed(source) )
         return false;
     for (form=0U;form<3U;++form)
         if (count == output_counts[form]+input_counts[form] &&
@@ -3357,7 +3357,7 @@ static bool x86_source_via_xstore(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (!roles || source->target_machine_form_id !=
+    if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_VIA_XSTORE ||
         source->target_machine_form_variant != 0U ||
         !source->is_volatile ||
@@ -4291,7 +4291,6 @@ static bool x86_source_hweight(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     if (!x86_asm_gp_lvalue_width(sel,roles[0].value,bytes) ||
@@ -4380,8 +4379,7 @@ static bool x86_source_mmio_or_xchg(X86CoreSelector *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !minic_x86_64_typed_machine_form_matches_template(
             form_id,source->target_machine_form_variant,
-            source->template_text,source->template_length) ||
-        roles == NULL)
+            source->template_text,source->template_length) )
         return false;
     for (i = 0U; i < 2U; ++i) {
         const bool address = reading || exchange || (writing && i == 1U);
@@ -4508,7 +4506,6 @@ static bool x86_source_pci_mmconfig(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !x86_source_provenance_sealed(source) ||
-        roles == NULL ||
         roles[0].operand_index != 0U ||
         roles[1].operand_index != 1U ||
         roles[0].value >= sel->core->value_count ||
@@ -4613,8 +4610,7 @@ static bool x86_source_rep_stos(X86CoreSelector *sel,
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_source_provenance_sealed(source) ||
-        roles == NULL) return false;
+        !x86_source_provenance_sealed(source) ) return false;
     for (i = 0U; i < 5U; ++i) {
         if (roles[i].operand_index != i ||
             roles[i].value >= sel->core->value_count ||
@@ -4790,7 +4786,6 @@ static bool x86_source_iomem_copy(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         ins->value.structured_inline_asm.operand_count != count ||
-        roles == NULL ||
         !minic_x86_64_typed_machine_form_matches_template(
             MINIC_X86_MACHINE_ASM_IOMEM_COPY, 0U,
             source->template_text, source->template_length)) return false;
@@ -4978,7 +4973,6 @@ static bool x86_source_counter(X86CoreSelector *sel,
             memcmp(source->register_clobbers[0].name,"ecx",3U) != 0)) ||
         !x86_source_provenance_sealed(source) ||
         ins->value.structured_inline_asm.operand_count != count ||
-        roles == NULL ||
         (!x86_asm_gp_lvalue_width(sel,roles[0].value,4U) &&
          !x86_asm_gp_lvalue_width(sel,roles[0].value,8U)))
         return false;
@@ -5098,7 +5092,6 @@ static bool x86_source_fdiv_bug(X86CoreSelector *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     for (i = 0U; i < 3U; ++i) {
@@ -5145,8 +5138,7 @@ static bool x86_source_x87_probe(X86CoreSelector *sel,
         return false;
     source = &sel->core->inline_asms[ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL ||
-        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_X87_PROBE ||
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_X87_PROBE ||
         source->target_machine_form_variant != 0U ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber || source->explicit_memory_clobber ||
@@ -5257,7 +5249,7 @@ static bool x86_source_fpu_kernel_restore(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     form = minic_x86_64_linux_fpu_kernel_restore_form(
         source->template_text,source->template_length);
-    if (!roles || source->target_machine_form_id !=
+    if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE ||
         form < 1U || form > 3U ||
         source->target_machine_form_variant != form ||
@@ -5326,7 +5318,6 @@ static bool x86_source_random_seed(X86CoreSelector *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 2U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     for (i = 0U; i < 2U; ++i) {
@@ -5404,7 +5395,7 @@ static bool x86_scalar_source_base(X86CoreSelector *sel,
         return false;
     *source_out = source;
     *roles_out = ins->value.structured_inline_asm.operands;
-    return *roles_out != NULL;
+    return true;
 }
 
 static bool x86_scalar_role(const MinicCoreStructuredInlineAsmOperand *role,
@@ -5508,7 +5499,6 @@ static bool x86_source_nospec(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     clobber = &source->register_clobbers[0];
@@ -6138,7 +6128,6 @@ static bool x86_source_mxcsr(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         ins->value.structured_inline_asm.operand_count != 1U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     if (roles[0].operand_index != 0U ||
@@ -6193,7 +6182,6 @@ static bool x86_source_unwind_context(X86CoreSelector *sel,
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     for (i = 0U; i < 3U; ++i) {
@@ -6260,7 +6248,6 @@ static bool x86_source_pkru(X86CoreSelector *sel,
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->register_clobber_count != 0U ||
         ins->value.structured_inline_asm.operand_count != 3U ||
-        roles == NULL ||
         !x86_source_provenance_sealed(source))
         return false;
     outputs = form == 1U ? 2U : 0U;
@@ -6431,7 +6418,7 @@ static bool x86_source_fpu_user_frame(X86CoreSelector *sel,
     named = memchr(source->template_text,'[',
         source->template_length) != NULL;
     named_input = (variant & 0x100U) != 0U;
-    if (!roles || form < 1U || form > (safe ? 2U : 6U) ||
+    if (form < 1U || form > (safe ? 2U : 6U) ||
         (safe ? variant != 0U :
             (variant != form && variant != (form | 0x100U))) ||
         !source->is_volatile || source->is_goto ||
@@ -6525,7 +6512,6 @@ static bool x86_source_xsave_triple_alt(X86CoreSelector *sel,
     if (ins->value.structured_inline_asm.operand_count != count)
         return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (!roles) return false;
     for (i = 0U; i < count; ++i) {
         const MinicCoreStructuredInlineAsmOperandKind kind =
             !restoring && i == 0U ?
@@ -6617,7 +6603,7 @@ static bool x86_source_task_size_alt(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL || source->target_machine_form_id !=
+    if (source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT ||
         source->target_machine_form_variant != 0U ||
         !source->is_volatile || source->is_goto ||
@@ -6684,7 +6670,7 @@ static bool x86_source_apic_amd_alt(X86CoreSelector *sel,
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        roles == NULL || ins->value.structured_inline_asm.operand_count !=
+        ins->value.structured_inline_asm.operand_count !=
             (form == 1U ? 5U : 3U) ||
         !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < (form == 1U ? 5U : 3U); ++i)
@@ -7067,7 +7053,7 @@ static bool x86_source_cache_flush_alt(X86CoreSelector *sel,
     if (!idle && source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT) return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (!roles || source->target_machine_form_variant != 0U ||
+    if (source->target_machine_form_variant != 0U ||
         !source->is_volatile ||
         source->is_goto || !source->has_memory_clobber ||
         source->explicit_memory_clobber || !source->implicit_memory_effect ||
@@ -7229,7 +7215,7 @@ static bool x86_source_rep_uaccess_alternative(X86CoreSelector *sel,
         source->register_clobber_count != (movsb ? 1U : 0U) ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_source_provenance_sealed(source) || !roles)
+        !x86_source_provenance_sealed(source) )
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool fixed = i == (movsb ? 3U : 2U);
@@ -7945,8 +7931,7 @@ static bool x86_source_msr(X86CoreSelector *sel,
         source->explicit_memory_clobber == read) return false;
     outputs = safe ? (read ? 3U : 1U) : (read ? 2U : 0U);
     count = safe ? 4U : 3U;
-    if (ins->value.structured_inline_asm.operand_count != count ||
-        roles == NULL) return false;
+    if (ins->value.structured_inline_asm.operand_count != count ) return false;
     if (safe && read) {
         /* GNU's original safe-RDMSR allocator chooses R11D, encoded as
          * 0x0b0b in the exception table's type/register descriptor. */
@@ -8089,7 +8074,7 @@ static bool x86_source_percpu_gs(X86CoreSelector *sel,
     count = operation == 2U || operation == 3U ? 1U : 2U;
     if (source->has_memory_clobber != (operation != 0U)) return false;
     if (ins->value.structured_inline_asm.operand_count != count ||
-        roles == NULL || roles[0].operand_index != 0U ||
+        roles[0].operand_index != 0U ||
         roles[0].kind != (operation == 0U ?
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT :
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_READWRITE) ||
@@ -8317,7 +8302,6 @@ static bool x86_source_pm_trace(X86CoreSelector *sel,
         source->symbol_references == NULL ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !x86_source_provenance_sealed(source) ||
-        roles == NULL ||
         !x86_asm_gp_lvalue_width(sel,roles[0].value,8U) ||
         !x86_asm_gp_input_width(sel,roles[2].value,8U) ||
         !x86_pm_trace_global_symbol(sel->core,roles[2].value,
@@ -8403,8 +8387,7 @@ static bool x86_source_ipv6_checksum(X86CoreSelector *sel,
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        !x86_source_provenance_sealed(source) ||
-        roles == NULL)
+        !x86_source_provenance_sealed(source) )
         return false;
     for (i = 0U; i < 4U; ++i) {
         const bool tied = i == 1U;
@@ -8478,7 +8461,7 @@ static bool x86_source_checksum_carry(X86CoreSelector *sel,
         partial == 2U ? 6U : 3U) :
         form_id == MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD ? 5U : 3U;
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL || (is_partial && (partial == 0U || partial > 6U)) ||
+    if ((is_partial && (partial == 0U || partial > 6U)) ||
         ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 0U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
@@ -8605,8 +8588,7 @@ static bool x86_source_ip_fast_csum(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL ||
-        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_IP_FAST_CSUM ||
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_IP_FAST_CSUM ||
         source->target_machine_form_variant != 0U ||
         source->is_goto || !source->has_memory_clobber ||
         !source->explicit_memory_clobber ||
@@ -8681,8 +8663,7 @@ static bool x86_source_smp_xadd(X86CoreSelector *sel,
     plan = minic_x86_64_gs_atomic_plan(source->template_text,
         source->template_length);
     width = plan.width;
-    if (roles == NULL ||
-        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_GS_ATOMIC ||
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_GS_ATOMIC ||
         source->target_machine_form_variant != 0U ||
         plan.kind != MINIC_X86_GS_ATOMIC_XADD_SMP ||
         (width != 1U && width != 2U && width != 4U && width != 8U) ||
@@ -8772,7 +8753,6 @@ static bool x86_source_gs_atomic_extended(X86CoreSelector *sel,
     count = cmp ? 3U : 2U;
     if ((width != 1U && width != 2U && width != 4U && width != 8U) ||
         (plan.kind == MINIC_X86_GS_ATOMIC_XADD_LOCAL && width < 4U) ||
-        roles == NULL ||
         ins->value.structured_inline_asm.operand_count != count ||
         source->target_machine_form_variant != 0U ||
         source->is_goto ||
@@ -8935,7 +8915,7 @@ static bool x86_source_xstate_fault(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     form = minic_x86_64_linux_xstate_fault_form(
         source->template_text, source->template_length);
-    if (!roles || form < 1U || form > 4U ||
+    if (form < 1U || form > 4U ||
         source->target_machine_form_id != MINIC_X86_MACHINE_ASM_XSTATE_FAULT ||
         source->target_machine_form_variant != form ||
         !source->is_volatile ||
@@ -9207,7 +9187,7 @@ static bool x86_source_vmware(X86CoreSelector *sel,
     roles = ins->value.structured_inline_asm.operands;
     /* Core may conservatively promote a source memory-clobber hypercall to
      * volatile. The C ingress has already sealed its original spelling. */
-    if (!roles || (alt && !src->is_volatile) || src->is_goto ||
+    if ((alt && !src->is_volatile) || src->is_goto ||
         !src->has_memory_clobber || src->register_clobber_count ||
         src->target_machine_form_variant != 0U ||
         src->resolved_immediate_count != 0U ||
@@ -9293,8 +9273,7 @@ static bool x86_source_kvm_hypercall(X86CoreSelector *sel,
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 0U ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        count < 2U || count > (alt ? 6U : 5U) || !roles ||
-        !x86_source_provenance_sealed(source)) return false;
+        count < 2U || count > (alt ? 6U : 5U) || !x86_source_provenance_sealed(source)) return false;
     for (i = 0U; i < count; ++i) {
         const bool output = i == 0U;
         if (roles[i].operand_index != i ||
@@ -9360,7 +9339,6 @@ static bool x86_source_pvclock_scale(X86CoreSelector *sel,
         !x86_source_provenance_sealed(src))
         return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL) return false;
     for (i = 0U; i < 4U; ++i) {
         const bool output = i < 2U;
         if (roles[i].operand_index != i ||
@@ -9419,7 +9397,6 @@ static bool x86_source_vdso_syscall(X86CoreSelector *sel,
         !x86_source_provenance_sealed(src))
         return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (!roles) return false;
     number_index = clock_form ? 2U : 1U;
     for (i = 0U; i < ins->value.structured_inline_asm.operand_count; ++i) {
         const MinicCoreStructuredInlineAsmOperandKind expected = i == 0U ?
@@ -9646,8 +9623,7 @@ static bool x86_source_exception_stack_call(X86CoreSelector *sel,
     count = irq ? (form == 1U ? 5U : form == 2U ? 6U :
         form == 3U ? 4U : 0U) : 7U;
     roles = ins->value.structured_inline_asm.operands;
-    if (count == 0U || roles == NULL ||
-        ins->value.structured_inline_asm.operand_count != count ||
+    if (count == 0U || ins->value.structured_inline_asm.operand_count != count ||
         (!irq && form != 0U) || !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber ||
         source->register_clobber_count != 9U ||
@@ -9770,7 +9746,7 @@ static bool x86_source_iret_int3(X86CoreSelector *sel,
     if (!iret && source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_INT3_SELFTEST) return false;
     roles = ins->value.structured_inline_asm.operands;
-    if (!roles || ins->value.structured_inline_asm.operand_count != 2U ||
+    if (ins->value.structured_inline_asm.operand_count != 2U ||
         !source->is_volatile || source->is_goto ||
         !source->has_memory_clobber ||
         source->resolved_immediate_count != 0U ||
@@ -9929,8 +9905,7 @@ static bool x86_source_pv_indirect_call(X86CoreSelector *sel,
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL ||
-        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL ||
+    if (source->target_machine_form_id != MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL ||
         source->is_goto ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !x86_source_provenance_sealed(source)) return false;
@@ -10739,7 +10714,7 @@ static bool x86_source_kernel_nofault_goto(X86CoreSelector *sel,
     bits = form ? 8U << ((form - 1U) % 4U) : 0U;
     constraint = load ? (bits == 8U ? "=q" : "=r") :
         bits == 8U ? "iq" : bits == 64U ? "er" : "ir";
-    if (!roles || !form ||
+    if (!form ||
         source->target_machine_form_id !=
             MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO ||
         source->target_machine_form_variant != 0U ||
@@ -10980,8 +10955,7 @@ static bool x86_source_single_integer_immediate(
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
     roles = ins->value.structured_inline_asm.operands;
-    if (roles == NULL ||
-        source->target_machine_form_id != form_id ||
+    if (source->target_machine_form_id != form_id ||
         source->target_machine_form_variant != 1U ||
         !source->is_volatile ||
         source->is_goto || source->has_memory_clobber ||
