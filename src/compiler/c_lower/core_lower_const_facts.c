@@ -582,71 +582,6 @@ bool minic_core_lower_boolean_range_expression(
     return false;
 }
 
-static bool core_boolean_compare_values(
-    const MinicCoreLowerContext *context,
-    MinicBinaryOperator operator_kind,
-    MinicType common_type,
-    const MinicConstValue *left,
-    const MinicConstValue *right,
-    bool *predicate) {
-    if (context == NULL || left == NULL || right == NULL || predicate == NULL) {
-        return false;
-    }
-    if (operator_kind == MINIC_BINARY_EQUAL ||
-        operator_kind == MINIC_BINARY_NOT_EQUAL) {
-        *predicate = left->bits == right->bits;
-        if (operator_kind == MINIC_BINARY_NOT_EQUAL) {
-            *predicate = !*predicate;
-        }
-        return true;
-    }
-    if (minic_type_is_signed_integer(common_type)) {
-        int64_t left_signed;
-        int64_t right_signed;
-        if (!core_const_signed_value(context, left, &left_signed) ||
-            !core_const_signed_value(context, right, &right_signed)) {
-            return false;
-        }
-        switch (operator_kind) {
-        case MINIC_BINARY_LESS: *predicate = left_signed < right_signed; return true;
-        case MINIC_BINARY_LESS_EQUAL: *predicate = left_signed <= right_signed; return true;
-        case MINIC_BINARY_GREATER: *predicate = left_signed > right_signed; return true;
-        case MINIC_BINARY_GREATER_EQUAL: *predicate = left_signed >= right_signed; return true;
-        default: return false;
-        }
-    }
-    switch (operator_kind) {
-    case MINIC_BINARY_LESS: *predicate = left->bits < right->bits; return true;
-    case MINIC_BINARY_LESS_EQUAL: *predicate = left->bits <= right->bits; return true;
-    case MINIC_BINARY_GREATER: *predicate = left->bits > right->bits; return true;
-    case MINIC_BINARY_GREATER_EQUAL: *predicate = left->bits >= right->bits; return true;
-    default: return false;
-    }
-}
-
-
-static bool core_cfg_normalize_integer(const MinicCoreLowerContext *context,
-                                       MinicType type,
-                                       uint64_t bits,
-                                       uint64_t *normalized) {
-    unsigned int width;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || normalized == NULL ||
-        !minic_target_info_integer_width(
-            context->target, context->body->program, type, &width) ||
-        width == 0U || width > 64U) {
-        return false;
-    }
-    if (minic_type_is_bool_integer(type)) {
-        *normalized = bits == 0U ? 0U : 1U;
-    } else {
-        *normalized = bits & minic_integer_mask64(width);
-    }
-    return true;
-}
-
-
 /* M181_RESIDUAL_CONSTANT_CLOSURE: constant integer-origin pointer bits. */
 static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
                                         MinicExpressionId expression_id,
@@ -2421,38 +2356,13 @@ statement_expression_done:
          expression->value.unary.operator_kind == MINIC_UNARY_NEGATE ||
          expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT)) {
         MinicConstValue operand;
-        uint64_t bits;
 
-        if (!core_const_eval_integer_with_locals(
-                context, expression->value.unary.operand, &operand) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &operand,
-                                               expression->type,
-                                               &operand) ||
-            !core_cfg_normalize_integer(context, expression->type, operand.bits, &bits)) {
-            return false;
-        }
-        if (expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
-            if (minic_type_is_signed_integer(expression->type)) {
-                int64_t signed_value;
-                unsigned int width;
-                if (!core_const_signed_value(context, &operand, &signed_value) ||
-                    !minic_target_info_integer_width(context->target,
-                                                     context->body->program,
-                                                     expression->type,
-                                                     &width) ||
-                    (width == 64U && signed_value == INT64_MIN) ||
-                    (width < 64U && signed_value == -(INT64_C(1) << (width - 1U)))) {
-                    return false;
-                }
-            }
-            bits = UINT64_C(0) - bits;
-        } else if (expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT) {
-            bits = ~bits;
-        }
-        value->type = expression->type;
-        return core_cfg_normalize_integer(context, expression->type, bits, &value->bits);
+        return core_const_eval_integer_with_locals(
+                   context, expression->value.unary.operand, &operand) &&
+               minic_const_eval_integer_unary_value(
+                   context->body->program, context->target,
+                   expression->value.unary.operator_kind,
+                   expression->type, operand, value);
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_EQUAL ||
@@ -2481,18 +2391,14 @@ statement_expression_done:
                                                 ? expression->value.binary.right
                                                 : expression->value.binary.left;
             MinicConstValue constant_value;
-            MinicConstValue constant_common;
             MinicConstValue range_zero;
             MinicConstValue range_one;
-            MinicConstValue zero_common;
-            MinicConstValue one_common;
+            MinicConstValue predicate_zero;
+            MinicConstValue predicate_one;
             MinicType range_type = left_range ? left_expression->type
                                               : right_expression->type;
             MinicType constant_type = left_range ? right_expression->type
                                                  : left_expression->type;
-            MinicType common_type;
-            bool predicate_zero;
-            bool predicate_one;
 
             range_zero.type = range_type;
             range_zero.bits = 0U;
@@ -2500,47 +2406,23 @@ statement_expression_done:
             range_one.bits = 1U;
             if (core_const_eval_integer_with_locals(
                     context, constant_id, &constant_value) &&
-                minic_target_info_integer_common_for_program(
-                    context->target,
-                    context->body->program,
-                    range_type,
-                    constant_type,
-                    &common_type) &&
                 minic_const_value_convert_integer(
-                    context->body->program,
-                    context->target,
-                    &constant_value,
-                    common_type,
-                    &constant_common) &&
-                minic_const_value_convert_integer(
-                    context->body->program,
-                    context->target,
-                    &range_zero,
-                    common_type,
-                    &zero_common) &&
-                minic_const_value_convert_integer(
-                    context->body->program,
-                    context->target,
-                    &range_one,
-                    common_type,
-                    &one_common) &&
-                core_boolean_compare_values(
-                    context,
-                    expression->value.binary.operator_kind,
-                    common_type,
-                    left_range ? &zero_common : &constant_common,
-                    left_range ? &constant_common : &zero_common,
+                    context->body->program, context->target,
+                    &constant_value, constant_type, &constant_value) &&
+                minic_const_eval_integer_binary_values(
+                    context->body->program, context->target,
+                    expression->value.binary.operator_kind, expression->type,
+                    left_range ? range_zero : constant_value,
+                    left_range ? constant_value : range_zero,
                     &predicate_zero) &&
-                core_boolean_compare_values(
-                    context,
-                    expression->value.binary.operator_kind,
-                    common_type,
-                    left_range ? &one_common : &constant_common,
-                    left_range ? &constant_common : &one_common,
+                minic_const_eval_integer_binary_values(
+                    context->body->program, context->target,
+                    expression->value.binary.operator_kind, expression->type,
+                    left_range ? range_one : constant_value,
+                    left_range ? constant_value : range_one,
                     &predicate_one) &&
-                predicate_zero == predicate_one) {
-                value->type = expression->type;
-                value->bits = predicate_zero ? 1U : 0U;
+                predicate_zero.bits == predicate_one.bits) {
+                *value = predicate_zero;
                 return true;
             }
         }
@@ -2552,53 +2434,28 @@ statement_expression_done:
          expression->value.binary.operator_kind == MINIC_BINARY_LESS_EQUAL ||
          expression->value.binary.operator_kind == MINIC_BINARY_GREATER ||
          expression->value.binary.operator_kind == MINIC_BINARY_GREATER_EQUAL)) {
-        const MinicExpression *left_expression;
-        const MinicExpression *right_expression;
+        const MinicExpression *left_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.left);
+        const MinicExpression *right_expression = minic_c0_program_expression(
+            context->body->program, expression->value.binary.right);
         MinicConstValue left;
         MinicConstValue right;
-        MinicConstValue left_common;
-        MinicConstValue right_common;
-        MinicType common_type;
-        bool predicate;
 
-        left_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.left);
-        right_expression = minic_c0_program_expression(
-            context->body->program, expression->value.binary.right);
-        if (left_expression == NULL || right_expression == NULL ||
-            !minic_type_is_integer(left_expression->type) ||
-            !minic_type_is_integer(right_expression->type) ||
-            !core_const_eval_integer_with_locals(
-                context, expression->value.binary.left, &left) ||
-            !core_const_eval_integer_with_locals(
-                context, expression->value.binary.right, &right) ||
-            !minic_target_info_integer_common_for_program(context->target,
-                                                          context->body->program,
-                                                          left_expression->type,
-                                                          right_expression->type,
-                                                          &common_type) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &left,
-                                               common_type,
-                                               &left_common) ||
-            !minic_const_value_convert_integer(context->body->program,
-                                               context->target,
-                                               &right,
-                                               common_type,
-                                               &right_common)) {
-            return false;
-        }
-        /* The boolean-range proof above and ordinary two-constant folding
-         * must agree on target-aware signedness and comparison results. */
-        if (!core_boolean_compare_values(
-                context, expression->value.binary.operator_kind, common_type,
-                &left_common, &right_common, &predicate)) {
-            return false;
-        }
-        value->type = expression->type;
-        value->bits = predicate ? 1U : 0U;
-        return true;
+        return left_expression != NULL && right_expression != NULL &&
+               core_const_eval_integer_with_locals(
+                   context, expression->value.binary.left, &left) &&
+               core_const_eval_integer_with_locals(
+                   context, expression->value.binary.right, &right) &&
+               minic_const_value_convert_integer(
+                   context->body->program, context->target,
+                   &left, left_expression->type, &left) &&
+               minic_const_value_convert_integer(
+                   context->body->program, context->target,
+                   &right, right_expression->type, &right) &&
+               minic_const_eval_integer_binary_values(
+                   context->body->program, context->target,
+                   expression->value.binary.operator_kind,
+                   expression->type, left, right, value);
     }
     return false;
 }

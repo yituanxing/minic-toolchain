@@ -1037,6 +1037,49 @@ bool minic_const_eval_integer_binary_values(const MinicC0Program *program,
     }
 }
 
+bool minic_const_eval_integer_unary_value(const MinicC0Program *program,
+                                          const MinicTargetInvocation *target,
+                                          MinicUnaryOperator operator_kind,
+                                          MinicType result_type,
+                                          MinicConstValue operand,
+                                          MinicConstValue *value) {
+    MinicConstValue converted;
+
+    if (program == NULL || target == NULL || value == NULL)
+        return false;
+    if (!convert_value(program, target, &operand, result_type, &converted)) {
+        return false;
+    }
+    value->type = result_type;
+    switch (operator_kind) {
+    case MINIC_UNARY_PLUS:
+        *value = converted;
+        return true;
+    case MINIC_UNARY_BITWISE_NOT:
+        return normalize_bits(program, target, result_type, ~converted.bits, &value->bits);
+    case MINIC_UNARY_NEGATE:
+        if (minic_type_is_unsigned_integer(result_type)) {
+            return normalize_bits(
+                program, target, result_type, 0U - converted.bits, &value->bits);
+        } else {
+            int64_t signed_operand;
+            int64_t minimum;
+            int64_t maximum;
+
+            if (!value_signed(program, target, &converted, &signed_operand) ||
+                !signed_range(program, target, result_type, &minimum, &maximum) ||
+                signed_operand == minimum) {
+                return false;
+            }
+            (void)maximum;
+            return normalize_bits(
+                program, target, result_type, (uint64_t)(-signed_operand), &value->bits);
+        }
+    default:
+        return false;
+    }
+}
+
 static bool eval_binary(const MinicC0Program *program,
                         const MinicTargetInvocation *target,
                         const MinicExpression *expression,
@@ -1202,7 +1245,6 @@ static bool eval_expression(const MinicC0Program *program,
     }
     case MINIC_EXPRESSION_UNARY: {
         MinicConstValue operand;
-        MinicConstValue converted;
         bool truthy;
 
         if (!eval_expression(
@@ -1217,37 +1259,9 @@ static bool eval_expression(const MinicC0Program *program,
             value->bits = truthy ? 0U : 1U;
             return true;
         }
-        if (!convert_value(program, target, &operand, expression->type, &converted)) {
-            return false;
-        }
-        value->type = expression->type;
-        switch (expression->value.unary.operator_kind) {
-        case MINIC_UNARY_PLUS:
-            *value = converted;
-            return true;
-        case MINIC_UNARY_BITWISE_NOT:
-            return normalize_bits(program, target, expression->type, ~converted.bits, &value->bits);
-        case MINIC_UNARY_NEGATE:
-            if (minic_type_is_unsigned_integer(expression->type)) {
-                return normalize_bits(
-                    program, target, expression->type, 0U - converted.bits, &value->bits);
-            } else {
-                int64_t signed_operand;
-                int64_t minimum;
-                int64_t maximum;
-
-                if (!value_signed(program, target, &converted, &signed_operand) ||
-                    !signed_range(program, target, expression->type, &minimum, &maximum) ||
-                    signed_operand == minimum) {
-                    return false;
-                }
-                (void)maximum;
-                return normalize_bits(
-                    program, target, expression->type, (uint64_t)(-signed_operand), &value->bits);
-            }
-        default:
-            return false;
-        }
+        return minic_const_eval_integer_unary_value(
+            program, target, expression->value.unary.operator_kind,
+            expression->type, operand, value);
     }
     case MINIC_EXPRESSION_BUILTIN_UNARY:
         return eval_builtin_unary(program, target, expression, depth, value);

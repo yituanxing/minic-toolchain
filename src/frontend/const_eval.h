@@ -24,6 +24,12 @@ bool minic_const_eval_integer_binary_values(const MinicC0Program *program,
                                             MinicConstValue left,
                                             MinicConstValue right,
                                             MinicConstValue *value);
+bool minic_const_eval_integer_unary_value(const MinicC0Program *program,
+                                          const MinicTargetInvocation *target,
+                                          MinicUnaryOperator operator_kind,
+                                          MinicType result_type,
+                                          MinicConstValue operand,
+                                          MinicConstValue *value);
 bool minic_const_eval_arithmetic_to_integer(const MinicC0Program *program,
                                             const MinicTargetInvocation *target,
                                             MinicExpressionId expression_id,
