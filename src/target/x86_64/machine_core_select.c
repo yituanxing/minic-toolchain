@@ -2696,8 +2696,8 @@ static bool x86_source_provenance_sealed(const MinicCoreInlineAsm *source) {
         source->source_asm_unique_id != 0U &&
         (source->register_clobber_count == 0U ||
             source->register_clobbers != NULL) &&
-        (source->resolved_immediate_count == 0U ||
-            source->resolved_immediates != NULL) &&
+        source->resolved_immediate_count <=
+            MINIC_CORE_INLINE_ASM_IMMEDIATE_LIMIT &&
         (source->symbol_reference_count == 0U ||
             source->symbol_references != NULL) &&
         minic_x86_64_typed_machine_form_matches_template(
@@ -9785,7 +9785,6 @@ static bool x86_source_jump_label(X86CoreSelector *sel,
         source->deferred_immediate_symbol != NULL ||
         source->source_asm_unique_id == 0U ||
         source->resolved_immediate_count != 2U ||
-        source->resolved_immediates == NULL ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         source->goto_target >= sel->core->block_count ||
         !sel->reachable[source->goto_target] ||
@@ -9952,7 +9951,6 @@ static bool x86_source_cpu_has_goto(X86CoreSelector *sel,
         source->deferred_immediate_symbol != NULL ||
         source->source_asm_unique_id == 0U ||
         source->resolved_immediate_count != 3U ||
-        source->resolved_immediates == NULL ||
         source->goto_target >= sel->core->block_count ||
         source->goto_second_target >= sel->core->block_count ||
         source->goto_target == source->goto_second_target ||
