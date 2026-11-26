@@ -4503,37 +4503,44 @@ static bool x86_linux_fxrstor_safe_source(const MinicTargetInvocation *invocatio
     return true;
 }
 
-static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocation,
+/* All three xstate forms use the same D/m/a/d C-side address contract.
+ * Their exact instruction spelling and optional error output remain separate
+ * at the source qualifier entries and at physical MachineIR validation. */
+static bool x86_linux_xstate_memory_source(
     const MinicC0Program *program, const MinicInlineAsm *source,
-    MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
-    const MinicExpression *err, *ptr, *mem, *low, *high;
+    MinicTargetInlineAsmContract *contract, unsigned int form,
+    const char *output_constraint, bool publish_variant) {
+    const bool has_output = output_constraint != NULL;
+    const MinicExpression *error = NULL, *ptr, *mem, *low, *high;
     MinicType pointee, plain;
-    unsigned int variant;
-    if (!program || !source || !contract ||
-        (variant = minic_x86_64_linux_xstate_fault_form(
-            source->template_text, source->template_length)) == 0U ||
+    const size_t offset = has_output ? 1U : 0U;
+    if (!program || !source || !contract || !form ||
         !source->is_volatile || source->is_goto ||
-        source->output_count != 1U || !source->outputs ||
+        source->output_count != (has_output ? 1U : 0U) ||
+        (has_output && !source->outputs) ||
         source->input_count != 4U || !source->inputs ||
         source->label_count || source->register_clobber_count ||
         source->clobber_count != 1U || !source->has_memory_clobber ||
-        !target_constraint_is(&source->outputs[0], "=a") ||
+        (has_output && !target_constraint_is(&source->outputs[0],
+                                              output_constraint)) ||
         !target_constraint_is(&source->inputs[0], "D") ||
         !target_constraint_is(&source->inputs[1], "m") ||
         !target_constraint_is(&source->inputs[2], "a") ||
         !target_constraint_is(&source->inputs[3], "d"))
         return false;
-    err = minic_c0_program_expression(program, source->outputs[0].expression);
+    if (has_output)
+        error = minic_c0_program_expression(
+            program, source->outputs[0].expression);
     ptr = minic_c0_program_expression(program, source->inputs[0].expression);
     mem = minic_c0_program_expression(program, source->inputs[1].expression);
     low = minic_c0_program_expression(program, source->inputs[2].expression);
     high = minic_c0_program_expression(program, source->inputs[3].expression);
-    if (!err || !ptr || !mem || !low || !high ||
-        err->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(err->type) ||
-        !minic_type_unqualified(err->type, &plain) ||
-        !minic_type_equal(plain, minic_type_int()) ||
+    if ((has_output && (!error ||
+            error->value_category != MINIC_VALUE_LVALUE ||
+            minic_type_is_const(error->type) ||
+            !minic_type_unqualified(error->type, &plain) ||
+            !minic_type_equal(plain, minic_type_int()))) ||
+        !ptr || !mem || !low || !high ||
         !minic_type_pointee(ptr->type, &pointee) ||
         mem->value_category != MINIC_VALUE_LVALUE ||
         !minic_type_is_record(mem->type) ||
@@ -4541,102 +4548,46 @@ static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocatio
         !minic_type_is_integer(low->type) ||
         !minic_type_is_integer(high->type))
         return false;
-    contract->operand_count = 5U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->target_machine_form_variant = variant;
+    contract->operand_count = 4U + offset;
+    if (has_output)
+        contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
+    contract->kinds[offset] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[offset+1U] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
+    contract->kinds[offset+2U] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
+    contract->kinds[offset+3U] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
+    if (publish_variant) contract->target_machine_form_variant = form;
     return true;
+}
+
+static bool x86_linux_xstate_fault_source(const MinicTargetInvocation *invocation,
+    const MinicC0Program *program, const MinicInlineAsm *source,
+    MinicTargetInlineAsmContract *contract) {
+    const unsigned int form = source ? minic_x86_64_linux_xstate_fault_form(
+        source->template_text, source->template_length) : 0U;
+    (void)invocation;
+    return x86_linux_xstate_memory_source(
+        program, source, contract, form, "=a", true);
 }
 
 static bool x86_linux_xrstor_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    const bool form = source && minic_x86_64_linux_xrstor_alternative_form(
+        source->template_text, source->template_length);
     (void)invocation;
-    const MinicExpression *ptr, *mem, *low, *high;
-    MinicType pointee;
-    if (!program || !source || !contract ||
-        !minic_x86_64_linux_xrstor_alternative_form(
-            source->template_text, source->template_length) ||
-        !source->is_volatile || source->is_goto ||
-        source->output_count || source->input_count != 4U ||
-        !source->inputs || source->label_count ||
-        source->register_clobber_count || source->clobber_count != 1U ||
-        !source->has_memory_clobber ||
-        !target_constraint_is(&source->inputs[0], "D") ||
-        !target_constraint_is(&source->inputs[1], "m") ||
-        !target_constraint_is(&source->inputs[2], "a") ||
-        !target_constraint_is(&source->inputs[3], "d"))
-        return false;
-    ptr = minic_c0_program_expression(program, source->inputs[0].expression);
-    mem = minic_c0_program_expression(program, source->inputs[1].expression);
-    low = minic_c0_program_expression(program, source->inputs[2].expression);
-    high = minic_c0_program_expression(program, source->inputs[3].expression);
-    if (!ptr || !mem || !low || !high ||
-        !minic_type_pointee(ptr->type, &pointee) ||
-        mem->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_record(mem->type) ||
-        !minic_type_equal(mem->type, pointee) ||
-        !minic_type_is_integer(low->type) ||
-        !minic_type_is_integer(high->type))
-        return false;
-    contract->operand_count = 4U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->implicit_memory_effect = true;
-    return true;
+    return x86_linux_xstate_memory_source(
+        program, source, contract, form ? 1U : 0U, NULL, false);
 }
 
 static bool x86_linux_xsave_triple_alternative_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
+    const bool form = source && minic_x86_64_linux_xsave_triple_alternative_form(
+        source->template_text, source->template_length);
     (void)invocation;
-    const MinicExpression *error, *ptr, *mem, *low, *high;
-    MinicType pointee, plain;
-    if (!program || !source || !contract ||
-        !minic_x86_64_linux_xsave_triple_alternative_form(
-            source->template_text, source->template_length) ||
-        !source->is_volatile || source->is_goto ||
-        source->output_count != 1U || !source->outputs ||
-        source->input_count != 4U || !source->inputs ||
-        source->label_count || source->register_clobber_count ||
-        source->clobber_count != 1U || !source->has_memory_clobber ||
-        !target_constraint_is(&source->outputs[0], "=r") ||
-        !target_constraint_is(&source->inputs[0], "D") ||
-        !target_constraint_is(&source->inputs[1], "m") ||
-        !target_constraint_is(&source->inputs[2], "a") ||
-        !target_constraint_is(&source->inputs[3], "d"))
-        return false;
-    error = minic_c0_program_expression(program, source->outputs[0].expression);
-    ptr = minic_c0_program_expression(program, source->inputs[0].expression);
-    mem = minic_c0_program_expression(program, source->inputs[1].expression);
-    low = minic_c0_program_expression(program, source->inputs[2].expression);
-    high = minic_c0_program_expression(program, source->inputs[3].expression);
-    if (!error || !ptr || !mem || !low || !high ||
-        error->value_category != MINIC_VALUE_LVALUE ||
-        minic_type_is_const(error->type) ||
-        !minic_type_unqualified(error->type, &plain) ||
-        !minic_type_equal(plain, minic_type_int()) ||
-        !minic_type_pointee(ptr->type, &pointee) ||
-        mem->value_category != MINIC_VALUE_LVALUE ||
-        !minic_type_is_record(mem->type) ||
-        !minic_type_equal(mem->type, pointee) ||
-        !minic_type_is_integer(low->type) ||
-        !minic_type_is_integer(high->type))
-        return false;
-    contract->operand_count = 5U;
-    contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
-    contract->kinds[1] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[2] = MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT;
-    contract->kinds[3] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->kinds[4] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
-    contract->implicit_memory_effect = true;
-    return true;
+    return x86_linux_xstate_memory_source(
+        program, source, contract, form ? 1U : 0U, "=r", false);
 }
 
 static bool x86_linux_jump_label_source(
