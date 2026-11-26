@@ -2668,7 +2668,7 @@ static bool x86_source_xstate_fault_contract(
         if (i == 2U) {
             if (op->kind != MINIC_MACHINE_OPERAND_ADDRESS ||
                 !op->value.address.has_base ||
-                op->value.address.has_index ||
+                op->value.address.has_index || op->value.address.has_segment ||
                 op->value.address.has_symbol ||
                 op->value.address.displacement != 0 ||
                 op->value.address.base.bank !=
@@ -4967,7 +4967,8 @@ static bool x86_source_descriptor_table_contract(
         operand->asm_name == NULL && operand->asm_constraint != NULL &&
         strcmp(operand->asm_constraint,form <= 2U ? "m" : "=m") == 0 &&
         operand->value.address.has_base &&
-        !operand->value.address.has_index && !operand->value.address.has_symbol &&
+        !operand->value.address.has_index && !operand->value.address.has_segment &&
+        !operand->value.address.has_symbol &&
         operand->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         operand->value.address.base.number == MINIC_X86_REG_R10 &&
         operand->value.address.base.width_bits == 64U &&
@@ -5039,6 +5040,7 @@ static bool x86_source_legacy_memory_contract(
             op->value.physical.access == MINIC_MACHINE_REGISTER_READ;
     return op->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
         op->value.address.has_base && !op->value.address.has_index &&
+        !op->value.address.has_segment &&
         !op->value.address.has_symbol &&
         op->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         op->value.address.base.number == MINIC_X86_REG_R10 &&
@@ -5094,6 +5096,7 @@ static bool x86_source_legacy_scalar_contract(
         a->asm_name != NULL && strcmp(a->asm_name,"address") == 0 &&
         a->asm_constraint != NULL && strcmp(a->asm_constraint,"g") == 0 &&
         a->value.address.has_base && !a->value.address.has_index &&
+        !a->value.address.has_segment &&
         !a->value.address.has_symbol &&
         a->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         a->value.address.base.number == MINIC_X86_REG_R10 &&
@@ -5296,6 +5299,7 @@ static bool x86_source_vdso_syscall_contract(const MinicMachineInstruction *ins)
         if (mem->kind != MINIC_MACHINE_OPERAND_ADDRESS || mem->asm_name != NULL ||
             mem->asm_constraint == NULL || strcmp(mem->asm_constraint,"=m") != 0 ||
             !mem->value.address.has_base || mem->value.address.has_index ||
+            mem->value.address.has_segment ||
             mem->value.address.has_symbol || mem->value.address.displacement != 0 ||
             mem->value.address.base.bank != MINIC_MACHINE_REGISTER_GENERAL ||
             mem->value.address.base.number != MINIC_X86_REG_R8 ||
@@ -5405,6 +5409,7 @@ static bool x86_source_lowlevel_descriptor_contract(
         strcmp(selector->asm_constraint,"m") == 0 &&
         selector->value.address.has_base &&
         !selector->value.address.has_index &&
+        !selector->value.address.has_segment &&
         !selector->value.address.has_symbol &&
         selector->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         selector->value.address.base.number == MINIC_X86_REG_R10 &&
@@ -5446,7 +5451,7 @@ static bool x86_source_lowlevel_segment_contract(
             op->asm_name == NULL && op->asm_constraint != NULL &&
             strcmp(op->asm_constraint,"=m") == 0 &&
             op->value.address.has_base &&
-            !op->value.address.has_index &&
+            !op->value.address.has_index && !op->value.address.has_segment &&
             !op->value.address.has_symbol &&
             op->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
             op->value.address.base.number == MINIC_X86_REG_R10 &&
@@ -5483,7 +5488,8 @@ static bool x86_source_movnti_contract(const MinicMachineInstruction *ins) {
     return mem->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
         mem->asm_constraint != NULL && strcmp(mem->asm_constraint,"=m") == 0 &&
         mem->asm_name == NULL && mem->value.address.has_base &&
-        !mem->value.address.has_index && !mem->value.address.has_symbol &&
+        !mem->value.address.has_index && !mem->value.address.has_segment &&
+        !mem->value.address.has_symbol &&
         mem->value.address.base.bank == MINIC_MACHINE_REGISTER_GENERAL &&
         mem->value.address.base.number == MINIC_X86_REG_R10 &&
         mem->value.address.base.width_bits == 64U &&
@@ -5565,7 +5571,8 @@ static bool x86_source_boot_bit_contract(const MinicMachineInstruction *ins) {
     return mem->kind == MINIC_MACHINE_OPERAND_ADDRESS &&
         mem->asm_constraint != NULL && strcmp(mem->asm_constraint,"+m") == 0 &&
         mem->asm_name == NULL && mem->value.address.has_base &&
-        !mem->value.address.has_index && !mem->value.address.has_symbol &&
+        !mem->value.address.has_index && !mem->value.address.has_segment &&
+        !mem->value.address.has_symbol &&
         mem->value.address.base.number == MINIC_X86_REG_R10 &&
         mem->value.address.base.width_bits == 64U &&
         mem->value.address.displacement == 0 &&
