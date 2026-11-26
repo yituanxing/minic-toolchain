@@ -739,7 +739,6 @@ static bool x86_linux_kvm_movdqa_source(const MinicTargetInvocation *invocation,
 static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_iomem_copy_form(
         src->template_text, src->template_length) : 0U;
     static const char *const rep_outputs[] = {"=&c", "=&D", "=&S"};
@@ -748,7 +747,8 @@ static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
     static const char *const one_inputs[] = {"0", "1"};
     size_t i, outputs, inputs;
 
-    if (!program || !src || !contract || !form || !src->is_volatile || src->is_goto ||
+    if (!invocation || !program || !src || !contract || !form ||
+        !src->is_volatile || src->is_goto ||
         !src->has_memory_clobber || src->clobber_count != 1U ||
         src->register_clobber_count || src->label_count || !src->outputs || !src->inputs)
         return false;
@@ -758,17 +758,25 @@ static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
     for (i = 0U; i < outputs; ++i) {
         const MinicInlineAsmOperand *op = &src->outputs[i];
         const MinicExpression *value = minic_c0_program_expression(program, op->expression);
+        size_t bytes, alignment;
         if (!target_constraint_is(op, form == 3U ? rep_outputs[i] : one_outputs[i]) ||
             !value || value->value_category != MINIC_VALUE_LVALUE ||
             (form == 3U ? !minic_type_is_integer(value->type) :
-                          !minic_type_is_pointer(value->type))) return false;
+                          !minic_type_is_pointer(value->type)) ||
+            minic_type_is_bool_integer(value->type) ||
+            !minic_data_layout_type(invocation, program, value->type,
+                &bytes, &alignment) || bytes != 8U) return false;
     }
     for (i = 0U; i < inputs; ++i) {
         const MinicInlineAsmOperand *op = &src->inputs[i];
         const MinicExpression *value = minic_c0_program_expression(program, op->expression);
+        size_t bytes, alignment;
         if (!target_constraint_is(op, form == 3U ? rep_inputs[i] : one_inputs[i]) ||
             !value || (!minic_type_is_integer(value->type) &&
-                       !minic_type_is_pointer(value->type))) return false;
+                       !minic_type_is_pointer(value->type)) ||
+            minic_type_is_bool_integer(value->type) ||
+            !minic_data_layout_type(invocation, program, value->type,
+                &bytes, &alignment) || bytes != 8U) return false;
     }
     contract->operand_count = outputs + inputs;
     for (i = 0U; i < contract->operand_count; ++i)
@@ -782,12 +790,11 @@ static bool x86_linux_iomem_copy_source(const MinicTargetInvocation *invocation,
 static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *src,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const unsigned int form = src ? minic_x86_64_linux_flushcache_copy_form(
         src->template_text, src->template_length) : 0U;
     const MinicExpression *expr;
-    size_t i;
-    if (!program || !src || !contract || !form || src->is_goto ||
+    size_t i, bytes, alignment;
+    if (!invocation || !program || !src || !contract || !form || src->is_goto ||
         src->label_count || src->output_count != (form == 4U ? 1U : 0U) ||
         src->input_count != (form == 4U ? 1U : 2U) || !src->inputs ||
         (form == 4U && !src->outputs) ||
@@ -800,13 +807,18 @@ static bool x86_linux_flushcache_copy_source(const MinicTargetInvocation *invoca
         expr = minic_c0_program_expression(program, src->outputs[0].expression);
         if (!target_constraint_is(&src->outputs[0], "+m") || !expr ||
             expr->value_category != MINIC_VALUE_LVALUE ||
-            !minic_type_is_record(expr->type)) return false;
+            !minic_type_is_record(expr->type) ||
+            !minic_data_layout_type(invocation, program, expr->type,
+                &bytes, &alignment) || bytes != 64U) return false;
     }
     for (i = 0U; i < src->input_count; ++i) {
         expr = minic_c0_program_expression(program, src->inputs[i].expression);
         if (!target_constraint_is(&src->inputs[i], form == 4U ? "a" : "r") ||
             !expr || (!minic_type_is_pointer(expr->type) &&
-                      !minic_type_is_integer(expr->type)))
+                      !minic_type_is_integer(expr->type)) ||
+            minic_type_is_bool_integer(expr->type) ||
+            !minic_data_layout_type(invocation, program, expr->type,
+                &bytes, &alignment) || bytes != 8U)
             return false;
     }
     if (form != 4U) {
@@ -955,13 +967,13 @@ static bool x86_linux_pv_indirect_call_source(const MinicTargetInvocation *invoc
 static bool x86_linux_task_control_source(const MinicTargetInvocation *invocation, const MinicC0Program *program,
                                            const MinicInlineAsm *src,
                                            MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const MinicExpression *expr;
+    size_t bytes, alignment;
     const unsigned int form = src ? minic_x86_64_linux_task_control_form(
         src->template_text, src->template_length) : 0U;
-    if (!src || !program || !contract || src->is_goto || !src->is_volatile ||
-        src->clobber_count || src->label_count || src->has_memory_clobber ||
-        src->register_clobber_count || !form ||
+    if (!invocation || !src || !program || !contract || src->is_goto ||
+        !src->is_volatile || src->clobber_count || src->label_count ||
+        src->has_memory_clobber || src->register_clobber_count || !form ||
         (form == 1U
             ? (src->output_count != 0U || src->input_count != 1U ||
                !src->inputs || !target_constraint_is(&src->inputs[0], "q"))
@@ -971,6 +983,11 @@ static bool x86_linux_task_control_source(const MinicTargetInvocation *invocatio
     expr = minic_c0_program_expression(program,
         form == 1U ? src->inputs[0].expression : src->outputs[0].expression);
     if (!expr || !minic_type_is_integer(expr->type) ||
+        minic_type_is_bool_integer(expr->type) ||
+        !minic_data_layout_type(invocation, program, expr->type,
+            &bytes, &alignment) ||
+        (bytes != 2U && bytes != 4U && bytes != 8U &&
+         (form != 1U || bytes != 1U)) ||
         (form == 2U && (expr->value_category != MINIC_VALUE_LVALUE ||
                         minic_type_is_const(expr->type)))) return false;
     contract->operand_count = 1U;
@@ -2000,10 +2017,10 @@ static bool x86_linux_legacy_fnsave_source(const MinicTargetInvocation *invocati
 static bool x86_linux_kexec_load_segments_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const MinicExpression *selector;
     MinicType type;
-    if (!program || !source || !contract ||
+    size_t bytes, alignment;
+    if (!invocation || !program || !source || !contract ||
         !minic_x86_64_linux_kexec_load_segments_form(
             source->template_text, source->template_length) ||
         !source->is_volatile || source->is_goto || source->label_count ||
@@ -2014,7 +2031,9 @@ static bool x86_linux_kexec_load_segments_source(const MinicTargetInvocation *in
     selector = minic_c0_program_expression(program,
         source->inputs[0].expression);
     if (!selector || !minic_type_unqualified(selector->type, &type) ||
-        !minic_type_is_integer(type)) return false;
+        !minic_type_is_integer(type) || minic_type_is_bool_integer(type) ||
+        !minic_data_layout_type(invocation, program, type,
+            &bytes, &alignment) || bytes != 4U) return false;
     contract->operand_count = 1U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
     contract->implicit_memory_effect = true;
