@@ -3466,42 +3466,9 @@ static bool loong_structured_scalar_shape(const MinicCoreFunction *fn,
          type->value.integer.is_signed == (signed_mode != 0));
 }
 
-/* Retain the legacy Loong DataLayout root policy while reusing Core's
- * recursive alignment proof. A typed pointer or cast never by itself proves
- * alignment (in particular for packed Linux result fields). */
-static size_t loong_structured_address_root_alignment(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *origin,
-    void *context) {
-    const MinicCoreType *type = NULL;
-    size_t alignment;
-    (void)context;
-    if (!fn || !origin || !fn->type_context) return 1U;
-    if (origin->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS) {
-        const MinicCoreObjectId id = origin->value.object_id;
-        if (id >= fn->object_count || !fn->objects) return 1U;
-        type = minic_core_type_get(fn->type_context,
-            fn->objects[id].core_type_id);
-        if (!type || !type->has_layout || type->alignment == 0U)
-            return 1U;
-        alignment = type->alignment;
-        if (fn->objects[id].explicit_alignment > alignment)
-            alignment = fn->objects[id].explicit_alignment;
-        return alignment;
-    }
-    if (origin->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS) {
-        const MinicCoreGlobalId id = origin->value.global_id;
-        if (id >= fn->global_count || !fn->globals) return 1U;
-        type = minic_core_type_get(fn->type_context,
-            fn->globals[id].core_type_id);
-        return type && type->has_layout ? type->alignment : 1U;
-    }
-    return 1U;
-}
-
 static bool loong_structured_address_aligned(const MinicCoreFunction *fn,
     MinicCoreValueId address, size_t width) {
-    return minic_core_address_known_alignment_bounded(fn, address,
-        loong_structured_address_root_alignment, NULL, 16U) >= width;
+    return loong_known_address_alignment(fn, address) >= width;
 }
 
 static bool loong_structured_store_at(LoongSelector *sel,

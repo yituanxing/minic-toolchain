@@ -3,6 +3,22 @@
 #include "target/common/linux_jump_label_asm.h"
 #include <string.h>
 
+/* Keep each form's original length and separator policy; normalize only
+ * the shared whitespace characters before exact template comparison. */
+static bool a64_compact_template(const char *text, size_t length,
+    char *buffer, size_t capacity, bool reject_semicolon) {
+    size_t i, n = 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || (reject_semicolon && c == ';') || n + 1U >= capacity)
+            return false;
+        buffer[n++] = c;
+    }
+    buffer[n] = '\0';
+    return true;
+}
+
 static bool minic_aarch64_linux_barrier_alternative_opaque(
     const MinicCoreInlineAsm *);
 
@@ -129,15 +145,9 @@ unsigned int minic_aarch64_linux_pstate_imm_opcode(
         {0U, 4U}, {3U, 1U}, {3U, 2U}, {3U, 4U}
     };
     char compact[160], expected[160];
-    size_t n = 0U, i, bit;
+    size_t i, bit;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         for (bit = 0U; bit < 2U; ++bit) {
             const int written = snprintf(expected, sizeof(expected),
@@ -164,15 +174,9 @@ unsigned int minic_aarch64_linux_daif_immediate_form(
         "msrdaifset,#0xf//local_daif_mask"
     };
     char compact[96];
-    size_t n = 0U, i;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0)
             return i == 4U ? 3U : (unsigned int)(i + 1U);
@@ -182,15 +186,9 @@ unsigned int minic_aarch64_linux_daif_immediate_form(
 unsigned int minic_aarch64_linux_rept_nop_count(
     const char *text, size_t length) {
     char compact[32];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return 0U;
     if (strcmp(compact, ".rept4nop.endr") == 0) return 4U;
     if (strcmp(compact, ".rept8nop.endr") == 0) return 8U;
     return 0U;
@@ -509,16 +507,9 @@ bool aarch64_linux_kvm_va_mask_form(
         ".word661b-..wordkvm_update_va_mask-..hword(1<<15)|(1)"
         ".byte662b-661b.byte664f-663f.popsection663:664:.endif";
     char compact[650];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact, exact) == 0;
 }
 
@@ -919,17 +910,10 @@ bool aarch64_linux_percpu_write_alternative_template(
         ".org.-(662b-661b)+(664b-663b)"
         ".previous.endif";
     char normalized[512];
-    size_t i, n = 0U;
+    
     if (!text || length == 0U || length >= sizeof(normalized))
         return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n')
-            continue;
-        if (ch == '\0' || n + 1U >= sizeof(normalized)) return false;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
+    if (!a64_compact_template(text, length, normalized, sizeof(normalized), false)) return false;
     return strcmp(normalized, expected) == 0;
 }
 /* Linux 6.6 arm64 finite barrier alternatives: feature-71 NOP->DMB SY,
@@ -948,18 +932,10 @@ static const Aarch64LinuxBarrierAlternative aarch64_linux_barrier_alternatives[]
 const Aarch64LinuxBarrierAlternative *aarch64_linux_barrier_alternative(
     const char *text, size_t length) {
     char normalized[512], expected[512];
-    size_t i, n = 0U, k;
+    size_t k;
     if (!text || !length || length >= sizeof(normalized))
         return NULL;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r')
-            continue;
-        if (ch == '\0' || n + 1U >= sizeof(normalized))
-            return NULL;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
+    if (!a64_compact_template(text, length, normalized, sizeof(normalized), false)) return NULL;
     for (k = 0U; k < sizeof(aarch64_linux_barrier_alternatives) /
                         sizeof(aarch64_linux_barrier_alternatives[0]); ++k) {
         const Aarch64LinuxBarrierAlternative *form =
@@ -1000,15 +976,9 @@ bool aarch64_linux_kvm_at_fixup_template(
         "9:.pushsection__kvm_ex_table,\"a\""
         ".align3.long(1b-.),(2b-.).popsection";
     char compact[256];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return false;
     return strcmp(compact, exact) == 0;
 }
 
@@ -1036,15 +1006,9 @@ bool aarch64_linux_uaccess_bic_template(
  * (EOR + CBNZ), NOT an ordinary compiler barrier or a C assignment. */
 bool aarch64_linux_io_dependency_form(const char *text,size_t length){
     static const char exact[]="eor%0,%1,%1cbnz%0,.";
-    char compact[80];size_t i,n=0U;
+    char compact[80];
     if(!text||length==0U||length>=sizeof(compact))return false;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\n'||c=='\r')continue;
-        if(c==';'||c=='\0'||n+1U>=sizeof(compact))return false;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact,exact)==0;
 }
 
@@ -1160,16 +1124,9 @@ Aarch64LinuxHypSpinForm aarch64_linux_hyp_spin_form(
     static const char boundary[] = ".previous.endif";
     char compact[1900], old_body[320], new_body[320];
     const char *end;
-    size_t i, n = 0U, alt_len;
+    size_t alt_len;
     if (!text || !length || length >= sizeof(compact)) return AARCH64_LINUX_HYP_SPIN_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || ch == ';' || n + 1U >= sizeof(compact))
-            return AARCH64_LINUX_HYP_SPIN_NONE;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return AARCH64_LINUX_HYP_SPIN_NONE;
     end = strstr(compact, boundary);
     if (!end) return AARCH64_LINUX_HYP_SPIN_NONE;
     alt_len = (size_t)(end - compact) + sizeof(boundary) - 1U;
@@ -1203,15 +1160,9 @@ unsigned int aarch64_linux_cmpwait_form(const char *s, size_t length) {
          "sevlwfeldxr%0,%1eor%0,%0,%2cbnz%0,1fwfe1:",8U}
     };
     char compact[160];
-    size_t i,n=0U;
+    size_t i;
     if (!s || !length || length>=sizeof(compact)) return 0U;
-    for (i=0U;i<length;++i) {
-        const char c=s[i];
-        if (c==' '||c=='\t'||c=='\r'||c=='\n') continue;
-        if (c=='\0'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!a64_compact_template(s, length, compact, sizeof(compact), false)) return 0U;
     for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
         if(strcmp(compact,forms[i].named)==0 ||
            strcmp(compact,forms[i].numeric)==0) return forms[i].width;
@@ -1244,15 +1195,9 @@ bool aarch64_linux_zeropad_form(const char *s, size_t length) {
         ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_%1)<<5)))"
         ".popsection";
     char compact[1100];
-    size_t i, n = 0U;
+    
     if (!s || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = s[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(s, length, compact, sizeof(compact), false)) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -1381,16 +1326,10 @@ unsigned int aarch64_linux_smccc_form(const char *s, size_t n) {
  * the HINT encoding itself is available in the base A64 ISA. */
 bool aarch64_linux_xpaclri_form(const char *text, size_t length) {
     char compact[96];
-    size_t i, n = 0U;
+    
     const char *suffix;
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return false;
     if (strcmp(compact, "hint#7") == 0) return true;
     /* These are the GNU ARM64_ASM_ARCH spelling variants for Linux arm64;
      * no arbitrary preamble, instruction, or assembler directive is accepted. */
@@ -1436,15 +1375,9 @@ unsigned int aarch64_linux_wfxt_form(const char *text, size_t length) {
         "msrs0_3_c1_c0_0,%0", "msrs0_3_c1_c0_1,%0"
     };
     char compact[64];
-    size_t i,n=0U;
+    size_t i;
     if (!text || length==0U || length>=sizeof(compact))return 0U;
-    for (i=0U;i<length;++i) {
-        const char c=text[i];
-        if (c==' '||c=='\t'||c=='\r'||c=='\n')continue;
-        if (c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), true)) return 0U;
     for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
         if(strcmp(compact,forms[i])==0)return (unsigned int)i+1U;
     return 0U;
@@ -1467,15 +1400,9 @@ bool aarch64_linux_atomic_dec_positive_form(
         "dmbish"
         "2:";
     char compact[256];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -1486,16 +1413,10 @@ bool aarch64_linux_atomic_dec_positive_form(
 unsigned int aarch64_linux_cmpxchg128_form(
     const char *text, size_t length) {
     char compact[512], expected[512];
-    size_t i, n = 0U;
+    
     unsigned int mode;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (mode = 1U; mode <= 4U; ++mode) {
         const bool core_numbered = mode > 2U;
         const bool release_barrier = (mode & 1U) == 0U;
@@ -1550,16 +1471,10 @@ unsigned int aarch64_linux_futex_form(
         "and%w3,%w1,%w5", "eor%w3,%w1,%w5"
     };
     char compact[3500], expected[3500], fixup[2][700];
-    size_t i, n = 0U;
+    size_t i;
     unsigned int mode;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (mode = 1U; mode <= 6U; ++mode) {
         const bool compare = mode == 6U;
         int a, written;
@@ -1616,16 +1531,10 @@ unsigned int aarch64_linux_futex_form(
 unsigned int aarch64_linux_disabled_hw_pan_form(
     const char *text, size_t length) {
     char compact[700], expected[700];
-    size_t i, n = 0U;
+    
     unsigned int bit;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (bit = 0U; bit <= 1U; ++bit) {
         const int written = snprintf(expected, sizeof(expected),
             ".if0==1"
@@ -1681,15 +1590,9 @@ unsigned int aarch64_linux_timer_alternative_form(
         ".previous.endif";
     static const char *const old_regs[] = {"cntpct_el0", "cntvct_el0"};
     char normalized[1600], expected[1600];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(normalized)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(normalized)) return 0U;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
+    if (!a64_compact_template(text, length, normalized, sizeof(normalized), false)) return 0U;
     for (i = 0U; i < 2U; ++i) {
         const int count = snprintf(expected, sizeof(expected),
             "%s%s%s%smrs_s%%0,(((3)<<19)|((3)<<16)|((14)<<12)|"
@@ -1710,15 +1613,9 @@ unsigned int aarch64_linux_timer_alternative_form(
 bool aarch64_linux_counter_ordering_form(const char *text, size_t len) {
     static const char exact[] = "eor%0,%1,%1add%0,sp,%0ldrxzr,[%0]";
     char compact[100];
-    size_t i, n = 0U;
+    
     if (!text || !len || len >= sizeof(compact)) return false;
-    for (i = 0U; i < len; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, len, compact, sizeof(compact), false)) return false;
     return strcmp(compact, exact) == 0;
 }
 
@@ -1740,15 +1637,9 @@ unsigned int aarch64_linux_rng_sysreg_form(
         ".inst(0xd5200000|(\\sreg)|(.L__gpr_num_\\rt))"
         ".endm";
     char normalized[850], expected[850];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(normalized)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(normalized)) return 0U;
-        normalized[n++] = ch;
-    }
-    normalized[n] = '\0';
+    if (!a64_compact_template(text, length, normalized, sizeof(normalized), false)) return 0U;
     for (i = 0U; i < 2U; ++i) {
         const int count = snprintf(expected, sizeof(expected),
             "%smrs_s%%0,(((3)<<19)|((3)<<16)|((2)<<12)|"
@@ -1768,15 +1659,9 @@ bool aarch64_linux_qcom_return_stack_form(
     const char *text, size_t length) {
     static const char exact[] = "mov%0,x30.rept16bl.+4.endrmovx30,%0";
     char compact[160];
-    size_t i, n = 0U;
+    
     if (!text || length == 0U || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!a64_compact_template(text, length, compact, sizeof(compact), false)) return false;
     return strcmp(compact, exact) == 0;
 }
 

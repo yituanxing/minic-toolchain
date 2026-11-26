@@ -4,6 +4,22 @@
 
 #include <limits.h>
 #include <string.h>
+
+/* Keep each form's original length and separator policy; normalize only
+ * the shared whitespace characters before exact template comparison. */
+static bool loong_compact_template(const char *text, size_t length,
+    char *buffer, size_t capacity, bool reject_semicolon) {
+    size_t i, n = 0U;
+    for (i = 0U; i < length; ++i) {
+        const char c = text[i];
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
+        if (c == '\0' || (reject_semicolon && c == ';') || n + 1U >= capacity)
+            return false;
+        buffer[n++] = c;
+    }
+    buffer[n] = '\0';
+    return true;
+}
 #include <stdio.h>
 
 /* Source admission, MIR emission and linker-relocation recording must share
@@ -41,16 +57,9 @@ LoongLinuxClockAsm loong_linux_clock_form(
         "rdtime.d%0,$zero"
     };
     char compact[96];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return LOONG_CLOCK_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return LOONG_CLOCK_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return LOONG_CLOCK_NONE;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0)
             return (LoongLinuxClockAsm)(i + 1U);
@@ -59,16 +68,9 @@ LoongLinuxClockAsm loong_linux_clock_form(
 
 bool loong_linux_vdso_syscall_form(const char *text, size_t length) {
     char compact[32];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact, "syscall0") == 0;
 }
 
@@ -93,16 +95,9 @@ bool loongarch64_dbar_template(const char *text, size_t length) {
 bool loong_linux_cacop_form(const char *text, size_t length) {
     static const char exact[] = "cacop%0,%1";
     char compact[sizeof(exact)];
-    size_t i, n = 0U;
+    
     if (!text || !length) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact, exact) == 0;
 }
 
@@ -225,15 +220,9 @@ unsigned loong_linux_cmpxchg_form(const char *text,size_t length) {
         "1:ll.d%0,%2#__cmpxchg_asmbne%0,%z3,2fmove$t0,%z4sc.d$t0,%1beqz$t0,1b2:dbar0x700",
         "1:ll.w%0,%3and%1,%0,%z4bne%1,%z5,2fandn%1,%0,%z4or%1,%1,%z6sc.w%1,%2beqz%1,1bb3f2:dbar0x7003:"
     };
-    char compact[256];size_t i,n=0U;
+    char compact[256];size_t i;
     if(!text||!length||length>=sizeof(compact))return 0U;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
-        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return 0U;
     for(i=0U;i<3U;++i)if(strcmp(compact,exact[i])==0)return (unsigned)i+1U;
     return 0U;
 }
@@ -259,15 +248,9 @@ unsigned loong_linux_xchg_form(const char *text,size_t length){
         "amor.w%1,%2,%0","amor.d%1,%2,%0",
         "amxor.w%1,%2,%0","amxor.d%1,%2,%0"
     };
-    char compact[96];size_t n=0U,i;
+    char compact[96];size_t i;
     if(!text||!length||length>=sizeof(compact))return 0U;
-    for(i=0U;i<length;++i){
-        const char c=text[i];
-        if(c==' '||c=='\t'||c=='\r'||c=='\n')continue;
-        if(c=='\0'||c==';'||n+1U>=sizeof(compact))return 0U;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return 0U;
     for(i=0U;i<sizeof(forms)/sizeof(forms[0]);++i)
         if(strcmp(compact,forms[i])==0)return (unsigned)i+1U;
     return 0U;
@@ -276,15 +259,9 @@ unsigned loong_linux_xchg_form(const char *text,size_t length){
 bool loong_linux_xchg_small_form(const char *text,size_t length){
     static const char exact[]=
         "1:ll.w%0,%3andn%1,%0,%z4or%1,%1,%z5sc.w%1,%2beqz%1,1b";
-    char compact[160];size_t i,n=0U;
+    char compact[160];
     if(!text||!length||length>=sizeof(compact))return false;
-    for(i=0U;i<length;++i){
-        const char ch=text[i];
-        if(ch==' '||ch=='\t'||ch=='\r'||ch=='\n')continue;
-        if(ch=='\0'||ch==';'||n+1U>=sizeof(compact))return false;
-        compact[n++]=ch;
-    }
-    compact[n]='\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact,exact)==0;
 }
 
@@ -315,16 +292,9 @@ MinicLoongPerCpuIndexedForm loong_percpu_indexed_form(
         "stx.w%[val],$r21,%[ptr]", "stx.d%[val],$r21,%[ptr]"
     };
     char compact[96];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || length == 0U || length >= sizeof(compact)) return LOONG_PERCPU_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == ';' || c == '\0' || n + 1U >= sizeof(compact))
-            return LOONG_PERCPU_NONE;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return LOONG_PERCPU_NONE;
     /* Shared Core canonicalizes GNU named slots to %0/%1, but the
      * target must also qualify ORIGINAL named source templates. Both
      * forms name exactly the same two typed operand roles. */
@@ -360,15 +330,9 @@ size_t loong_percpu_amo_width(size_t form) {
 
 size_t loong_percpu_amo_form(const char *text, size_t length) {
     char compact[96];
-    size_t i,n=0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return SIZE_MAX;
-    for(i=0U;i<length;++i) {
-        const char c=text[i];
-        if(c==' '||c=='\n'||c=='\r'||c=='\t')continue;
-        if(c==';'||c=='\0'||n+1U>=sizeof(compact))return SIZE_MAX;
-        compact[n++]=c;
-    }
-    compact[n]='\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return SIZE_MAX;
     for (i=0U;i<sizeof(loong_percpu_amo)/sizeof(loong_percpu_amo[0]);++i) {
         char numeric[64];
         if(strcmp(compact,loong_percpu_amo[i].compact)==0)return i;
@@ -396,16 +360,9 @@ bool loong_fcsr0_write_form(const char *text,size_t len){
 unsigned int loong_linux_fpr_transfer_form(
     const char *text, size_t length) {
     char compact[96], expected[96];
-    size_t i, n = 0U, reg;
+    size_t reg;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return 0U;
     for (reg = 0U; reg < 32U; ++reg) {
         int written = snprintf(expected, sizeof(expected),
             "movfr2gr.d%%0,$f%zu", reg);
@@ -425,15 +382,9 @@ unsigned int loong_linux_invtlb_form(const char *text, size_t length) {
         "invtlb%0,%1,$zero", "invtlb%0,$zero,$zero"
     };
     char compact[90];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return (unsigned int)i + 1U;
     return 0U;
@@ -448,15 +399,9 @@ unsigned int loong_linux_add_unless_form(
         "0:ll.d%0,%2beq%0,%4,1fadd.d%1,%0,%3sc.d%1,%2beqz%1,0bb2f1:dbar0x7002:"
     };
     char compact[260];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return 0U;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return 0U;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), false)) return 0U;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i]) == 0) return (unsigned int)(i % 2U) + 1U;
     return 0U;
@@ -475,15 +420,9 @@ bool loong_linux_sub_positive_form(
         {"1:ll.d%1,%2#atomic64_sub_if_positivesub.d%0,%1,%3move%1,%0bltz%0,2fsc.d%1,%2beqz%1,1b2:dbar0x700",8U,false}
     };
     char compact[260];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || !result || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), false)) return false;
     for (i = 0U; i < sizeof(forms) / sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i].compact) == 0) {
             result->width = forms[i].width;
@@ -528,17 +467,11 @@ LoongLinuxFutexRmw loong_linux_futex_rmw_form(
         ".short((((.L__gpr_num_%0)<<0)|((.L__gpr_num_zero)<<5)))"
         ".popsection";
     char compact[3600];
-    size_t n = 0U, i, form;
+    size_t i, form;
     const char *cursor;
     if (!text || length == 0U || length >= sizeof(compact))
         return LOONG_FUTEX_NONE;
-    for (i = 0U; i < length; ++i) {
-        const char ch = text[i];
-        if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
-        if (ch == '\0' || n + 1U >= sizeof(compact)) return LOONG_FUTEX_NONE;
-        compact[n++] = ch;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), false)) return LOONG_FUTEX_NONE;
     if (strncmp(compact, first, sizeof(first) - 1U) != 0)
         return LOONG_FUTEX_NONE;
     for (form = 0U; form < sizeof(operations) / sizeof(operations[0]); ++form) {
@@ -581,15 +514,9 @@ bool loong_linux_futex_cmpxchg_form(const char *text, size_t length) {
         ".popsection";
     char compact[3600];
     const char *cursor;
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || n + 1U >= sizeof(compact)) return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), false)) return false;
     if (strncmp(compact, prefix, sizeof(prefix) - 1U) != 0) return false;
     cursor = compact + sizeof(prefix) - 1U;
     for (i = 0U; i < 2U; ++i) {
@@ -679,17 +606,9 @@ bool loong_linux_irq_switch_template(
         "blhandle_loongarch_irqmove$sp,$s0";
     const char *const expected = numeric ? core_form : source_form;
     char compact[256];
-    size_t i, n = 0U;
+    
     if (!text || !length || length >= sizeof(compact)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == '\n' || c == '\r' || c == '\t' || c == ' ')
-            continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return false;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return false;
     return strcmp(compact, expected) == 0;
 }
 
@@ -716,18 +635,10 @@ bool loong_linux_frametrace_template(
     const char *text, size_t length) {
     char expected[2048];
     char normalized[2048];
-    size_t n = 0U, i, j;
+    size_t i, j;
     int count;
     if (!text || !length || length >= sizeof(normalized)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n')
-            continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(normalized))
-            return false;
-        normalized[n++] = c;
-    }
-    normalized[n] = '\0';
+    if (!loong_compact_template(text, length, normalized, sizeof(normalized), true)) return false;
     count = snprintf(expected, sizeof(expected),
         "st.d$r1,%%1,8*1pcaddi$ra,0st.d$ra,%%0ld.d$ra,%%1,8");
     if (count < 0 || (size_t)count >= sizeof(expected)) return false;
@@ -753,16 +664,9 @@ unsigned int loong_linux_frametrace_csr_form(
         {"csrrd%0,0x5", 5U}    /* CSR_ESTAT */
     };
     char compact[64];
-    size_t i, n = 0U;
+    size_t i;
     if (!text || !length || length >= sizeof(compact)) return UINT32_MAX;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') continue;
-        if (c == '\0' || c == ';' || n + 1U >= sizeof(compact))
-            return UINT32_MAX;
-        compact[n++] = c;
-    }
-    compact[n] = '\0';
+    if (!loong_compact_template(text, length, compact, sizeof(compact), true)) return UINT32_MAX;
     for (i = 0U; i < sizeof(forms)/sizeof(forms[0]); ++i)
         if (strcmp(compact, forms[i].text) == 0) return forms[i].csr;
     return UINT32_MAX;
