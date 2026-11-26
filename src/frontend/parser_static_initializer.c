@@ -492,10 +492,6 @@ static bool parse_static_scalar_constant_at(MinicParser *parser,
     return minic_parser_expect(parser, MINIC_TOKEN_RBRACE, "expected '}' after scalar initializer");
 }
 
-static bool
-parse_static_scalar_constant(MinicParser *parser, MinicGlobalObjectId object_id, MinicType type) {
-    return parse_static_scalar_constant_at(parser, object_id, type, false, 0U);
-}
 
 static bool grow_static_array_slots(MinicParser *parser,
                                     MinicStaticArraySlot **slots,
@@ -3174,7 +3170,7 @@ bool minic_parser_parse_static_storage_initializer_value(MinicParser *parser,
                                                          MinicType type) {
     if (minic_type_is_integer(type) || minic_type_is_pointer(type) ||
         minic_type_is_float(type) || minic_type_is_double(type)) {
-        return parse_static_scalar_constant(parser, object_id, type);
+        return parse_static_scalar_constant_at(parser, object_id, type, false, 0U);
     }
     if (minic_type_is_array(type)) {
         return parse_static_array_constant(

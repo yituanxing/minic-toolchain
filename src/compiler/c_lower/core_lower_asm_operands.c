@@ -219,7 +219,6 @@ static const char *core_inline_asm_symbolic_immediate_name(
 }
 
 
-
 static bool core_inline_asm_parameter_index(
     const MinicCoreLowerContext *context,
     MinicLocalId local_id,
@@ -918,13 +917,6 @@ static bool core_inline_asm_local_integer_fact_depth(
     return false;
 }
 
-static bool core_inline_asm_local_integer_fact(
-    const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id,
-    MinicConstValue *value) {
-    return core_inline_asm_local_integer_fact_depth(context, expression_id, value, 0U);
-}
-
 
 static const char *core_inline_asm_specialized_symbolic_name_depth(
     const MinicCoreLowerContext *context,
@@ -985,11 +977,6 @@ static const char *core_inline_asm_specialized_symbolic_name_depth(
         specialized->specialization_symbolic_expression[parameter_index]);
 }
 
-static const char *core_inline_asm_specialized_symbolic_name(
-    const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id) {
-    return core_inline_asm_specialized_symbolic_name_depth(context, expression_id, 0U);
-}
 
 bool core_inline_asm_immediate_fact(
     const MinicCoreLowerContext *context,
@@ -1012,7 +999,7 @@ bool core_inline_asm_immediate_fact(
     }
     if ((minic_const_eval_integer(
              context->body->program, context->target, operand->expression, &constant) ||
-         core_inline_asm_local_integer_fact(context, operand->expression, &constant)) &&
+         core_inline_asm_local_integer_fact_depth(context, operand->expression, &constant, 0U)) &&
         minic_const_value_as_int64(
             context->body->program, context->target, &constant, &value) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
@@ -1059,8 +1046,8 @@ bool core_inline_asm_immediate_fact(
         resolved_symbol = core_inline_asm_symbolic_immediate_name(
             context->body->program, context->target, operand->expression);
         if (resolved_symbol == NULL)
-            resolved_symbol = core_inline_asm_specialized_symbolic_name(
-                context, operand->expression);
+            resolved_symbol = core_inline_asm_specialized_symbolic_name_depth(
+                context, operand->expression, 0U);
     }
     if (!minic_core_inline_asm_symbol_valid(resolved_symbol)) return false;
     *is_symbol = true;

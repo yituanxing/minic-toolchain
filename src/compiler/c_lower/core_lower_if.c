@@ -293,10 +293,6 @@ static bool core_runtime_if_guard_preserves_locals_depth(
     return false;
 }
 
-static bool core_runtime_if_pure_local_guard(
-    const MinicCoreLowerContext *context, MinicExpressionId id) {
-    return core_runtime_if_guard_preserves_locals_depth(context, id, 0U);
-}
 
 static void core_runtime_if_merge_false_fallthrough(
     MinicCoreLowerContext *context,
@@ -491,7 +487,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     }
 
     preserve_false_fallthrough = else_source == NULL &&
-        core_runtime_if_pure_local_guard(context, statement->expression) &&
+        core_runtime_if_guard_preserves_locals_depth(context, statement->expression, 0U) &&
         !core_block_contains_reentry_label(context, then_source);
     incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&

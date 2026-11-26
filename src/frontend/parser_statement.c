@@ -121,13 +121,6 @@ static bool add_record_copy_statement(MinicParser *parser,
     return minic_parser_add_statement(parser, &statement);
 }
 
-static bool minic_parser_statement_record_copy(MinicParser *parser,
-                                        MinicExpressionId target_id,
-                                        MinicExpressionId source_id,
-                                        MinicSourceSpan span) {
-    return add_record_copy_statement(
-        parser, target_id, source_id, span, MINIC_STATEMENT_RECORD_COPY);
-}
 
 bool minic_parser_statement_record_initialize(MinicParser *parser,
                                         MinicExpressionId target_id,
@@ -361,8 +354,9 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         source = minic_c0_program_expression(parser->program, statement.expression);
         if (source == NULL || !minic_type_is_record(source->type) ||
             source->type.record_id != first_type.record_id ||
-            !minic_parser_statement_record_copy(
-                parser, statement.target_expression, statement.expression, source->span)) {
+            !add_record_copy_statement(
+                parser, statement.target_expression, statement.expression,
+                source->span, MINIC_STATEMENT_RECORD_COPY)) {
             return false;
         }
         return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");

@@ -23,10 +23,6 @@ typedef struct LoongScalarSourceContext {
     void *opaque;
 } LoongScalarSourceContext;
 
-static MinicMachineOperand scalar_address(unsigned base, const char *constraint) {
-    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
-                                      constraint, NULL);
-}
 
 /* Width/sign and output-lvalue checks are Core-typed, not recovered C AST
  * spelling. The original C source has already been sealed by TargetPolicy;
@@ -128,7 +124,8 @@ static bool scalar_cacop(LoongScalarSourceContext *s) {
         !s->load(s->opaque, s->roles[1].value, SCALAR_T0, true))
         return false;
     operands[0] = minic_loong_machine_imm(opcode, "i");
-    operands[1] = scalar_address(SCALAR_T0, "ZC");
+    operands[1] = minic_loong_machine_address(SCALAR_T0, 0, MINIC_LOONG_ADDRESS_IMM12,
+        "ZC", NULL);
     return scalar_emit(s, MINIC_MACHINE_EFFECT_MEMORY_READ,
         operands, 2U, NULL, 0U);
 }

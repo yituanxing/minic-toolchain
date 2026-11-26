@@ -12,9 +12,6 @@ bool minic_parser_gnu_inline_asm_starts(const MinicParser *parser) {
            minic_parser_current_identifier_lexeme_equals_cstr(parser, "__asm__");
 }
 
-static bool current_is_gnu_goto(const MinicParser *parser) {
-    return minic_parser_current_identifier_lexeme_equals_cstr(parser, "goto");
-}
 
 static bool current_is_gnu_volatile(const MinicParser *parser) {
     return parser->current.kind == MINIC_TOKEN_KW_VOLATILE ||
@@ -246,7 +243,7 @@ bool minic_parser_gnu_inline_asm_statement(MinicParser *parser) {
             }
             continue;
         }
-        if (current_is_gnu_goto(parser)) {
+        if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "goto")) {
             if (is_goto) {
                 minic_parser_error(parser, "duplicate goto qualifier on GNU asm");
                 return false;

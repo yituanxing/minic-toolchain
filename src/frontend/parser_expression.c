@@ -355,9 +355,6 @@ static bool parse_function_reference(MinicParser *parser,
     return minic_parser_parse_postfix(parser, base_id, expression_id);
 }
 
-static bool token_starts_cast_type(const MinicParser *parser, MinicToken token) {
-    return minic_parser_token_starts_type_name(parser, token);
-}
 
 static bool parenthesis_starts_cast(const MinicParser *parser) {
     MinicDiagnostic diagnostic;
@@ -373,7 +370,7 @@ static bool parenthesis_starts_cast(const MinicParser *parser) {
     if (!minic_lexer_next(&lookahead, &token, &diagnostic)) {
         return false;
     }
-    return token_starts_cast_type(parser, token);
+    return minic_parser_token_starts_type_name(parser, token);
 }
 
 static bool same_floating_type(MinicType left, MinicType right) {

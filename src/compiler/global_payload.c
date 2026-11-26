@@ -727,10 +727,6 @@ static bool minic_multi_recursive_shape_supported_at(
     return false;
 }
 
-static bool minic_multi_recursive_shape_supported(
-    const MinicC0Program *program, MinicType type) {
-    return minic_multi_recursive_shape_supported_at(program, type, 0U);
-}
 
 static bool minic_multi_visit_recursive_aggregate_global(
     const MinicMultiGlobalPayloadSink *sink,
@@ -742,7 +738,7 @@ static bool minic_multi_visit_recursive_aggregate_global(
         target == NULL || object == NULL ||
         (!minic_type_is_record(object->type) &&
          !minic_type_is_array(object->type)) ||
-        !minic_multi_recursive_shape_supported(program, object->type) ||
+        !minic_multi_recursive_shape_supported_at(program, object->type, 0U) ||
         !minic_multi_visit_recursive_global_value(
             sink, program, target, object, object->type,
             &initializer_index, &relocation_index, &matched_union_selections,
