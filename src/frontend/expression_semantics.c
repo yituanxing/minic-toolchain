@@ -41,7 +41,7 @@ bool minic_c0_inline_asm_output_value_supported(
     if (expression == NULL || constraint == NULL || length == 0U)
         return false;
     if (expression->value_category == MINIC_VALUE_LVALUE)
-        return true;
+        return !minic_type_is_const(expression->type);
     if (program == NULL || target == NULL ||
         expression->value_category != MINIC_VALUE_RVALUE ||
         expression->kind != MINIC_EXPRESSION_FIXED_REGISTER)
