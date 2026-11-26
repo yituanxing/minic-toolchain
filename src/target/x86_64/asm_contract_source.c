@@ -709,7 +709,10 @@ static bool x86_linux_kvm_movdqa_source(const MinicTargetInvocation *invocation,
     const MinicInlineAsmOperand *operand;
     const MinicExpression *expr;
     MinicType type;
-    if (!program || !src || !contract || !form || src->is_volatile ||
+    /* The memory-to-XMM form has no GNU output and is therefore
+     * implicitly volatile; the XMM-to-memory output form is nonvolatile. */
+    if (!program || !src || !contract || !form ||
+        src->is_volatile != read ||
         src->is_goto || src->label_count || src->has_memory_clobber ||
         src->clobber_count || src->register_clobber_count ||
         src->input_count != (read ? 1U : 0U) ||
