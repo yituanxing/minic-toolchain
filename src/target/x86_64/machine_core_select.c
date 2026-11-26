@@ -503,6 +503,37 @@ static bool x86_abi_gp_register(MinicFunctionCallingConvention convention,
     return false;
 }
 
+/* Read each incoming GP argument from its sealed prologue spill when the
+ * frame saves the SysV argument bank. Both scalar and aggregate PARAMETER
+ * selectors must use the same location, even after earlier Core instructions
+ * have overwritten the original argument registers. */
+static bool x86_incoming_gp_load(X86CoreSelector *sel,
+    MinicFunctionCallingConvention convention, size_t index,
+    unsigned int destination) {
+    unsigned int physical;
+    if (!x86_abi_gp_register(convention, index, &physical))
+        return false;
+    if (sel->frame->saves_incoming_gp) {
+        MinicMachineOperand save;
+        const size_t base = sel->frame->incoming_gp_save_offset;
+        size_t offset;
+        if (base > (size_t)INT32_MAX ||
+            index > ((size_t)INT32_MAX - base) / 8U)
+            return false;
+        offset = base + index * 8U;
+        if (offset < 8U || offset > sel->frame->frame_size ||
+            !minic_x86_64_machine_frame_slot(&sel->builder,
+                MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
+                MINIC_MACHINE_FRAME_LOCAL, 8U, 1U,
+                -(int64_t)offset, &save))
+            return false;
+        return x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R, save,
+            x86_reg(destination, 64U));
+    }
+    return x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
+        physical, destination);
+}
+
 /* Scalar FP is transported through the same integer backing slots as the
  * legacy target, but the arithmetic is genuine SSE2 in physical XMM bank. */
 static bool x86_float_load_xmm(X86CoreSelector *sel,
@@ -1083,7 +1114,6 @@ static bool x86_parameter(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicX86ArgumentPlan *plan = &sel->frame->incoming_arguments;
     const MinicX86ArgLocation *where;
-    unsigned int physical_gp;
     size_t bytes, offset;
     bool sign = false, is_bool = false, ms, float_double = false, floating,
         wide;
@@ -1111,7 +1141,6 @@ static bool x86_parameter(X86CoreSelector *sel,
             x86_x87_store(sel, ins->result);
     }
     if (wide) {
-        unsigned int first, second;
         if (plan->calling_convention !=
                 MINIC_CALLING_CONVENTION_DEFAULT ||
             where->kind != MINIC_X86_ARG_I128_TWO_GP)
@@ -1126,30 +1155,12 @@ static bool x86_parameter(X86CoreSelector *sel,
                     x86_addr(MINIC_X86_REG_RBP,
                         (int64_t)(24U + where->stack_index * 8U)),
                     x86_reg(MINIC_X86_REG_R11, 64U))) return false;
-        } else {
-            if (!x86_abi_gp_register(plan->calling_convention,
-                    where->gp_index, &first) ||
-                !x86_abi_gp_register(plan->calling_convention,
-                    where->gp_index + 1U, &second)) return false;
-            if (sel->frame->saves_incoming_gp) {
-                const size_t distance =
-                    sel->frame->incoming_gp_save_offset;
-                if (distance > INT32_MAX -
-                        (where->gp_index + 1U) * 8U ||
-                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
-                        x86_addr(MINIC_X86_REG_RBP,
-                            -(int64_t)(distance + where->gp_index * 8U)),
-                        x86_reg(MINIC_X86_REG_R10, 64U)) ||
-                    !x86_2(sel, MINIC_X86_MI_MOV64_AR,
-                        x86_addr(MINIC_X86_REG_RBP,
-                            -(int64_t)(distance +
-                                (where->gp_index + 1U) * 8U)),
-                        x86_reg(MINIC_X86_REG_R11, 64U))) return false;
-            } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-                    first, MINIC_X86_REG_R10) ||
-                !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-                    second, MINIC_X86_REG_R11)) return false;
-        }
+        } else if (!x86_incoming_gp_load(sel,
+                plan->calling_convention, where->gp_index,
+                MINIC_X86_REG_R10) ||
+            !x86_incoming_gp_load(sel, plan->calling_convention,
+                where->gp_index + 1U, MINIC_X86_REG_R11))
+            return false;
         return x86_i128_store(sel, ins->result,
             MINIC_X86_REG_R10, MINIC_X86_REG_R11);
     }
@@ -1169,26 +1180,9 @@ static bool x86_parameter(X86CoreSelector *sel,
         if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
                 x86_addr(MINIC_X86_REG_RBP, (int64_t)offset),
                 x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-    } else {
-        if (!x86_abi_gp_register(plan->calling_convention,
-                where->gp_index, &physical_gp)) return false;
-        if (sel->frame->saves_incoming_gp) {
-            MinicMachineOperand save;
-            if (where->gp_index > (SIZE_MAX -
-                    sel->frame->incoming_gp_save_offset) / 8U)
-                return false;
-            offset = sel->frame->incoming_gp_save_offset +
-                where->gp_index * 8U;
-            if (offset < 8U || offset > sel->frame->frame_size ||
-                !minic_x86_64_machine_frame_slot(&sel->builder,
-                    MINIC_MACHINE_FRAME_BASE_FRAME_POINTER,
-                    MINIC_MACHINE_FRAME_LOCAL, 8U, 1U,
-                    -(int64_t)offset, &save) ||
-                !x86_2(sel, MINIC_X86_MI_MOV64_FRBP_R, save,
-                    x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-        } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-                physical_gp, MINIC_X86_REG_RAX)) return false;
-    }
+    } else if (!x86_incoming_gp_load(sel,
+            plan->calling_convention, where->gp_index,
+            MINIC_X86_REG_RAX)) return false;
     return floating ? x86_core_store(sel, ins->result,
         MINIC_X86_REG_RAX) : x86_result(sel, ins);
 }
@@ -1942,7 +1936,6 @@ static bool x86_parameter_object(X86CoreSelector *sel,
     const MinicCoreObjectId object = ins->value.parameter_object.object_id;
     const MinicX86ArgLocation *loc;
     const MinicCoreType *record;
-    unsigned int first, second;
     size_t stack_offset, payload;
     if (ins->result != MINIC_CORE_VALUE_INVALID ||
         plan->calling_convention != MINIC_CALLING_CONVENTION_DEFAULT ||
@@ -1994,10 +1987,9 @@ static bool x86_parameter_object(X86CoreSelector *sel,
             if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
                     x86_addr(MINIC_X86_REG_RBP, (int64_t)stack_offset),
                     x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-        } else if (!x86_abi_gp_register(plan->calling_convention,
-                loc->gp_index, &first) ||
-            !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-                first, MINIC_X86_REG_RAX)) return false;
+        } else if (!x86_incoming_gp_load(sel,
+                plan->calling_convention, loc->gp_index,
+                MINIC_X86_REG_RAX)) return false;
         return x86_store_record_gp(sel, payload, 0U);
     }
     if (payload < 9U || payload > 16U) return false;
@@ -2006,19 +1998,16 @@ static bool x86_parameter_object(X86CoreSelector *sel,
             !x86_2(sel, MINIC_X86_MI_MOV64_AR,
                 x86_addr(MINIC_X86_REG_RBP, (int64_t)stack_offset),
                 x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-    } else if (!x86_abi_gp_register(plan->calling_convention,
-            loc->gp_index, &first) ||
-        !x86_abi_gp_register(plan->calling_convention,
-            loc->gp_index + 1U, &second) ||
-        !x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-            first, MINIC_X86_REG_RAX)) return false;
+    } else if (!x86_incoming_gp_load(sel,
+            plan->calling_convention, loc->gp_index,
+            MINIC_X86_REG_RAX)) return false;
     if (!x86_store_record_gp(sel, 8U, 0U)) return false;
     if (loc->on_stack) {
         if (!x86_2(sel, MINIC_X86_MI_MOV64_AR,
                 x86_addr(MINIC_X86_REG_RBP, (int64_t)(stack_offset + 8U)),
                 x86_reg(MINIC_X86_REG_RAX, 64U))) return false;
-    } else if (!x86_rr(sel, MINIC_X86_MI_MOV64_RR, 64U,
-            second, MINIC_X86_REG_RAX)) return false;
+    } else if (!x86_incoming_gp_load(sel, plan->calling_convention,
+            loc->gp_index + 1U, MINIC_X86_REG_RAX)) return false;
     return x86_store_record_gp(sel, payload - 8U, 8U);
 }
 
