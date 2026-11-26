@@ -8386,31 +8386,7 @@ done:
     return ok ? 0 : 1;
 }
 
-int minild_link_shared_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *soname,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
-    MiniLdSharedOptions options;
 
-    options.soname = soname;
-    options.entry_symbol = entry_symbol;
-    options.dynamic_list_path = NULL;
-    options.version_script_path = NULL;
-    options.script_path = NULL;
-    options.needed_name = NULL;
-    options.interpreter_path = NULL;
-    options.strip_debug = false;
-    options.hash_style_both = false;
-    options.eh_frame_hdr = false;
-    options.pie = false;
-    return minild_link_shared_elf64_riscv_inputs_options(output_path,
-                                                          inputs,
-                                                          input_count,
-                                                          &options,
-                                                          diagnostics);
-}
 
 /*
  * CPU-time profile for costly whole-Linux static links. Disabled unless
@@ -8530,21 +8506,7 @@ done:
     return ok ? 0 : 1;
 }
 
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
-    MiniLdStaticOptions options;
 
-    options.entry_symbol = entry_symbol;
-    options.script_path = NULL;
-    return minild_link_static_elf64_riscv_inputs_options(output_path,
-                                                          inputs,
-                                                          input_count,
-                                                          &options,
-                                                          diagnostics);
-}
 
 int minild_link_relocatable_elf64_riscv_inputs(const char *output_path,
                                                const MiniLdInput *inputs,
@@ -8574,31 +8536,4 @@ done:
     return ok ? 0 : 1;
 }
 
-int minild_link_relocatable_elf64_riscv(const char *output_path,
-                                        const char *const *input_paths,
-                                        size_t input_count,
-                                        FILE *diagnostics) {
-    MiniLdInput *inputs;
-    size_t i;
-    int result;
 
-    if (output_path == NULL || input_paths == NULL || input_count == 0U ||
-        diagnostics == NULL) {
-        return 2;
-    }
-    inputs = malloc(input_count * sizeof(*inputs));
-    if (inputs == NULL) {
-        fprintf(diagnostics, "minic-ld: out-of-memory:inputs\n");
-        return 1;
-    }
-    for (i = 0U; i < input_count; ++i) {
-        inputs[i].path = input_paths[i];
-        inputs[i].kind = MINILD_INPUT_OBJECT;
-    }
-    result = minild_link_relocatable_elf64_riscv_inputs(output_path,
-                                                         inputs,
-                                                         input_count,
-                                                         diagnostics);
-    free(inputs);
-    return result;
-}

@@ -20,68 +20,24 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
-  temporary_all_tools_gc_audit:
+  temporary_linker_regression:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Intersect per-binary dead functions after all tools link
+      - name: Install RISC-V test dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq binutils-riscv64-linux-gnu qemu-user
+      - name: Build and validate MiniAS and MiniLD CLI after wrapper removal
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p build/gc-sweep
-          if ! make -j4 MODE=debug BUILD_DIR=build/gc-sweep CFLAGS="-Werror -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" all >build/gc-sweep/build.log 2>&1; then
-            tail -100 build/gc-sweep/build.log
-            exit 1
-          fi
-          for bin in minic-cc minic minic-as minic-cpp minic-ar minic-ld minic-nm minic-objcopy minic-strip; do
-            rm "build/gc-sweep/bin/$bin"
-            if ! make -j1 MODE=debug BUILD_DIR=build/gc-sweep CFLAGS="-Werror -ffunction-sections -fdata-sections" LDFLAGS="-Wl,--gc-sections -Wl,--print-gc-sections" "build/gc-sweep/bin/$bin" >"build/gc-sweep/$bin.log" 2>&1; then
-              tail -90 "build/gc-sweep/$bin.log"
-              exit 1
-            fi
-          done
-          python3 - <<'PY'
-          import re,subprocess
-          from collections import defaultdict
-          from pathlib import Path
-          names="minic-cc minic minic-as minic-cpp minic-ar minic-ld minic-nm minic-objcopy minic-strip".split()
-          bins={}
-          for name in names:
-              log=Path("build/gc-sweep/"+name+".log").read_text(errors="replace")
-              obj=set(re.findall(r"build/gc-sweep/obj/[A-Za-z0-9_./+-]+\.o\b",log))
-              pattern=re.compile(r"removing unused section ['\u2018]([^'\u2019]+)['\u2019] in file ['\u2018]([^'\u2019]+)['\u2019]")
-              unused=set()
-              for m in pattern.finditer(log):
-                  section,o=m.groups()
-                  if section.startswith(".text.") and o.startswith("build/gc-sweep/obj/") and o.endswith(".o"):
-                      unused.add((o,section[6:]))
-              bins[name]=(obj,unused)
-              print("PER_BINARY",name,"objects",len(obj),"discarded_function_sections",len(unused),flush=True)
-          found=set().union(*(unused for objects,unused in bins.values()))
-          candidates=[]
-          for obj,symbol in found:
-              linked=[name for name,(objs,unused) in bins.items() if obj in objs]
-              discarded=[name for name in linked if (obj,symbol) in bins[name][1]]
-              if not linked:continue
-              if len(discarded)==len(linked):
-                  source=obj.replace("build/gc-sweep/obj/","",1)[:-2]+".c"
-                  if not source.startswith("third_party/"):
-                      candidates.append((source,symbol,linked))
-          print("TOTAL_LINK_GC",len(found),"UNREACHED_IN_ALL_RELEVANT_PRODUCTION_BINARIES",len(candidates),flush=True)
-          file_list=subprocess.check_output(["git","ls-files","-z","--","*.c","*.h"]).decode().split("\0")
-          data={}
-          for file in file_list:
-              if file and not file.startswith("third_party/"):
-                  data[file]=Path(file).read_text(errors="replace")
-          for source,symbol,linked in sorted(candidates):
-              pattern=re.compile(r"\b"+re.escape(symbol)+r"\b")
-              sites=[]
-              for path,body in data.items():
-                  count=len(pattern.findall(body))
-                  if count:sites.append((path,count))
-              print("TRULY_UNREACHED",source,symbol,"targets",",".join(linked),
-                    "refs",sum(n for _,n in sites),
-                    "testrefs",len([p for p,n in sites if p.startswith("tests/")]),
-                    "sites",";".join(f"{p}:{n}" for p,n in sites[:14]),flush=True)
-          PY
+          make -j4 MODE=release CFLAGS=-Werror all
+          export BUILD_DIR="$PWD/build/release"
+          export MINIAS="$PWD/build/release/bin/minic-as"
+          export MINIC="$PWD/build/release/bin/minic"
+          export MINILD="$PWD/build/release/bin/minic-ld"
+          sh tests/linker/run-a0.sh
+          sh tests/linker/run-a1.sh
+          sh tests/linker/run-gc-v0.sh

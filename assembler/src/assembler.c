@@ -4881,28 +4881,5 @@ int minias_assemble_file_target_isa(const char *input_path,
 
 /* Historical API stays permissive: only explicit -march=rv64i activates
  * ISA qualification so the existing MiniAS/Linux acceptance does not change. */
-int minias_assemble_file_target(const char *input_path,
-                                const char *output_path,
-                                bool elf32,
-                                uint32_t elf_flags,
-                                FILE *diagnostic) {
-    return minias_assemble_file_target_isa(
-        input_path, output_path, elf32, elf_flags, false, diagnostic);
-}
 
-int minias_assemble_file_class(const char *input_path,
-                               const char *output_path,
-                               bool elf32,
-                               FILE *diagnostic) {
-    return minias_assemble_file_target(input_path,
-                                       output_path,
-                                       elf32,
-                                       0U,
-                                       diagnostic);
-}
 
-int minias_assemble_file(const char *input_path,
-                         const char *output_path,
-                         FILE *diagnostic) {
-    return minias_assemble_file_class(input_path, output_path, false, diagnostic);
-}

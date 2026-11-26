@@ -8,10 +8,7 @@
  */
 #define minild_link_static_elf64_riscv_inputs_options \
     minild_link_static_elf64_riscv_inputs_options_without_gc
-#define minild_link_static_elf64_riscv_inputs \
-    minild_link_static_elf64_riscv_inputs_without_gc
 #include "linker_core.inc"
-#undef minild_link_static_elf64_riscv_inputs
 #undef minild_link_static_elf64_riscv_inputs_options
 
 static bool minild_gc_sections_enabled;
@@ -23,11 +20,7 @@ int minild_link_static_elf64_riscv_inputs_options(
     size_t input_count,
     const MiniLdStaticOptions *options,
     FILE *diagnostics);
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics);
+
 
 void minild_cli_enable_gc_sections_v0(void) {
     minild_gc_sections_enabled = true;
@@ -1068,18 +1061,4 @@ int minild_link_static_elf64_riscv_inputs_options(
                                          diagnostics);
 }
 
-int minild_link_static_elf64_riscv_inputs(const char *output_path,
-                                          const MiniLdInput *inputs,
-                                          size_t input_count,
-                                          const char *entry_symbol,
-                                          FILE *diagnostics) {
-    MiniLdStaticOptions options;
 
-    options.entry_symbol = entry_symbol;
-    options.script_path = NULL;
-    return minild_link_static_elf64_riscv_inputs_options(output_path,
-                                                          inputs,
-                                                          input_count,
-                                                          &options,
-                                                          diagnostics);
-}
