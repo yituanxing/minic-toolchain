@@ -33,6 +33,8 @@ bool minic_core_local_facts_meet(
     const MinicCoreLocalIntegerConstant *right);
 
 void minic_core_local_facts_clear_known(MinicCoreLowerContext *context);
+/* Detached entry has no dominating lexical specialization facts. */
+void minic_core_local_facts_forget_reentry(MinicCoreLowerContext *context);
 
 /* A bounded write may retain current-value/range information, but every
  * write invalidates the *entry* facts of an inline specialization. */

@@ -244,6 +244,14 @@ void minic_core_local_fact_escape(MinicCoreLowerContext *context,
     core_local_fact_kill(context, local_id, true);
 }
 
+void minic_core_local_facts_forget_reentry(MinicCoreLowerContext *context) {
+    size_t index;
+    if (context == NULL || context->source_function == NULL) return;
+    for (index = 0U; index < context->source_function->local_count; ++index)
+        minic_core_local_fact_invalidate(context, context->source_function->local_begin + index);
+    minic_core_local_facts_clear_known(context);
+}
+
 bool minic_core_local_fact_get(const MinicCoreLowerContext *context,
                                     MinicLocalId local_id,
                                     MinicConstValue *value) {

@@ -490,11 +490,8 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     bool local_fact_single_pass;
 
     if (detached_reentry) {
-        size_t index;
         if (context->source_function == NULL) return MINIC_CORE_LOWER_ERROR;
-        for (index = 0U; index < context->source_function->local_count; ++index)
-            minic_core_local_fact_invalidate(context, context->source_function->local_begin + index);
-        minic_core_local_facts_clear_known(context);
+        minic_core_local_facts_forget_reentry(context);
         status = minic_core_lower_loop_cfg(context, statement, continue_label_statement, terminated);
         minic_core_local_facts_clear_known(context);
         return status;
