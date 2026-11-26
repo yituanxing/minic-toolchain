@@ -2230,6 +2230,7 @@ static bool x86_percpu_gs_source(const MinicTargetInvocation *invocation, const 
             !(width==8U && minic_type_is_pointer(ty) &&
               ((op==0U && i==1U) || (op==1U && i==0U))) &&
             (ty.base_kind!=MINIC_TYPE_BASE_INT||
+             ty.pointer_depth!=0U||
              (width==1U?ty.integer_rank!=MINIC_INTEGER_RANK_CHAR:
               width==2U?ty.integer_rank!=MINIC_INTEGER_RANK_SHORT:
               width==4U?ty.integer_rank!=MINIC_INTEGER_RANK_INT:
@@ -5698,12 +5699,17 @@ bool minic_x86_64_qualify_inline_asm(
          i < sizeof(minic_x86_source_qualifiers) /
                  sizeof(minic_x86_source_qualifiers[0]);
          ++i) {
+        /* A failed form may have written candidate operand kinds or an
+         * ISA variant before rejecting a later constraint. Never allow
+         * those partial facts to leak into the next form's contract. */
+        (void)memset(contract, 0, sizeof(*contract));
         if (minic_x86_source_qualifiers[i].qualify(invocation, program, source, contract)) {
             contract->target_machine_form_id =
                 (uint32_t)minic_x86_source_qualifiers[i].machine_form;
             return true;
         }
     }
+    (void)memset(contract, 0, sizeof(*contract));
     if (x86_nospec_source(program, source, &nospec_width)) {
         contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_NOSPEC;
         contract->target_machine_form_variant = nospec_width;
