@@ -11459,7 +11459,6 @@ static bool x86_source_single_integer_immediate(
         source->explicit_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 1U ||
-        source->resolved_immediates == NULL ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
         !x86_scalar_role(&roles[0], 0U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
