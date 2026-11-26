@@ -3182,11 +3182,10 @@ static bool x86_linux_identity_load_source(const MinicTargetInvocation *invocati
 static bool x86_linux_ipv6_checksum_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     static const char *const constraints[] = {"=r", "[sum]", "r", "r"};
     const MinicExpression *expr;
-    size_t i;
-    if (!program || !source || !contract ||
+    size_t i, bytes, alignment;
+    if (!invocation || !program || !source || !contract ||
         !minic_x86_64_linux_ipv6_checksum_form(
             source->template_text, source->template_length) ||
         source->is_volatile || source->is_goto || source->label_count ||
@@ -3201,6 +3200,9 @@ static bool x86_linux_ipv6_checksum_source(const MinicTargetInvocation *invocati
         expr = minic_c0_program_expression(program, operand->expression);
         if (!expr || (i >= 2U ? !minic_type_is_pointer(expr->type)
                              : !minic_type_is_integer(expr->type)) ||
+            minic_type_is_bool_integer(expr->type) ||
+            !minic_data_layout_type(invocation, program, expr->type,
+                &bytes, &alignment) || bytes != 8U ||
             (i == 0U && (expr->value_category != MINIC_VALUE_LVALUE ||
                          minic_type_is_const(expr->type)))) return false;
         contract->kinds[i] = i == 0U
@@ -3517,10 +3519,10 @@ static bool x86_linux_boot_string_source(const MinicTargetInvocation *invocation
 static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const bool clock_form = source && source->output_count == 2U;
     const MinicExpression *ret, *outmem, *number, *arg1, *arg2;
-    if (!program || !source || !contract ||
+    size_t bytes, alignment;
+    if (!invocation || !program || !source || !contract ||
         !minic_x86_64_linux_vdso_syscall_form(
             source->template_text, source->template_length) ||
         source->is_volatile || source->is_goto || source->label_count ||
@@ -3552,6 +3554,16 @@ static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocatio
         !arg1 || !(clock_form ? minic_type_is_integer(arg1->type) :
                                 minic_type_is_pointer(arg1->type)) ||
         !arg2 || !minic_type_is_pointer(arg2->type)) return false;
+    /* Linux's tied RAX syscall number is 32 bits, while the clock-id
+     * register is either 32 or 64 bits. Match the physical selector. */
+    if (minic_type_is_bool_integer(number->type) ||
+        !minic_data_layout_type(invocation, program, number->type,
+            &bytes, &alignment) || bytes != 4U)
+        return false;
+    if (clock_form && (minic_type_is_bool_integer(arg1->type) ||
+        !minic_data_layout_type(invocation, program, arg1->type,
+            &bytes, &alignment) || (bytes != 4U && bytes != 8U)))
+        return false;
     contract->operand_count = clock_form ? 5U : 4U;
     contract->kinds[0] = MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     if (clock_form)
@@ -3570,9 +3582,9 @@ static bool x86_linux_vdso_syscall_source(const MinicTargetInvocation *invocatio
 static bool x86_linux_vdso_cpunode_source(const MinicTargetInvocation *invocation,
     const MinicC0Program *program, const MinicInlineAsm *source,
     MinicTargetInlineAsmContract *contract) {
-    (void)invocation;
     const MinicExpression *p,*zero,*selector;
-    if (!program || !source || !contract ||
+    size_t bytes, alignment;
+    if (!invocation || !program || !source || !contract ||
         !minic_x86_64_linux_vdso_cpunode_form(
             source->template_text, source->template_length) ||
         !source->is_volatile || source->is_goto || source->label_count ||
@@ -3589,7 +3601,14 @@ static bool x86_linux_vdso_cpunode_source(const MinicTargetInvocation *invocatio
     if (!p || p->value_category!=MINIC_VALUE_LVALUE ||
         !minic_type_equal(p->type,minic_type_unsigned_int()) ||
         !zero || !minic_type_is_integer(zero->type) ||
-        !selector || !minic_type_is_integer(selector->type)) return false;
+        !selector || !minic_type_is_integer(selector->type) ||
+        minic_type_is_bool_integer(zero->type) ||
+        minic_type_is_bool_integer(selector->type) ||
+        !minic_data_layout_type(invocation, program, zero->type,
+            &bytes, &alignment) || bytes != 4U ||
+        !minic_data_layout_type(invocation, program, selector->type,
+            &bytes, &alignment) ||
+        (bytes != 2U && bytes != 4U && bytes != 8U)) return false;
     contract->operand_count=3U;
     contract->kinds[0]=MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT;
     contract->kinds[1]=MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT;
