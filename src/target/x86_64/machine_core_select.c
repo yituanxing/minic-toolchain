@@ -11449,6 +11449,176 @@ static bool x86_integer_conversion(X86CoreSelector *sel,
         x86_result(sel, ins);
 }
 
+/* A qualified Source form has one target-owned MachineIR selector. Keep the
+ * original local chain only where several proven variants share a form ID.
+ * In particular a failed emission must not try unrelated source forms. */
+typedef bool (*X86SourceSelectFn)(X86CoreSelector *,
+    const MinicCoreInstruction *);
+
+static bool x86_source_dispatch(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins, size_t instruction_id) {
+    static const X86SourceSelectFn selectors[] = {
+        [MINIC_X86_MACHINE_ASM_ZSTD_CPUID] = x86_source_zstd_cpuid,
+        [MINIC_X86_MACHINE_ASM_XSETBV] = x86_source_xsetbv,
+        [MINIC_X86_MACHINE_ASM_MMIO_READ] = x86_source_mmio_or_xchg,
+        [MINIC_X86_MACHINE_ASM_MMIO_WRITE] = x86_source_mmio_or_xchg,
+        [MINIC_X86_MACHINE_ASM_ATOMIC_XCHG] = x86_source_mmio_or_xchg,
+        [MINIC_X86_MACHINE_ASM_FDIV_BUG] = x86_source_fdiv_bug,
+        [MINIC_X86_MACHINE_ASM_MONITOR_WAIT] = x86_source_monitor_wait,
+        [MINIC_X86_MACHINE_ASM_SEGMENT_READ] = x86_source_segment_read,
+        [MINIC_X86_MACHINE_ASM_FSGSBASE] = x86_source_fsgsbase,
+        [MINIC_X86_MACHINE_ASM_RANDOM_SEED] = x86_source_random_seed,
+        [MINIC_X86_MACHINE_ASM_X87_FILD_PREPARE] = x86_source_x87_fild_prepare,
+        [MINIC_X86_MACHINE_ASM_X87_PROBE] = x86_source_x87_probe,
+        [MINIC_X86_MACHINE_ASM_PKRU] = x86_source_pkru,
+        [MINIC_X86_MACHINE_ASM_MXCSR] = x86_source_mxcsr,
+        [MINIC_X86_MACHINE_ASM_UNWIND_CONTEXT] = x86_source_unwind_context,
+        [MINIC_X86_MACHINE_ASM_PORT_IO] = x86_source_scalar_port_io,
+        [MINIC_X86_MACHINE_ASM_ATOMIC_RMW] = x86_source_scalar_atomic_rmw,
+        [MINIC_X86_MACHINE_ASM_BITOPS] = x86_source_scalar_bitops,
+        [MINIC_X86_MACHINE_ASM_ATOMIC_CC] = x86_source_scalar_atomic_cc,
+        [MINIC_X86_MACHINE_ASM_IP_HERE] = x86_source_ip_here,
+        [MINIC_X86_MACHINE_ASM_ZERO_BARRIER] = x86_source_zero_barrier,
+        [MINIC_X86_MACHINE_ASM_ZSTD_PADDING] = x86_source_zstd_padding,
+        [MINIC_X86_MACHINE_ASM_FXSAVE] = x86_source_legacy_memory,
+        [MINIC_X86_MACHINE_ASM_LAR_SELECTOR] = x86_source_legacy_scalar,
+        [MINIC_X86_MACHINE_ASM_IDENTITY_LOAD] = x86_source_legacy_scalar,
+        [MINIC_X86_MACHINE_ASM_VERW_CLEAR] = x86_source_legacy_memory,
+        [MINIC_X86_MACHINE_ASM_TLB_CACHE] = x86_source_legacy_memory,
+        [MINIC_X86_MACHINE_ASM_DELAY_MUL] = x86_source_delay_mul,
+        [MINIC_X86_MACHINE_ASM_DELAY_WAIT] = x86_source_delay_wait,
+        [MINIC_X86_MACHINE_ASM_PM_TRACE] = x86_source_pm_trace,
+        [MINIC_X86_MACHINE_ASM_I915_MOVNTDQA] = x86_source_wc_fixed_copy,
+        [MINIC_X86_MACHINE_ASM_PVCLOCK_SCALE] = x86_source_pvclock_scale,
+        [MINIC_X86_MACHINE_ASM_PREEMPT_STATIC_CALL] = x86_source_preempt_static_call,
+        [MINIC_X86_MACHINE_ASM_IPV6_CHECKSUM] = x86_source_ipv6_checksum,
+        [MINIC_X86_MACHINE_ASM_VDSO_SYSCALL] = x86_source_vdso_syscall,
+        [MINIC_X86_MACHINE_ASM_VDSO_CPUNODE] = x86_source_vdso_cpunode,
+        [MINIC_X86_MACHINE_ASM_CRASH_REGISTER] = x86_source_crash_register,
+        [MINIC_X86_MACHINE_ASM_VMWARE_HYPERCALL] = x86_source_vmware,
+        [MINIC_X86_MACHINE_ASM_VMWARE_STEALCLOCK_ALT] = x86_source_vmware,
+        [MINIC_X86_MACHINE_ASM_KVM_HYPERCALL_ALT] = x86_source_kvm_hypercall,
+        [MINIC_X86_MACHINE_ASM_EXCEPTION_STACK_CALL] = x86_source_exception_stack_call,
+        [MINIC_X86_MACHINE_ASM_KEXEC_LOAD_SEGMENTS] = x86_source_kexec_load_segments,
+        [MINIC_X86_MACHINE_ASM_EFI_KERNEL_TRANSFER] = x86_source_efi_kernel_transfer,
+        [MINIC_X86_MACHINE_ASM_PCI_MMCONFIG] = x86_source_pci_mmconfig,
+        [MINIC_X86_MACHINE_ASM_CMPXCHG128] = x86_source_cmpxchg128,
+        [MINIC_X86_MACHINE_ASM_TASK_SIZE_ALT] = x86_source_task_size_alt,
+        [MINIC_X86_MACHINE_ASM_IRQ_STACK_CALL] = x86_source_exception_stack_call,
+        [MINIC_X86_MACHINE_ASM_PREEMPT_GS_DEC] = x86_source_preempt_gs_dec,
+        [MINIC_X86_MACHINE_ASM_GEN_ENDBR] = x86_source_gen_endbr,
+        [MINIC_X86_MACHINE_ASM_KASLR_MUL] = x86_source_accumulator_math,
+        [MINIC_X86_MACHINE_ASM_MULDIV_U64] = x86_source_accumulator_math,
+        [MINIC_X86_MACHINE_ASM_VIA_XSTORE] = x86_source_via_xstore,
+        [MINIC_X86_MACHINE_ASM_CRASH_SEGMENT_SNAPSHOT] = x86_source_crash_segment_snapshot,
+        [MINIC_X86_MACHINE_ASM_TASK_CONTROL] = x86_source_task_control,
+        [MINIC_X86_MACHINE_ASM_IRET_TO_SELF] = x86_source_iret_int3,
+        [MINIC_X86_MACHINE_ASM_INT3_SELFTEST] = x86_source_iret_int3,
+        [MINIC_X86_MACHINE_ASM_PV_INDIRECT_CALL] = x86_source_pv_indirect_call,
+        [MINIC_X86_MACHINE_ASM_ALT_RELOC_SELFTEST] = x86_source_alt_reloc_selftest,
+        [MINIC_X86_MACHINE_ASM_REAL_MODE_FAR_JUMP] = x86_source_real_mode_far_jump,
+        [MINIC_X86_MACHINE_ASM_REP_STRING_IO] = x86_source_rep_string_io,
+        [MINIC_X86_MACHINE_ASM_IOMEM_COPY] = x86_source_iomem_copy,
+        [MINIC_X86_MACHINE_ASM_FLUSHCACHE_COPY] = x86_source_wc_fixed_copy,
+        [MINIC_X86_MACHINE_ASM_SEGMENT_LOAD_EXTABLE] = x86_source_segment_load_extable,
+        [MINIC_X86_MACHINE_ASM_LKGS_EXTABLE] = x86_source_lkgs_extable,
+        [MINIC_X86_MACHINE_ASM_LOAD_UNALIGNED_ZEROPAD] = x86_source_load_unaligned_zeropad,
+        [MINIC_X86_MACHINE_ASM_KERNEL_NOFAULT_GOTO] = x86_source_kernel_nofault_goto,
+        [MINIC_X86_MACHINE_ASM_REP_MOVSB_ALTERNATIVE] = x86_source_rep_uaccess_alternative,
+        [MINIC_X86_MACHINE_ASM_REP_STOSB_ALTERNATIVE] = x86_source_rep_uaccess_alternative,
+        [MINIC_X86_MACHINE_ASM_FPU_USER_FRAME] = x86_source_fpu_user_frame,
+        [MINIC_X86_MACHINE_ASM_FPU_KERNEL_RESTORE] = x86_source_fpu_kernel_restore,
+        [MINIC_X86_MACHINE_ASM_FXRSTOR_SAFE] = x86_source_fpu_user_frame,
+        [MINIC_X86_MACHINE_ASM_XSTATE_FAULT] = x86_source_xstate_fault,
+        [MINIC_X86_MACHINE_ASM_XRSTOR_ALTERNATIVE] = x86_source_xsave_triple_alt,
+        [MINIC_X86_MACHINE_ASM_XSAVE_TRIPLE_ALTERNATIVE] = x86_source_xsave_triple_alt,
+        [MINIC_X86_MACHINE_ASM_SMAP_ALTERNATIVE] = x86_source_patchable_flags_alt,
+        [MINIC_X86_MACHINE_ASM_SEGMENT_REGISTER_EXTABLE] = x86_source_segment_register_extable,
+        [MINIC_X86_MACHINE_ASM_PUT_USER_CALL] = x86_uaccess_call,
+        [MINIC_X86_MACHINE_ASM_GET_USER_CALL] = x86_uaccess_call,
+        [MINIC_X86_MACHINE_ASM_IDLE_CLFLUSH_ALT] = x86_source_cache_flush_alt,
+        [MINIC_X86_MACHINE_ASM_PAT_CLFLUSHOPT] = x86_source_cache_flush_alt,
+        [MINIC_X86_MACHINE_ASM_FUTEX_EXTABLE] = x86_source_futex_extable,
+        [MINIC_X86_MACHINE_ASM_DEBUG_REGISTER] = x86_source_debug_register,
+        [MINIC_X86_MACHINE_ASM_ALTERNATIVE_WRMSR] = x86_source_alternative_wrmsr,
+        [MINIC_X86_MACHINE_ASM_CONTROL_REGISTER] = x86_source_control_register,
+        [MINIC_X86_MACHINE_ASM_THREE_CALL_ALTERNATIVE] = x86_source_three_call_alternative,
+        [MINIC_X86_MACHINE_ASM_BOOT_SEGMENTS] = x86_source_boot_segments,
+        [MINIC_X86_MACHINE_ASM_LIDT] = x86_source_descriptor_table,
+        [MINIC_X86_MACHINE_ASM_TESTCC] = x86_source_testcc,
+        [MINIC_X86_MACHINE_ASM_PREFETCHW_ALT] = x86_source_prefetchw_alt,
+        [MINIC_X86_MACHINE_ASM_APIC_AMD_ALT] = x86_source_apic_amd_alt,
+        [MINIC_X86_MACHINE_ASM_GS_TIED_ALU] = x86_source_gs_tied_alu,
+        [MINIC_X86_MACHINE_ASM_ADD32_CARRY] = x86_source_checksum_carry,
+        [MINIC_X86_MACHINE_ASM_TCPUDP_NOFOLD] = x86_source_checksum_carry,
+        [MINIC_X86_MACHINE_ASM_PERCPU_GS] = x86_source_percpu_gs,
+        [MINIC_X86_MACHINE_ASM_IP_FAST_CSUM] = x86_source_ip_fast_csum,
+        [MINIC_X86_MACHINE_ASM_CHECKSUM] = x86_source_checksum_carry,
+        [MINIC_X86_MACHINE_ASM_MSR] = x86_source_msr,
+        [MINIC_X86_MACHINE_ASM_HWEIGHT] = x86_source_hweight,
+        [MINIC_X86_MACHINE_ASM_COUNTER] = x86_source_counter,
+        [MINIC_X86_MACHINE_ASM_REP_STOS] = x86_source_rep_stos,
+        [MINIC_X86_MACHINE_ASM_CSUM_PARTIAL] = x86_source_checksum_carry,
+        [MINIC_X86_MACHINE_ASM_CPUID_MATCHED] = x86_source_cpuid_matched,
+        [MINIC_X86_MACHINE_ASM_MULACC_MATCHED] = x86_source_mulacc_matched,
+        [MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED] = x86_source_bitscan_matched,
+        [MINIC_X86_MACHINE_ASM_MATCHED_MEMORY] = x86_source_matched_memory,
+        [MINIC_X86_MACHINE_ASM_BUG_TABLE_C_IMMEDIATE] = x86_source_bug_table_c,
+        [MINIC_X86_MACHINE_ASM_NOP_CONST_I] = x86_source_nop_const_i,
+        [MINIC_X86_MACHINE_ASM_NOSPEC] = x86_source_nospec,
+        [MINIC_X86_MACHINE_ASM_PRIVILEGED_ZERO] = x86_source_privileged_zero,
+        [MINIC_X86_MACHINE_ASM_WEAK_WRMSR_FENCE] = x86_source_patchable_flags_alt,
+        [MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION] = x86_source_unreachable_annotation,
+        [MINIC_X86_MACHINE_ASM_LFENCE_ALTERNATIVE] = x86_source_patchable_flags_alt,
+        [MINIC_X86_MACHINE_ASM_AMX_TILERELEASE] = x86_source_fpu_zero_asm,
+        [MINIC_X86_MACHINE_ASM_X87_FWAIT_FAULT] = x86_source_fpu_zero_asm,
+    };
+    MinicCoreInlineAsmId id;
+    unsigned int form;
+    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM)
+        id = ins->value.inline_asm_id;
+    else if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM)
+        id = ins->value.structured_inline_asm.inline_asm_id;
+    else return false;
+    if (sel->core->inline_asms == NULL ||
+        id >= sel->core->inline_asm_count) return false;
+    form = sel->core->inline_asms[id].target_machine_form_id;
+    switch (form) {
+    case MINIC_X86_MACHINE_ASM_NONE:
+        return x86_source_jump_label(sel, ins, instruction_id) ||
+            x86_source_cpu_has_goto(sel, ins, instruction_id) ||
+            x86_source_zero_barrier(sel, ins);
+    case MINIC_X86_MACHINE_ASM_RAW_CMPXCHG:
+        return x86_source_scalar_cmpxchg(sel, ins, false);
+    case MINIC_X86_MACHINE_ASM_TRYCAS:
+        return x86_source_scalar_cmpxchg(sel, ins, true);
+    case MINIC_X86_MACHINE_ASM_LOWLEVEL_SCALAR:
+        return x86_source_lowlevel_halt(sel, ins) ||
+            x86_source_lowlevel_descriptor(sel, ins) ||
+            x86_source_lowlevel_segment(sel, ins) ||
+            x86_source_movnti(sel, ins) ||
+            x86_source_lowlevel_btcq(sel, ins);
+    case MINIC_X86_MACHINE_ASM_BOOT_FLAGS:
+        return x86_source_cpuid_matched(sel, ins) ||
+            x86_source_boot_bit(sel, ins) ||
+            x86_source_boot_test_bit(sel, ins) ||
+            x86_source_boot_eflags(sel, ins);
+    case MINIC_X86_MACHINE_ASM_BOOT_STRING:
+        return x86_source_boot_cmpsb(sel, ins) ||
+            x86_source_boot_divl(sel, ins) ||
+            x86_source_boot_movs(sel, ins);
+    case MINIC_X86_MACHINE_ASM_GS_ATOMIC:
+        return x86_source_gs_atomic_extended(sel, ins) ||
+            x86_source_smp_xadd(sel, ins);
+    case MINIC_X86_MACHINE_ASM_LOCK_BITCC:
+        return x86_source_linux_lock_bitcc(sel, ins) ||
+            x86_source_linux_lock_bitcc_sign(sel, ins);
+    default:
+        return form < sizeof(selectors) / sizeof(selectors[0]) &&
+            selectors[form] != NULL && selectors[form](sel, ins);
+    }
+}
+
 static bool x86_core_instruction(X86CoreSelector *sel,
     const MinicCoreInstruction *ins, size_t instruction_id) {
     size_t bytes;
@@ -11475,118 +11645,8 @@ static bool x86_core_instruction(X86CoreSelector *sel,
         return x86_compiler_barrier(sel, ins);
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
     case MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM:
-        return x86_source_kernel_nofault_goto(sel, ins, instruction_id) ||
-            x86_source_jump_label(sel, ins, instruction_id) ||
-            x86_source_cpu_has_goto(sel, ins, instruction_id) ||
-            x86_source_zero_barrier(sel, ins) ||
-            x86_source_patchable_flags_alt(sel, ins) ||
-            x86_source_real_mode_far_jump(sel, ins) ||
-            x86_source_zstd_padding(sel, ins) ||
-            x86_source_privileged_zero(sel, ins) ||
-            x86_source_fpu_zero_asm(sel, ins) ||
-            x86_source_mmio_or_xchg(sel, ins) ||
-            x86_source_efi_kernel_transfer(sel, ins) ||
-            x86_source_pci_mmconfig(sel, ins) ||
-            x86_source_rep_stos(sel, ins) ||
-            x86_source_rep_string_io(sel, ins) ||
-            x86_source_iomem_copy(sel, ins) ||
-            x86_source_wc_fixed_copy(sel, ins) ||
-            x86_source_rep_uaccess_alternative(sel, ins) ||
-            x86_uaccess_call(sel, ins) ||
-            x86_source_accumulator_math(sel, ins) ||
-            x86_source_cpuid_matched(sel, ins) ||
-            x86_source_zstd_cpuid(sel, ins) ||
-            x86_source_via_xstore(sel, ins) ||
-            x86_source_mulacc_matched(sel, ins) ||
-            x86_source_matched_memory(sel, ins) ||
-            x86_source_bitscan_matched(sel, ins) ||
-            x86_source_prefetchw_alt(sel, ins) ||
-            x86_source_cmpxchg128(sel, ins) ||
-            x86_source_gen_endbr(sel, ins) ||
-            x86_source_crash_register(sel, ins) ||
-            x86_source_futex_extable(sel, ins) ||
-            x86_source_fdiv_bug(sel, ins) ||
-            x86_source_x87_probe(sel, ins) ||
-            x86_source_x87_fild_prepare(sel, ins) ||
-            x86_source_fpu_kernel_restore(sel, ins) ||
-            x86_source_random_seed(sel, ins) ||
-            x86_source_pkru(sel, ins) ||
-            x86_source_mxcsr(sel, ins) ||
-            x86_source_scalar_port_io(sel, ins) ||
-            x86_source_scalar_atomic_rmw(sel, ins) ||
-            x86_source_scalar_cmpxchg(sel, ins, false) ||
-            x86_source_scalar_cmpxchg(sel, ins, true) ||
-            x86_source_testcc(sel, ins) ||
-            x86_source_scalar_bitops(sel, ins) ||
-            x86_source_scalar_atomic_cc(sel, ins) ||
-            x86_source_linux_lock_bitcc(sel, ins) ||
-            x86_source_linux_lock_bitcc_sign(sel, ins) ||
-            x86_source_nospec(sel, ins) ||
-            x86_source_unwind_context(sel, ins) ||
-            x86_source_alternative_wrmsr(sel, ins) ||
-            x86_source_fpu_user_frame(sel, ins) ||
-            x86_source_xsave_triple_alt(sel, ins) ||
-            x86_source_task_size_alt(sel, ins) ||
-            x86_source_apic_amd_alt(sel, ins) ||
-            x86_source_xsetbv(sel, ins) ||
-            x86_source_kexec_load_segments(sel, ins) ||
-            x86_source_monitor_wait(sel, ins) ||
-            x86_source_segment_read(sel, ins) ||
-            x86_source_fsgsbase(sel, ins) ||
-            x86_source_crash_segment_snapshot(sel, ins) ||
-            x86_source_cache_flush_alt(sel, ins) ||
-            x86_source_preempt_gs_dec(sel, ins) ||
-            x86_source_boot_cmpsb(sel, ins) ||
-            x86_source_boot_divl(sel, ins) ||
-            x86_source_boot_movs(sel, ins) ||
-            x86_source_control_register(sel, ins) ||
-            x86_source_segment_load_extable(sel, ins) ||
-            x86_source_load_unaligned_zeropad(sel, ins) ||
-            x86_source_segment_register_extable(sel, ins) ||
-            x86_source_lkgs_extable(sel, ins) ||
-            x86_source_boot_segments(sel, ins) ||
-            x86_source_debug_register(sel, ins) ||
-            x86_source_task_control(sel, ins) ||
-            x86_source_vdso_cpunode(sel, ins) ||
-            x86_source_msr(sel, ins) ||
-            x86_source_hweight(sel, ins) ||
-            x86_source_counter(sel, ins) ||
-            x86_source_percpu_gs(sel, ins) ||
-            x86_source_pm_trace(sel, ins) ||
-            x86_source_ipv6_checksum(sel, ins) ||
-            x86_source_checksum_carry(sel, ins) ||
-            x86_source_ip_fast_csum(sel, ins) ||
-            x86_source_gs_atomic_extended(sel, ins) ||
-            x86_source_smp_xadd(sel, ins) ||
-            x86_source_gs_tied_alu(sel, ins) ||
-            x86_source_descriptor_table(sel, ins) ||
-            x86_source_xstate_fault(sel, ins) ||
-            x86_source_legacy_memory(sel, ins) ||
-            x86_source_legacy_scalar(sel, ins) ||
-            x86_source_delay_mul(sel, ins) ||
-            x86_source_vmware(sel, ins) ||
-            x86_source_kvm_hypercall(sel, ins) ||
-            x86_source_pvclock_scale(sel, ins) ||
-            x86_source_vdso_syscall(sel, ins) ||
-            x86_source_delay_wait(sel, ins) ||
-            x86_source_preempt_static_call(sel, ins) ||
-            x86_source_exception_stack_call(sel, ins) ||
-            x86_source_iret_int3(sel, ins) ||
-            x86_source_alt_reloc_selftest(sel, ins) ||
-            x86_source_three_call_alternative(sel, ins) ||
-            x86_source_pv_indirect_call(sel, ins) ||
-            x86_source_lowlevel_halt(sel, ins) ||
-            x86_source_lowlevel_descriptor(sel, ins) ||
-            x86_source_lowlevel_segment(sel, ins) ||
-            x86_source_movnti(sel, ins) ||
-            x86_source_lowlevel_btcq(sel, ins) ||
-            x86_source_boot_bit(sel, ins) ||
-            x86_source_boot_test_bit(sel, ins) ||
-            x86_source_boot_eflags(sel, ins) ||
-            x86_source_ip_here(sel, ins) ||
-            x86_source_bug_table_c(sel, ins) ||
-            x86_source_nop_const_i(sel, ins) ||
-            x86_source_unreachable_annotation(sel, ins);
+return x86_source_dispatch(sel, ins, instruction_id);
+
     case MINIC_CORE_INSTRUCTION_FIXED_REGISTER_READ:
         return x86_fixed_register_read(sel, ins);
     case MINIC_CORE_INSTRUCTION_BLOCK_ADDRESS:
