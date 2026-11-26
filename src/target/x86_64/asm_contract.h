@@ -390,7 +390,6 @@ bool minic_x86_64_asm_nospec_template(const char *, size_t);
 /* Qualified x86 per-cpu stable GS segment read, exact GNU p input. */
 size_t minic_x86_64_asm_percpu_stable_width(const char *, size_t);
 bool minic_x86_64_asm_mulacc_template(const char *, size_t);
-bool minic_x86_64_asm_muldiv_template(const char *, size_t);
 /* The one x86 GNU Linux bitops ISA family: native BT/BTS/BTR,
  * hardware CF output, real 671 SMP lock table and typed Core roles. */
 typedef enum MinicX86BitopsForm {

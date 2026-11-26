@@ -2051,26 +2051,6 @@ bool minic_x86_64_asm_mulacc_template(const char *template_text,
     return strcmp(text, expected) == 0;
 }
 
-/* Original Linux mul_u64_u64_div_u64:
- *   asm("mulq %2; divq %3" : "=a"(q)
- *       : "a"(a), "rm"(mul), "rm"(div) : "rdx");
- * Admit one exact machine sequence, never generic executable template
- * passthrough with unchecked physical clobbers. The machine emitter chooses
- * the register alternative for both rm inputs and keeps RDX out of inputs. */
-bool minic_x86_64_asm_muldiv_template(const char *text, size_t length) {
-    static const char expected[] = "mulq%2;divq%3";
-    char normalized[64];
-    size_t i, j = 0U;
-    if (!text || length >= sizeof(normalized)) return false;
-    for (i = 0U; i < length; ++i) {
-        const char c = text[i];
-        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') continue;
-        normalized[j++] = c;
-    }
-    normalized[j] = '\0';
-    return strcmp(normalized, expected) == 0;
-}
-
 /* Exact original GNU Linux __raw_try_cmpxchg 8-case source.
  * Linux CC_SET(z) must remain a real hardware flag output, not C logic. */
 static const MinicX86TryCasDesc x86_trycas_forms[] = {
