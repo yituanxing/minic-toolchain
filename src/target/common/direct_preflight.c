@@ -229,17 +229,15 @@ bool minic_multi_direct_lp64_cfg_preflight(
             if (minic_lp64_core_kind(fn->type_context,
                     minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD)) {
                 size_t bytes, slots, fp_elements, fp_width;
-                size_t indirect_bytes = 0U;
                 const MinicCoreTypeContext *types = fn->type_context;
                 if ((!minic_multi_empty_record_core(types, minic_core_function_return_type(fn)) &&
                      !minic_multi_gp_record_core(types, minic_core_function_return_type(fn),
                                                  &bytes, &slots) &&
                      !minic_multi_fp_return_record_core(types, minic_core_function_return_type(fn),
                                                         &fp_elements, &fp_width) &&
-                     !(abi->core_indirect_return != NULL &&
-                       abi->core_indirect_return(types, minic_core_function_return_type(fn),
-                                                 &indirect_bytes) &&
-                       indirect_bytes > 16U)) ||
+                     !minic_lp64_core_indirect_result(
+                         types, minic_core_function_return_type(fn),
+                         abi->core_indirect_return)) ||
                     term->return_value != MINIC_CORE_VALUE_INVALID ||
                     term->return_object >= fn->object_count ||
                     fn->objects == NULL ||

@@ -243,21 +243,14 @@ static bool minic_lp64_plan_types(
 bool minic_lp64_plan_incoming_parameters(
     const MinicCoreFunction *fn, const MinicDirectLP64AbiPolicy *abi,
     MinicLP64ArgumentPlan *plan) {
-    size_t return_bytes = 0U;
     bool hidden_indirect_result;
-    const MinicCoreTypeContext *types;
     if (fn == NULL || fn->type_context == NULL || abi == NULL ||
         abi->core_indirect_return == NULL) return false;
-    types = fn->type_context;
     hidden_indirect_result =
         abi->indirect_result_argument_registers != 0U &&
-        minic_lp64_core_kind(types, minic_core_function_return_type(fn),
-                             MINIC_CORE_TYPE_RECORD) &&
-        abi->core_indirect_record != NULL &&
-        abi->core_indirect_record(types, minic_core_function_return_type(fn),
-                                  &return_bytes) &&
-        return_bytes > 16U;
-    return minic_lp64_plan_types(types, minic_core_function_parameter_types(fn),
+        minic_lp64_core_indirect_result(fn->type_context,
+            minic_core_function_return_type(fn), abi->core_indirect_return);
+    return minic_lp64_plan_types(fn->type_context, minic_core_function_parameter_types(fn),
         minic_core_function_parameter_count(fn), minic_core_function_parameter_count(fn), false, abi,
         hidden_indirect_result, plan);
 }
@@ -303,9 +296,8 @@ static bool minic_lp64_admit_call(
              minic_multi_empty_record_core(core_types, ins->core_type_id) ||
              minic_multi_fp_return_record_core(core_types, ins->core_type_id,
                                                 &fp_elements, &fp_width) ||
-             (abi->core_indirect_return(core_types, ins->core_type_id,
-                                         &return_record_bytes) &&
-              return_record_bytes > 16U)))
+             minic_lp64_core_indirect_result(core_types, ins->core_type_id,
+                                              abi->core_indirect_return)))
             record_result = true;
         if (!record_result &&
             ((minic_lp64_core_kind(core_types, ins->core_type_id,
@@ -496,7 +488,6 @@ bool minic_lp64_plan_function_calls(
         MinicLP64ArgumentPlan scratch;
         MinicLP64PreparedCall *site;
         size_t bytes;
-        size_t return_bytes = 0U;
         bool hidden_indirect_result;
         *failed_instruction = id;
         *failed_preflight = true;
@@ -511,13 +502,9 @@ bool minic_lp64_plan_function_calls(
         *failed_preflight = false;
         hidden_indirect_result =
             abi->indirect_result_argument_registers != 0U &&
-            minic_lp64_core_kind(fn->type_context,
+            minic_lp64_core_indirect_result(fn->type_context,
                 calls->sites[ordinal].view.core_return_type_id,
-                MINIC_CORE_TYPE_RECORD) &&
-            abi->core_indirect_return(fn->type_context,
-                calls->sites[ordinal].view.core_return_type_id,
-                &return_bytes) &&
-            return_bytes > 16U;
+                abi->core_indirect_return);
         if (!minic_lp64_plan_types(fn->type_context, core_ids,
                                   calls->sites[ordinal].view.argument_count,
                                   calls->sites[ordinal].view.parameter_count,

@@ -96,15 +96,10 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
             (starts != 0U && !minic_core_function_is_variadic(fn)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     } else if (profile->variadic_address_count != 0U) {
-        size_t consumed_gp = 0U;
-        size_t indirect_bytes = 0U;
-        const bool hidden_indirect_result =
-            minic_lp64_core_kind(fn->type_context,
-                minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD) &&
-            abi->core_indirect_record(fn->type_context,
-                minic_core_function_return_type(fn), &indirect_bytes) &&
-            indirect_bytes > 16U;
-        consumed_gp = hidden_indirect_result ? 1U : 0U;
+        size_t consumed_gp =
+            minic_lp64_core_indirect_result(fn->type_context,
+                minic_core_function_return_type(fn), abi->core_indirect_return)
+                ? 1U : 0U;
         for (i = 0U; i < incoming->argument_count; ++i) {
             const MinicLP64ArgumentLocation *loc = &incoming->arguments[i];
             if (loc->gp_registers != 0U &&

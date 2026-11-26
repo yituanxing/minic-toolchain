@@ -34,6 +34,12 @@ static inline bool minic_lp64_core_type_float_format(
 }
 bool minic_lp64_core_valid_parameter_type(const MinicCoreTypeContext *, MinicCoreTypeId);
 bool minic_lp64_core_valid_return_type(const MinicCoreTypeContext *, MinicCoreTypeId);
+/* The target-owned return policy is the only indirect-result classifier.
+ * Unlike argument passing, result classification must never use the
+ * core_indirect_record callback if the two policies diverge. */
+bool minic_lp64_core_indirect_result(
+    const MinicCoreTypeContext *, MinicCoreTypeId,
+    MinicDirectLP64CoreIndirectRecord);
 /* A target must opt in to an actual record indirect-return convention. */
 bool minic_lp64_core_valid_return_with_indirect(
     const MinicCoreTypeContext *, MinicCoreTypeId,
