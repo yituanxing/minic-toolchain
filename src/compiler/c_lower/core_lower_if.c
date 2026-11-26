@@ -298,27 +298,6 @@ static bool core_runtime_if_pure_local_guard(
     return core_runtime_if_guard_preserves_locals_depth(context, id, 0U);
 }
 
-static MinicCoreLocalIntegerConstant *core_runtime_if_copy_facts(
-    const MinicCoreLowerContext *context) {
-    MinicCoreLocalIntegerConstant *copy;
-    size_t count;
-
-    if (context == NULL || context->source_function == NULL ||
-        context->local_integer_constants == NULL) {
-        return NULL;
-    }
-    count = context->source_function->local_count;
-    if (count == 0U || count > SIZE_MAX / sizeof(*copy)) {
-        return NULL;
-    }
-    copy = (MinicCoreLocalIntegerConstant *)malloc(count * sizeof(*copy));
-    if (copy != NULL) {
-        (void)memcpy(copy, context->local_integer_constants,
-                     count * sizeof(*copy));
-    }
-    return copy;
-}
-
 static void core_runtime_if_merge_false_fallthrough(
     MinicCoreLowerContext *context,
     const MinicCoreLocalIntegerConstant *incoming,
@@ -370,8 +349,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     MinicCoreBlockId else_continuation_block;
     MinicCoreBlockId continuation_block;
     MinicCoreLowerStatus status;
-    MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;
-    MinicCoreLocalIntegerConstant *then_exit_facts = NULL;
+    bool preserve_false_fallthrough;
     MinicCoreLocalIntegerConstant *incoming_facts = NULL;
     MinicCoreLocalIntegerConstant *branch_entry_facts = NULL;
     MinicCoreLocalIntegerConstant *then_facts = NULL;
@@ -523,13 +501,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
         }
     }
 
-    fallthrough_facts = NULL;
-    then_exit_facts = NULL;
-    if (else_source == NULL &&
+    preserve_false_fallthrough = else_source == NULL &&
         core_runtime_if_pure_local_guard(context, statement->expression) &&
-        !core_block_contains_reentry_label(context, then_source)) {
-        fallthrough_facts = core_runtime_if_copy_facts(context);
-    }
+        !core_block_contains_reentry_label(context, then_source);
     incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && incoming_facts == NULL) {
@@ -575,9 +549,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
         goto if_facts_cleanup;
     }
     then_continuation_block = context->block_id;
-    if (fallthrough_facts != NULL) {
-        then_exit_facts = core_runtime_if_copy_facts(context);
-    }
     then_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && then_facts == NULL) {
@@ -671,9 +642,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             else_source == NULL ? branch_entry_facts : else_facts,
             else_source == NULL ? true : !else_terminated);
     }
-    if (else_source == NULL) {
+    if (preserve_false_fallthrough) {
         core_runtime_if_merge_false_fallthrough(
-            context, fallthrough_facts, then_exit_facts, then_terminated);
+            context, incoming_facts, then_facts, then_terminated);
     }
     *terminated = !needs_merge;
     status = MINIC_CORE_LOWER_OK;
@@ -685,8 +656,6 @@ if_facts_cleanup:
     free(else_facts);
     free(then_facts);
     free(branch_entry_facts);
-    free(then_exit_facts);
-    free(fallthrough_facts);
     free(incoming_facts);
     return status;
 }

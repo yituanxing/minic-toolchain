@@ -109,9 +109,13 @@ typedef struct MinicInlineBooleanWrites {
 
 static bool minic_inline_boolean_write(void *opaque, MinicLocalId id,
                                        MinicDirectLocalEffect effect,
-                                       MinicExpressionId rhs) {
+                                       MinicExpressionId rhs,
+                                       MinicStatementId statement_origin,
+                                       MinicExpressionId expression_origin) {
     MinicInlineBooleanWrites *writes = opaque;
     size_t index = id;
+    (void)statement_origin;
+    (void)expression_origin;
     if (writes->only_local != MINIC_LOCAL_INVALID) {
         if (id != writes->only_local) return true;
         index = 0U;

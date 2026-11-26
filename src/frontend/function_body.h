@@ -30,7 +30,8 @@ typedef enum MinicDirectLocalEffect {
 } MinicDirectLocalEffect;
 
 typedef bool (*MinicDirectLocalEffectVisitor)(
-    void *context, MinicLocalId id, MinicDirectLocalEffect effect, MinicExpressionId rhs);
+    void *context, MinicLocalId id, MinicDirectLocalEffect effect, MinicExpressionId rhs,
+    MinicStatementId statement_origin, MinicExpressionId expression_origin);
 
 bool minic_c0_program_seed_parameter_locals(
     const MinicC0Program *program, bool *parameter, bool *stable, size_t count);

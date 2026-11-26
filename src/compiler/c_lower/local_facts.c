@@ -168,14 +168,6 @@ void minic_core_local_facts_clear_known(MinicCoreLowerContext *context) {
     }
     for (index = 0U; index < context->source_function->local_count; ++index) {
         MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
-            context->source_function->name != NULL &&
-            strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0 &&
-            fact->known) {
-            (void)fprintf(stderr, "SHMEM_FACT_EVENT event=clear local=%zu bits=%llu escaped=%d\n",
-                (size_t)(context->source_function->local_begin + index),
-                (unsigned long long)fact->value.bits, fact->escaped ? 1 : 0);
-        }
         if (fact->specialization_known && !fact->specialization_modified &&
             !fact->escaped) {
             fact->value = fact->specialization_value;
@@ -213,57 +205,37 @@ void minic_core_local_fact_revoke_entry_specialization(
     }
 }
 
-void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
-                                           MinicLocalId local_id) {
+static void core_local_fact_kill(MinicCoreLowerContext *context,
+                                 MinicLocalId local_id, bool escape) {
     size_t index;
     if (minic_core_local_fact_index(context, local_id, &index)) {
         MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
         fact->known = false;
+        fact->escaped = fact->escaped || escape;
         fact->possible_one_bits_valid = false;
         fact->nonnegative_range_valid = false;
-        /* Every entry specialization (integer, symbolic address, Boolean
-         * range) is invalid after a local write, even when no exact integer
-         * constant was seeded into this fact slot. CFG meet/restore already
-         * propagates this bit. */
+        /* All entry specializations cease to describe a written or escaped local. */
         fact->specialization_modified = true;
-        if (fact->specialization_known) {
-            if (minic_core_inline_spec_fact_trace_enabled(context)) {
-                (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=invalidate function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name
-                                  : "?",
-                              (size_t)context->source_function->specialization_source,
-                              (size_t)local_id,
-                              fact->specialization_value.bits);
-            }
+        if (fact->specialization_known && minic_core_inline_spec_fact_trace_enabled(context)) {
+            (void)fprintf(stderr,
+                          "INLINE_SPEC_FACT event=%s function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
+                          escape ? "escape" : "invalidate",
+                          context->source_function->name != NULL
+                              ? context->source_function->name : "?",
+                          (size_t)context->source_function->specialization_source,
+                          (size_t)local_id, fact->specialization_value.bits);
         }
     }
 }
 
+void minic_core_local_fact_invalidate(MinicCoreLowerContext *context,
+                                      MinicLocalId local_id) {
+    core_local_fact_kill(context, local_id, false);
+}
+
 void minic_core_local_fact_escape(MinicCoreLowerContext *context,
-                                       MinicLocalId local_id) {
-    size_t index;
-    if (minic_core_local_fact_index(context, local_id, &index)) {
-        MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        fact->known = false;
-        fact->escaped = true;
-        fact->possible_one_bits_valid = false;
-        fact->nonnegative_range_valid = false;
-        fact->specialization_modified = true;
-        if (fact->specialization_known) {
-            if (minic_core_inline_spec_fact_trace_enabled(context)) {
-                (void)fprintf(stderr,
-                              "INLINE_SPEC_FACT event=escape function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name
-                                  : "?",
-                              (size_t)context->source_function->specialization_source,
-                              (size_t)local_id,
-                              fact->specialization_value.bits);
-            }
-        }
-    }
+                                  MinicLocalId local_id) {
+    core_local_fact_kill(context, local_id, true);
 }
 
 bool minic_core_local_fact_get(const MinicCoreLowerContext *context,
