@@ -1993,6 +1993,26 @@ static bool x86_emit_source_asm(FILE *out,
             desc->locked ? "" : "  ",desc->op,desc->new_reg) >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_TESTCC) {
+        const unsigned int form = minic_x86_64_linux_gs_testcc_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (form != 1U && form != 2U) return false;
+        return fputs(form == 1U ?
+            "  btl %r11d, %gs:(%r10)\n" :
+            "  btq %r11, %gs:(%r10)\n", out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KVM_MOVDQA) {
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const bool read = form >= 1U && form <= 16U;
+        const unsigned int reg = read ? form - 1U : form - 17U;
+        if (form == 0U || form > 32U) return false;
+        return fprintf(out, read ?
+            "  movdqa (%%r10), %%xmm%u\n" :
+            "  movdqa %%xmm%u, (%%r10)\n", reg) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_TESTCC)
         /* Verified MachineIR seals the one-byte memory source, the exact
          * imm8 mask and the ZF output; SETZ/SETNZ is emitted as its
