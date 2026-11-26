@@ -11428,26 +11428,30 @@ static bool x86_source_bug_table_c(X86CoreSelector *sel,
         source,0U,bindings,4U,NULL,0U,false,false);
 }
 
-/* Scalar GNU lowercase-i qualifier: capture its immutable numeric witness
- * in a real MachineIR immediate, even though the native NOP consumes no
- * physical register. The separate verifier proves the complete instruction. */
-static bool x86_source_nop_const_i(X86CoreSelector *sel,
-    const MinicCoreInstruction *ins) {
+/* A single typed scalar immediate operand appears in both the Linux NOP
+ * and unreachable-annotation families. Core provenance, operand effects and
+ * template ownership are identical; the two callers retain their distinct
+ * immediate-value / label validation. Never treat this as generic inline asm. */
+static bool x86_source_single_integer_immediate(
+    X86CoreSelector *sel, const MinicCoreInstruction *ins, uint32_t form_id,
+    const MinicCoreInlineAsm **source_out,
+    const MinicCoreInlineAsmImmediate **immediate_out) {
     const MinicCoreInlineAsm *source;
-    const MinicCoreStructuredInlineAsmOperand *role;
-    const MinicCoreInlineAsmImmediate *immediate;
-    MinicMachineOperand binding;
-    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
+    const MinicCoreStructuredInlineAsmOperand *roles;
+    if (sel == NULL || ins == NULL || source_out == NULL ||
+        immediate_out == NULL || sel->core == NULL ||
+        ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
         ins->result != MINIC_CORE_VALUE_INVALID ||
         ins->value.structured_inline_asm.operand_count != 1U ||
         sel->core->inline_asms == NULL ||
         ins->value.structured_inline_asm.inline_asm_id >=
-            sel->core->inline_asm_count) return false;
+            sel->core->inline_asm_count)
+        return false;
     source = &sel->core->inline_asms[
         ins->value.structured_inline_asm.inline_asm_id];
-    role = ins->value.structured_inline_asm.operands;
-    if (role == NULL ||
-        source->target_machine_form_id != MINIC_X86_MACHINE_ASM_NOP_CONST_I ||
+    roles = ins->value.structured_inline_asm.operands;
+    if (roles == NULL ||
+        source->target_machine_form_id != form_id ||
         source->target_machine_form_variant != 1U ||
         source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
         source->source_asm_unique_id == 0U || !source->is_volatile ||
@@ -11455,69 +11459,59 @@ static bool x86_source_nop_const_i(X86CoreSelector *sel,
         source->explicit_memory_clobber ||
         source->register_clobber_count != 0U ||
         source->resolved_immediate_count != 1U ||
+        source->resolved_immediates == NULL ||
         source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        role[0].operand_index != 0U ||
-        role[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-        role[0].has_fixed_register_binding || role[0].early_clobber ||
-        role[0].physical_early_clobber || role[0].physical_read_write ||
-        role[0].has_tied_output ||
+        !x86_scalar_role(&roles[0], 0U,
+            MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
+        roles[0].physical_read_write || roles[0].has_tied_output ||
         !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,source->target_machine_form_variant,
-            source->template_text,source->template_length)) return false;
-    immediate = &source->resolved_immediates[0];
-    if (immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
-        immediate->symbol != NULL || immediate->asm_name != NULL) return false;
+            source->target_machine_form_id, source->target_machine_form_variant,
+            source->template_text, source->template_length))
+        return false;
+    *source_out = source;
+    *immediate_out = &source->resolved_immediates[0];
+    return true;
+}
+
+/* Scalar GNU lowercase-i: preserve exact numeric Core witness in MachineIR. */
+static bool x86_source_nop_const_i(X86CoreSelector *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreInlineAsm *source;
+    const MinicCoreInlineAsmImmediate *immediate;
+    MinicMachineOperand binding;
+    if (!x86_source_single_integer_immediate(sel, ins,
+            MINIC_X86_MACHINE_ASM_NOP_CONST_I, &source, &immediate) ||
+        immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        immediate->symbol != NULL || immediate->asm_name != NULL)
+        return false;
     binding = x86_imm(immediate->integer);
     binding.asm_constraint = "i";
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
-        source,0U,&binding,1U,NULL,0U,false,false);
+        source, 0U, &binding, 1U, NULL, 0U, false, false);
 }
 
 static bool x86_source_unreachable_annotation(X86CoreSelector *sel,
     const MinicCoreInstruction *ins) {
     const MinicCoreInlineAsm *source;
-    const MinicCoreStructuredInlineAsmOperand *role;
     const MinicCoreInlineAsmImmediate *immediate;
     MinicMachineOperand binding;
     unsigned int label;
-    if (ins->kind != MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM ||
-        ins->result != MINIC_CORE_VALUE_INVALID ||
-        ins->value.structured_inline_asm.operand_count != 1U ||
-        sel->core->inline_asms == NULL ||
-        ins->value.structured_inline_asm.inline_asm_id >=
-            sel->core->inline_asm_count) return false;
-    source = &sel->core->inline_asms[
-        ins->value.structured_inline_asm.inline_asm_id];
-    role = ins->value.structured_inline_asm.operands;
+    if (!x86_source_single_integer_immediate(sel, ins,
+            MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION,
+            &source, &immediate))
+        return false;
     label = minic_x86_64_linux_unreachable_label(
-        source->template_text,source->template_length);
-    if (!role || !label ||
-        source->target_machine_form_id !=
-            MINIC_X86_MACHINE_ASM_UNREACHABLE_ANNOTATION ||
-        source->target_machine_form_variant != 1U ||
-        source->operand_plan_owner != MINIC_ASM_OPERAND_PLAN_TARGET_QUALIFIED ||
-        source->source_asm_unique_id == 0U || !source->is_volatile ||
-        source->is_goto || source->has_memory_clobber ||
-        source->explicit_memory_clobber || source->register_clobber_count ||
-        source->resolved_immediate_count != 1U ||
-        source->goto_second_target != MINIC_CORE_BLOCK_INVALID ||
-        role[0].operand_index != 0U ||
-        role[0].kind != MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT ||
-        role[0].has_fixed_register_binding || role[0].early_clobber ||
-        role[0].physical_early_clobber || role[0].physical_read_write ||
-        role[0].has_tied_output ||
-        !minic_x86_64_typed_machine_form_matches_template(
-            source->target_machine_form_id,source->target_machine_form_variant,
-            source->template_text,source->template_length)) return false;
-    immediate = &source->resolved_immediates[0];
-    if (immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
+        source->template_text, source->template_length);
+    if (!label ||
+        immediate->kind != MINIC_CORE_INLINE_ASM_IMMEDIATE_INTEGER ||
         immediate->integer != (long long)label ||
-        immediate->symbol || immediate->asm_name ||
-        immediate->byte_addend) return false;
+        immediate->symbol != NULL || immediate->asm_name != NULL ||
+        immediate->byte_addend != 0)
+        return false;
     binding = x86_imm(immediate->integer);
     binding.asm_constraint = "i";
     return minic_machine_builder_emit_core_source_asm(&sel->builder,
-        source,0U,&binding,1U,NULL,0U,false,false);
+        source, 0U, &binding, 1U, NULL, 0U, false, false);
 }
 
 static bool x86_source_accumulator_math(X86CoreSelector *sel,
