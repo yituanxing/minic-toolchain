@@ -1111,7 +1111,7 @@ static bool x86_linux_muldiv_u64_source(const MinicTargetInvocation *invocation,
     if (!program || !source || !contract ||
         !minic_x86_64_linux_muldiv_u64_form(
             source->template_text, source->template_length) ||
-        source->is_volatile || source->is_goto || source->label_count ||
+        source->is_goto || source->label_count ||
         source->output_count != 1U || source->input_count != 3U ||
         !source->outputs || !source->inputs || source->has_memory_clobber ||
         source->clobber_count != 1U || source->register_clobber_count != 1U ||
@@ -3846,7 +3846,6 @@ static bool qualified(const MinicC0Program *program,
     bool generic = false;
     bool cpuid = false;
     bool bit_scan = false;
-    bool is_muldiv = false;
     MinicX86BitScanForm bit_form = MINIC_X86_BIT_SCAN_NONE;
     MinicType normalized;
     if (!program || !src || !src->template_text || !src->outputs ||
@@ -3890,16 +3889,6 @@ static bool qualified(const MinicC0Program *program,
                 !c_is(&src->inputs[i], mul_in[i])) return false;
         if (!c_is(&src->inputs[3], "a") ||
             !c_is(&src->inputs[4], "m")) return false;
-    } else if (src->output_count == 1U && src->input_count == 3U &&
-               src->clobber_count == 1U && src->register_clobber_count == 1U &&
-               !src->has_memory_clobber && src->register_clobbers &&
-               clobber_is(&src->register_clobbers[0], "rdx") &&
-               minic_x86_64_asm_muldiv_template(src->template_text, src->template_length) &&
-               c_is(&src->outputs[0], "=a") &&
-               c_is(&src->inputs[0], "a") &&
-               c_is(&src->inputs[1], "rm") &&
-               c_is(&src->inputs[2], "rm")) {
-        is_muldiv = true;
     } else if (src->output_count == 1U && src->input_count >= 1U &&
                !src->has_memory_clobber &&
                src->clobber_count == 0U && src->register_clobber_count == 0U &&
@@ -3950,13 +3939,9 @@ static bool qualified(const MinicC0Program *program,
                 ? minic_type_unsigned_long() : minic_type_unsigned_int();
         if (!expr || !minic_type_unqualified(expr->type, &normalized) ||
             (bit_scan ? !x86_bit_scan_operand_type(bit_form, i, normalized)
-                      : (is_muldiv
-                           ? (!minic_type_equal(normalized, minic_type_unsigned_long()) &&
-                              !minic_type_equal(normalized, minic_type_unsigned_long_long()))
-                           : generic
-                               ? (!minic_type_is_integer(normalized) &&
-                                  !minic_type_is_pointer(normalized))
-                               : !minic_type_equal(normalized, target_type))) ||
+                      : (generic ? (!minic_type_is_integer(normalized) &&
+                                     !minic_type_is_pointer(normalized))
+                                 : !minic_type_equal(normalized, target_type))) ||
             (is_output && (expr->value_category != MINIC_VALUE_LVALUE ||
                            minic_type_is_const(expr->type))) ||
             (*is_mulacc && i == 7U &&
@@ -3975,8 +3960,6 @@ static bool qualified(const MinicC0Program *program,
     } else if (*is_mulacc) {
         contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_MULACC_MATCHED;
         contract->target_machine_form_variant = 1U;
-    } else if (is_muldiv) {
-        contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_MULDIV_U64;
     } else if (bit_scan) {
         contract->target_machine_form_id = MINIC_X86_MACHINE_ASM_BITSCAN_MATCHED;
         contract->target_machine_form_variant = (uint32_t)bit_form;
