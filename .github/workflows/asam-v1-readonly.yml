@@ -1,0 +1,52 @@
+name: ASAM v1 read-only runner trial
+
+on:
+  push:
+    branches:
+      - experiment/asam-v1-runner-20261128
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-v1-readonly.yml'
+  pull_request:
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-v1-readonly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Real MiniC C source inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out workflow revision
+        uses: actions/checkout@v4
+
+      - name: Install deterministic C symbol indexer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends universal-ctags
+          ctags --version
+
+      - name: Verify scanner on synthetic C input
+        run: |
+          python3 -m py_compile tools/asam/scan.py tools/asam/selftest.py
+          python3 tools/asam/selftest.py
+
+      - name: Scan real x86-64 compiler sources
+        run: |
+          python3 tools/asam/scan.py --repo . \
+            --scope src/target/x86_64 --output asam-out
+          cat asam-out/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-v1-minic-x86-readonly
+          path: asam-out/
+          if-no-files-found: warn
+          retention-days: 14
