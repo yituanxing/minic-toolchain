@@ -32,9 +32,6 @@ typedef struct MinicX86Frame {
     const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
     MinicX86ArgumentPlan incoming_arguments;
     MinicX86OutgoingCallPlans outgoing_call_plans;
-    /* Borrowed for the duration of this function emission. Target machine
-     * location planning remains x86-owned and consumes semantic CALL views. */
-    const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
     size_t frame_size;
     /* Before early x86 kernel page tables are installed, a .head.text C
@@ -75,7 +72,7 @@ typedef struct MinicX86Frame {
     /* SysV x86-64 va_list: gp_offset / fp_offset / overflow / reg_save.
      * Each va_start owns its own 24-byte cursor tag, while the incoming
      * argument registers have one shared 176-byte save area per function. */
-    MinicCoreValueId *varargs_results;
+    const MinicCoreValueId *varargs_results; /* borrowed from prepared Core facts */
     size_t varargs_count;
     size_t varargs_regsave_offset;
     size_t varargs_tag_base_offset;

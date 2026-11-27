@@ -105,11 +105,11 @@ typedef struct LoongSelector {
      * control transfers; the physical continuation still lives in t6. */
     LoongMemoryRoute *memory_routes;
     LoongMemoryHelper *memory_helpers;
-    bool *reachable;
+    const bool *reachable;
     /* Only Core-proven single-use stack address producers consumed through
      * the target's exact direct-frame LOAD/STORE path. */
     bool *folded_direct_addresses;
-    size_t *ssa_use_counts;
+    const size_t *ssa_use_counts;
     LoongSSAWriteback *ssa_writebacks;
     size_t ssa_writeback_count;
     size_t ssa_writeback_capacity;
@@ -674,11 +674,10 @@ static bool loong_static_frame_address(const LoongSelector *sel,
 
 static bool loong_prepare_direct_frame_address_consumers(LoongSelector *sel) {
     const MinicCoreFunction *fn = sel->ctx->fn;
-    size_t *uses = sel->ssa_use_counts;
+    const size_t *uses = sel->ssa_use_counts;
     size_t i;
     if (fn->value_count == 0U) return true;
-    if (uses == NULL || !minic_core_function_value_use_counts(
-            fn, uses, fn->value_count)) return false;
+    if (uses == NULL) return false;
     for (i = 0U; i < fn->instruction_count; ++i) {
         const MinicCoreInstruction *ins = &fn->instructions[i];
         MinicCoreValueId address;
@@ -4765,13 +4764,9 @@ static bool loong_select_core(LoongSelector *sel,
     size_t offset, bytes;
     MinicCoreValueId base;
     switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER: {
-        MinicDirectMachineInstructionShape shape = {0};
-        return minic_multi_direct_machine_instruction_shape(fn, ins,
-                   false, &shape) &&
-            shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER &&
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return minic_multi_direct_compiler_barrier_shape(fn, ins) &&
             minic_machine_builder_emit_compiler_barrier(&sel->builder);
-    }
     case MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM:
         if (fn->inline_asms != NULL &&
             ins->value.inline_asm_id < fn->inline_asm_count &&
@@ -5460,6 +5455,9 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
         ctx->target == NULL || ctx->fn == NULL ||
         ctx->fn->type_context == NULL || ctx->machine_frame == NULL ||
         ctx->frame_plan == NULL || ctx->name == NULL ||
+        !minic_core_function_facts_verified(ctx->core_facts, ctx->fn) ||
+        ctx->core_facts->reachable_blocks == NULL ||
+        ctx->core_facts->value_use_counts == NULL ||
         ctx->target->architecture != MINIC_TARGET_ARCH_LOONGARCH64)
         return false;
     fn = ctx->fn;
@@ -5486,6 +5484,8 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     machine->has_dynamic_stack = frame->has_dynamic_stack;
     machine->calling_convention = MINIC_CALLING_CONVENTION_DEFAULT;
     sel.ctx = ctx;
+    sel.reachable = ctx->core_facts->reachable_blocks;
+    sel.ssa_use_counts = ctx->core_facts->value_use_counts;
     asm_slots = (fn->instruction_count != 0U
         ? fn->instruction_count : 1U) * LOONG_ASM_TRANSFER_SLOTS;
     sel.block_ids = malloc(count * sizeof(*sel.block_ids));
@@ -5517,13 +5517,9 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
         ? fn->instruction_count : 1U) * 2U, sizeof(*sel.memory_routes));
     sel.memory_helpers = calloc(count * LOONG_HELPER_COUNT,
         sizeof(*sel.memory_helpers));
-    sel.reachable = calloc(count, sizeof(*sel.reachable));
     sel.folded_direct_addresses = calloc(
         fn->value_count != 0U ? fn->value_count : 1U,
         sizeof(*sel.folded_direct_addresses));
-    sel.ssa_use_counts = calloc(
-        fn->value_count != 0U ? fn->value_count : 1U,
-        sizeof(*sel.ssa_use_counts));
     if (sel.block_ids == NULL || sel.aux_true == NULL ||
         sel.aux_false == NULL || sel.alloc_trap == NULL ||
         sel.alloc_continue == NULL || sel.u64_high == NULL ||
@@ -5549,13 +5545,6 @@ bool minic_loongarch64_select_machine(MinicMachineFunction *machine,
     for (i = 0U; i < asm_slots; ++i)
         sel.asm_write_slow[i] = sel.asm_write_native[i] =
             sel.asm_write_done[i] = SIZE_MAX;
-    if (minic_core_function_facts_verified(ctx->core_facts, fn) &&
-        ctx->core_facts->reachable_blocks != NULL)
-        memcpy(sel.reachable, ctx->core_facts->reachable_blocks,
-               count * sizeof(*sel.reachable));
-    else if (!minic_core_function_mark_reachable_blocks(fn,
-                 sel.reachable, count)) goto cleanup;
-
     /* The first physical block is exclusively the function prologue. A
      * computed-goto to Core block0 must NEVER repeat callee saves / SP
      * adjustment. Preserve physical block adjacency for cond fallthrough. */
@@ -5723,9 +5712,7 @@ cleanup:
     free(sel.goto_continue);
     free(sel.memory_routes);
     free(sel.memory_helpers);
-    free(sel.reachable);
     free(sel.folded_direct_addresses);
-    free(sel.ssa_use_counts);
     free(sel.ssa_writebacks);
     return success;
 }

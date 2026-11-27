@@ -56,7 +56,6 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     (void)memset(frame, 0, sizeof(*frame));
-    frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
             fn, &frame->incoming_arguments))
         return x86_frame_preflight_reject(fn, "incoming-abi");
@@ -69,6 +68,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
             fn, storage, &frame->object_storage))
         return x86_frame_preflight_reject(fn, "object-storage");
     frame->varargs_count = facts->variadic_address_count;
+    frame->varargs_results = facts->variadic_address_results;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
     /* Core's proven block-local last-use allocator supplies offsets from
@@ -159,7 +159,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     if (frame->varargs_count != 0U) {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
             MINIC_CALLING_CONVENTION_DEFAULT);
-        size_t count = 0U, gp_used, fp_used, stack_used;
+        size_t gp_used, fp_used, stack_used;
         size_t save_gp_bytes, save_fp_bytes, save_bytes;
         if (abi == NULL || abi->gp_argument_count > SIZE_MAX / 8U ||
             abi->fp_argument_count > SIZE_MAX / 16U)
@@ -168,18 +168,12 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         save_fp_bytes = abi->fp_argument_count * 16U;
         if (save_gp_bytes > SIZE_MAX - save_fp_bytes) return false;
         save_bytes = save_gp_bytes + save_fp_bytes;
-        if (frame->varargs_count > SIZE_MAX / sizeof(*frame->varargs_results) ||
-            (frame->varargs_results = (MinicCoreValueId *)calloc(
-                 frame->varargs_count, sizeof(*frame->varargs_results))) == NULL)
-            return false;
         /* Each va_start result is indexed once by the prepared Core owner. */
-        if (facts->variadic_address_results == NULL) return false;
+        if (frame->varargs_count > SIZE_MAX / sizeof(*frame->varargs_results) ||
+            frame->varargs_results == NULL) return false;
         for (i = 0U; i < frame->varargs_count; ++i) {
-            const MinicCoreValueId result = facts->variadic_address_results[i];
-            if (result >= fn->value_count) return false;
-            frame->varargs_results[count++] = result;
+            if (frame->varargs_results[i] >= fn->value_count) return false;
         }
-        if (count != frame->varargs_count) return false;
         /* The single SysV planner has already classified *all* named
          * parameters, including aggregates and empty GNU records. The
          * cursor below is therefore the ABI ground truth for va_start;
@@ -302,7 +296,6 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
     minic_x86_64_outgoing_call_plans_destroy(&frame->outgoing_call_plans);
-    free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }
 

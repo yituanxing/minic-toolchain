@@ -1080,7 +1080,8 @@ static bool x86_no_sse_fp_type(const MinicCoreFunction *fn,
  * reachable floating ABI/operations until x86 has a genuine soft-FP path.
  * Do not reject unused floating declarations or unreachable lexical arms. */
 static bool x86_no_sse_function_safe(
-    const MinicCoreFunction *fn, const bool *reachable) {
+    const MinicCoreFunction *fn, const bool *reachable,
+    const MinicCoreCallIndex *calls) {
     size_t i, j;
     if (fn == NULL || fn->type_context == NULL ||
         (minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL))
@@ -1104,16 +1105,17 @@ static bool x86_no_sse_function_safe(
                 return false;
             if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-                MinicCoreCallView call;
-                size_t k;
-                if (!minic_core_call_view_build(fn, ins, &call) ||
-                    (call.parameter_count != 0U &&
-                     call.core_parameter_type_ids == NULL) ||
-                    x86_no_sse_fp_type(fn, call.core_return_type_id))
+                const MinicCoreCallView *call;
+                size_t k, ordinal;
+                call = minic_core_call_index_find(calls, id, &ordinal);
+                if (call == NULL ||
+                    (call->parameter_count != 0U &&
+                     call->core_parameter_type_ids == NULL) ||
+                    x86_no_sse_fp_type(fn, call->core_return_type_id))
                     return false;
-                for (k = 0U; k < call.parameter_count; ++k)
+                for (k = 0U; k < call->parameter_count; ++k)
                     if (x86_no_sse_fp_type(fn,
-                            call.core_parameter_type_ids[k]))
+                            call->core_parameter_type_ids[k]))
                         return false;
             }
         }
@@ -1182,7 +1184,7 @@ static bool x86_emit_function(FILE *out,
         goto done;
     }
     if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
-        !x86_no_sse_function_safe(fn, reachable)) {
+        !x86_no_sse_function_safe(fn, reachable, facts->call_index)) {
         x86_error(diag, path,
                   "x86-64 -mno-sse rejects reachable floating ABI or operation");
         goto done;

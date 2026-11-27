@@ -160,7 +160,7 @@ static const MinicTargetSourceDescriptor minic_source_loongarch64 = {
 /* Stable source registry keyed by the very same target catalog order.
  * C type identities are calculated once and never rebuilt by machine code. */
 static const MinicTargetSourceDescriptor *const minic_target_source_descriptors[] = {
-#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages) \
     &minic_source_##id,
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION

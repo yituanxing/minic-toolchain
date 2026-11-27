@@ -99,6 +99,10 @@ bool minic_multi_direct_pointer_offset_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t maximum_stride, size_t *index_width, bool *index_signed);
 
+/* Shared Core shape for compiler barriers in direct LP64 emitters. */
+bool minic_multi_direct_compiler_barrier_shape(
+    const MinicCoreFunction *, const MinicCoreInstruction *);
+
 /* Scalar integer binary families keep their existing ABI width rules. */
 bool minic_multi_direct_integer_binary_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
@@ -120,35 +124,5 @@ bool minic_multi_direct_scalar_store_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     size_t *width, bool *is_signed, bool *is_pointer);
 
-
-/* Common checked Core dispatch outcome. Actual register width, memory
- * transport, opcode and ABI remain independently owned by each ISA. */
-typedef enum MinicDirectMachineFamily {
-    MINIC_DIRECT_MACHINE_COMPILER_BARRIER,
-    MINIC_DIRECT_MACHINE_RECORD_COPY,
-    MINIC_DIRECT_MACHINE_RECORD_LOAD,
-    MINIC_DIRECT_MACHINE_PARAMETER_OBJECT,
-    MINIC_DIRECT_MACHINE_MEMORY,
-    MINIC_DIRECT_MACHINE_FP,
-    MINIC_DIRECT_MACHINE_INTEGER,
-    MINIC_DIRECT_MACHINE_ABI,
-    MINIC_DIRECT_MACHINE_RESIDUAL
-} MinicDirectMachineFamily;
-typedef struct MinicDirectMachineInstructionShape {
-    MinicDirectMachineFamily family;
-    size_t result_offset;
-    /* Optional block-local SSA transport: target-owned physical GP result
-     * of the immediately preceding scalar operation supplies this lhs. */
-    bool lhs_in_previous_gp;
-    /* Machine-provided proof for elided address producers, cached during
-     * Common block planning to avoid repeating target's full use scan. */
-    bool native_opcode_presence_checked;
-    bool emits_no_native_opcode;
-} MinicDirectMachineInstructionShape;
-
-bool minic_multi_direct_machine_instruction_shape(
-    const MinicCoreFunction *, const MinicCoreInstruction *,
-    bool allow_variadic_double_result,
-    MinicDirectMachineInstructionShape *);
 
 #endif

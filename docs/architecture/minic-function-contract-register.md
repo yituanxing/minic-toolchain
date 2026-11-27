@@ -532,7 +532,6 @@
 | `F5-M24` `minic_core_object_interval` — 同上 | R 单个 Object 的类型、尺寸、对齐、地址用途；只有宽度≤物理 unit 且全局索引已建立的候选可复用，其他返回成功但 `reusable=false`，与整个 Frame 失败分开。 | R2/U2/E1 |
 | `F5-M25` `minic_core_object_reuse_plan_build` — `target/common/core_object_reuse.c` | R scalar interval proof，OWN slot-array 和 intervals；按已证明的区间冲突逐个分配 slot，失败清整份计划。当前是保守 O(objects×slots×prior) 配色，**性能成本另审，不是已证 wrong-code**。 | R2/U2/E1 |
 | `F5-M26` `minic_core_object_reuse_plan_get` / `_destroy` — 同上 | getter 借 prepared plan，返回对象是否 reusable/slot/peak；destroy 释放分析索引与全部 owned 表。RV32/RV64 frame 真正消费该计划，其他目标不得虚称已启用。 | R2/U2/E1 |
-| `F5-M27` `minic_multi_direct_machine_instruction_shape` — `target/common/direct_instruction_semantics.c` | R Core opcode/value kind，W caller machine family/result slot；对 ASM/effect-only 不虚造 SSA，A64/Loong 机器 emitter 仍须各自再次认证机器编码。 | R2/U2/E1 |
 | `F5-M28` `minic_multi_direct_record_copy_extent` / `_record_load_extent` — 同上 | R Record identity、source address、volatile 和 DataLayout，返回 byte extent及 frame destination；以 16 MiB 限制阻止无界 copy，而不在 Core 写死目标小指令展开上限。 | R2/U2/E1 |
 
 **第五轮 Common 分片结论：** `CoreFunctionPlan` 是五目标共用的一次性 ABI-neutral owner；A64/Loong `LP64` 同处只表示共享**策略化调用位置规划**，不表示两 ISA 共用同一物理指令生成或完全相同的 ABI。RV32/RV64 object reuse 的旧全扫描已无独立慢路径消费者，而 Compiler 的 legacy inline fallback 仍是另一项真实语义。当前没有依据把这些活跃保守实现直接删掉。

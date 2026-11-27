@@ -27,7 +27,7 @@ typedef struct RvCoreSelection {
     MinicMachineBuilder builder;
     const MinicRiscvCoreMachinePlan *plan;
     unsigned xlen;
-    bool *reachable;
+    const bool *reachable;
     size_t *core_blocks;
     size_t *far_entries;
     size_t *conditional_fallthroughs;
@@ -4091,6 +4091,7 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
 
 static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
     const MinicRiscvCoreMachinePlan *plan,
+    const MinicCoreFunctionFacts *facts,
     bool defer_physical_preflight) {
     RvCoreSelection sel = {0};
     MinicRiscvIsa isa = {0};
@@ -4109,7 +4110,8 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
         (target = plan->target)->data_layout == NULL ||
         (core = plan->core)->name == NULL || core->block_count == 0U ||
         core->entry_block >= core->block_count || core->blocks == NULL ||
-        !minic_core_function_verify(core) ||
+        !minic_core_function_facts_verified(facts, core) ||
+        facts->reachable_blocks == NULL ||
         !minic_riscv_target_isa_load(target, &isa) ||
         (isa.xlen != 32U && isa.xlen != 64U) ||
         (isa.xlen == 32U
@@ -4159,12 +4161,12 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
     machine->has_dynamic_stack = frame->has_dynamic_stack;
     sel.plan = plan;
     sel.xlen = isa.xlen;
+    sel.reachable = facts->reachable_blocks;
     reject_phase = "builder_alloc";
     if (!minic_machine_builder_initialize(&sel.builder, machine)) goto done;
     if (core->block_count > SIZE_MAX / sizeof(*sel.core_blocks)) goto done;
     sel.core_blocks = calloc(core->block_count, sizeof(*sel.core_blocks));
     sel.far_entries = calloc(core->block_count, sizeof(*sel.far_entries));
-    sel.reachable = calloc(core->block_count, sizeof(*sel.reachable));
     sel.conditional_fallthroughs = malloc(
         core->block_count * sizeof(*sel.conditional_fallthroughs));
     sel.conditional_others = malloc(
@@ -4195,8 +4197,6 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
         sel.dynamic_overflow[i] = SIZE_MAX;
         sel.asm_goto_continuations[i] = SIZE_MAX;
     }
-    if (!minic_core_function_mark_reachable_blocks(
-            core, sel.reachable, core->block_count)) goto done;
     reject_phase = "block_map";
     if (!minic_machine_builder_create_block(&sel.builder,
         NULL, false, true, &id) || id != 0U) goto done;
@@ -4339,7 +4339,6 @@ done:
             reject_terminator_kind);
     free(sel.core_blocks);
     free(sel.far_entries);
-    free(sel.reachable);
     free(sel.conditional_fallthroughs);
     free(sel.conditional_others);
     free(sel.dynamic_check2);
@@ -4354,6 +4353,7 @@ done:
 
 
 bool minic_riscv_machine_select_core_for_production(
-    MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan) {
-    return riscv_machine_select_core_impl(machine, plan, true);
+    MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan,
+    const MinicCoreFunctionFacts *facts) {
+    return riscv_machine_select_core_impl(machine, plan, facts, true);
 }

@@ -3,6 +3,7 @@
 
 #include "core/core_ir.h"
 #include "core/module_ir.h"
+#include "target/common/core_function_facts.h"
 #include "target/riscv/machine_frame_select.h"
 #include "target/riscv32/rv32_abi_plan.h"
 #include "target/riscv64/function_abi_plan.h"
@@ -42,6 +43,6 @@ typedef struct MinicRiscvCoreMachinePlan {
  * immediately following production_preflight_prepare before ELF output.
  * Production callers must commit the prepared verification gate. */
 bool minic_riscv_machine_select_core_for_production(MinicMachineFunction *,
-    const MinicRiscvCoreMachinePlan *);
+    const MinicRiscvCoreMachinePlan *, const MinicCoreFunctionFacts *);
 
 #endif

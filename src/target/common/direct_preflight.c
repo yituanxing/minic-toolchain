@@ -132,8 +132,7 @@ bool minic_multi_direct_lp64_function_preflight(
     if (module_decl == NULL || fn == NULL ||
         fn->type_context == NULL ||
         arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
-    verified = minic_core_function_facts_verified(facts, fn) ||
-               minic_core_function_verify(fn);
+    verified = minic_core_function_facts_verified(facts, fn);
     return_valid = minic_lp64_core_valid_return_with_policy(
         fn->type_context, minic_core_function_return_type(fn), abi);
     visibility_valid =

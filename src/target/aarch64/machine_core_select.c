@@ -41,7 +41,7 @@ typedef struct A64CoreSelection {
     size_t *blocks;
     size_t *false_blocks;
     size_t *true_blocks;
-    bool *reachable;
+    const bool *reachable;
     size_t *goto_emit;
     size_t *goto_continue;
     size_t *dynamic_continuation;
@@ -5335,13 +5335,9 @@ static bool a64_core_instruction(A64CoreSelection *sel,
     size_t width;
     bool sign, ptr;
     switch (ins->kind) {
-    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER: {
-        MinicDirectMachineInstructionShape shape = {0};
-        return minic_multi_direct_machine_instruction_shape(fn, ins,
-                   false, &shape) &&
-            shape.family == MINIC_DIRECT_MACHINE_COMPILER_BARRIER &&
+    case MINIC_CORE_INSTRUCTION_COMPILER_BARRIER:
+        return minic_multi_direct_compiler_barrier_shape(fn, ins) &&
             minic_machine_builder_emit_compiler_barrier(&sel->builder);
-    }
     case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
     case MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR:
     case MINIC_CORE_INSTRUCTION_VARIADIC_COPY:
@@ -5991,16 +5987,18 @@ static bool a64_machine_select_core_impl(
     if (machine == NULL || ctx == NULL || ctx->target == NULL ||
         ctx->target->architecture != MINIC_TARGET_ARCH_AARCH64 ||
         ctx->fn == NULL || ctx->module == NULL || ctx->frame_plan == NULL ||
-        ctx->machine_frame == NULL || ctx->name == NULL) return false;
+        ctx->machine_frame == NULL || ctx->name == NULL ||
+        !minic_core_function_facts_verified(ctx->core_facts, ctx->fn) ||
+        ctx->core_facts->reachable_blocks == NULL) return false;
     fn = ctx->fn;
     count = fn->block_count;
     if (count == 0U || count > SIZE_MAX / sizeof(size_t) ||
         fn->entry_block >= count || fn->blocks == NULL) return false;
     sel.ctx = ctx;
+    sel.reachable = ctx->core_facts->reachable_blocks;
     sel.blocks = malloc(count * sizeof(*sel.blocks));
     sel.false_blocks = malloc(count * sizeof(*sel.false_blocks));
     sel.true_blocks = malloc(count * sizeof(*sel.true_blocks));
-    sel.reachable = calloc(count, sizeof(*sel.reachable));
     if (fn->instruction_count > SIZE_MAX / sizeof(size_t))
         goto cleanup;
     sel.goto_emit = malloc((fn->instruction_count != 0U ?
@@ -6038,12 +6036,6 @@ static bool a64_machine_select_core_impl(
     for (i = 0U; i < fn->instruction_count; ++i)
         sel.variadic_blocks[i] = (A64VariadicBlocks){SIZE_MAX,
             SIZE_MAX, SIZE_MAX, SIZE_MAX};
-    if (ctx->core_facts != NULL &&
-        ctx->core_facts->reachable_blocks != NULL)
-        memcpy(sel.reachable, ctx->core_facts->reachable_blocks,
-            count * sizeof(*sel.reachable));
-    else if (!minic_core_function_mark_reachable_blocks(fn,
-        sel.reachable, count)) goto cleanup;
     if (!sel.reachable[fn->entry_block]) goto cleanup;
     machine->frame_size = ctx->machine_frame->frame_size;
     /* The machine frame records physical SP subtraction alignment, which
@@ -6193,7 +6185,6 @@ cleanup:
     free(sel.blocks);
     free(sel.false_blocks);
     free(sel.true_blocks);
-    free(sel.reachable);
     free(sel.goto_emit);
     free(sel.goto_continue);
     free(sel.dynamic_continuation);

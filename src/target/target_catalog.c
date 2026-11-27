@@ -7,8 +7,8 @@
  * MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER. No driver may infer a
  * staged toolchain merely from a target with equivalent integer widths. */
 static const MinicTargetCatalogEntry minic_targets[] = {
-#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
-    {arch, spelling, stages, isa},
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages) \
+    {arch, spelling, stages},
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION
 };

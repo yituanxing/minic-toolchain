@@ -87,7 +87,7 @@ static const MinicTargetMachineDescriptor minic_machine_loongarch64 = {
 /* This is the one machine registration order, shared with the driver and
  * independently maintained source-language registry through the catalog. */
 static const MinicTargetMachineDescriptor *const minic_target_machine_descriptors[] = {
-#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages) \
     &minic_machine_##id,
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION

@@ -37,7 +37,7 @@ static const MinicSourceBackend loongarch64_source_backend = {
 };
 
 static const MinicSourceBackend *const registered_source_backends[] = {
-#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages) \
     &id##_source_backend,
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION

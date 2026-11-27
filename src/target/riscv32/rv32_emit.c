@@ -93,7 +93,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
             };
             reject_stage = "select";
             admitted = minic_riscv_machine_select_core_for_production(
-                &machine, &bridge);
+                &machine, &bridge, facts);
             if (admitted) {
                 reject_stage = "policy";
                 admitted = minic_riscv_machine_gnu_asm_policy(target, &policy);

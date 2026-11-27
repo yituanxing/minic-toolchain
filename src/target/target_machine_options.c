@@ -14,7 +14,7 @@ typedef struct MinicRegisteredMachineOptions {
 } MinicRegisteredMachineOptions;
 
 static const MinicRegisteredMachineOptions registered_policies[] = {
-#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages, isa) \
+#define MINIC_TARGET_REGISTRATION(arch, id, spelling, stages) \
     MINIC_MACHINE_OPTIONS_##id,
 #include "target/target_registration.def"
 #undef MINIC_TARGET_REGISTRATION
