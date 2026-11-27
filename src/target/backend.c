@@ -1,6 +1,5 @@
 #include "target/backend.h"
 #include "core/module_ir.h"
-#include "target/common/program_emit.h"
 
 #include "target/riscv64/codegen.h"
 #include "target/riscv32/rv32_emit.h"
@@ -60,8 +59,7 @@ bool minic_backend_emit_assembly_with_module(
     MinicDiagnostic *diagnostic) {
     if (backend == NULL || target == NULL || module == NULL ||
         backend != minic_backend_for_target(target) ||
-        backend->emit_module == NULL ||
-        !minic_program_emit_module_preflight(module, functions, function_count))
+        backend->emit_module == NULL)
         return false;
     return backend->emit_module(output_path, target,
         functions, function_count, function_sections, module, diagnostic);
