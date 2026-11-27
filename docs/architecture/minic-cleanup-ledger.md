@@ -52,11 +52,16 @@
 `src/target/common/direct_function_profile.h`,
 `src/target/riscv64/codegen_function.c`,
 `src/target/riscv64/frame_layout.c`, `src/target/riscv64/frame_layout.h`,
+`src/target/riscv64/record_snapshot.c`,
+`tools/ci/minic-bootstrap-current-b1-seed-v1.py`,
 `tests/core/core_type_context_test.c`, `tests/frontend/lexer_test.c`,
 `tests/frontend/token_model_test.c`, `tests/frontend/token_names.c`,
 `tests/frontend/token_names.h`, `tests/frontend/type_test.c`,
 `tests/compiler/c0/native-matrix.json`,
 `tests/compiler/bootstrap/b0-sources.txt`, `Makefile`。
+
+本轮同步修订的文档：`tests/driver/validation-lanes.md`、
+`tests/preprocessor/validation-lanes.md` 和本台账文件本身。
 
 已删除的文件：
 
