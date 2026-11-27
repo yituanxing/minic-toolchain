@@ -11,7 +11,6 @@
 typedef struct MinicCoreFunctionFacts {
     size_t direct_call_count;
     size_t indirect_call_count;
-    size_t max_call_arity; /* max source arguments, not ABI stack slots */
     /* Visitor-owned, immutable semantic views for each Core CALL. */
     const MinicCoreCallIndex *call_index;
     /* Successful canonical verifier proof for this immutable definition. */

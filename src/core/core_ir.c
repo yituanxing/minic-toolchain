@@ -754,6 +754,9 @@ bool minic_core_function_object_layout(const MinicCoreFunction *function,
     if (function == NULL || size == NULL || alignment == NULL ||
         object_id >= function->object_count || function->objects == NULL) return false;
     object = &function->objects[object_id];
+    if (object->explicit_alignment != 0U &&
+        (object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U)
+        return false;
     type = minic_core_function_type_get(function, object->core_type_id);
     if (type == NULL || !type->has_layout || type->alignment == 0U) return false;
     object_size = type->size;

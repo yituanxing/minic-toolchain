@@ -21,7 +21,6 @@ void minic_core_function_plan_destroy(
 bool minic_core_function_plan_build(
     const MinicCoreFunction *function, MinicCoreFunctionPlan *plan) {
     if (plan == NULL || function == NULL || function->type_context == NULL ||
-        plan->prepared ||
         plan->calls.sites != NULL || plan->objects.objects != NULL ||
         plan->variadic_results != NULL || plan->reachable_blocks != NULL ||
         plan->value_use_counts != NULL)
@@ -56,6 +55,5 @@ bool minic_core_function_plan_build(
     plan->facts.verified_function = function;
     plan->facts.reachable_blocks = plan->reachable_blocks;
     plan->facts.value_use_counts = plan->value_use_counts;
-    plan->prepared = true;
     return true;
 }

@@ -296,8 +296,7 @@ bool minic_x86_64_machine_select_prologue(MinicMachineBuilder *builder,
     }
     *out = (MinicX86MachinePrologue){
         .entry_block = entry,
-        .continuation_block = use_fp_spill ? ready : entry,
-        .has_variadic_fp_split = use_fp_spill};
+        .continuation_block = use_fp_spill ? ready : entry};
     return true;
 }
 

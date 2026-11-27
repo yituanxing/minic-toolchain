@@ -77,7 +77,6 @@ bool minic_x86_64_machine_frame_view(const struct MinicX86Frame *,
 typedef struct MinicX86MachinePrologue {
     size_t entry_block;
     size_t continuation_block;
-    bool has_variadic_fp_split;
 } MinicX86MachinePrologue;
 
 /* Creates a separate Machine entry block for the ABI prologue, never the

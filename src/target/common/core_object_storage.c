@@ -3,37 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static bool core_object_storage_checked_shape(
-    const MinicCoreObject *object, size_t size, size_t alignment,
-    MinicCoreObjectStorage *result) {
-    if (object == NULL || result == NULL ||
-        alignment == 0U || (alignment & (alignment - 1U)) != 0U)
-        return false;
-    if (object->explicit_alignment != 0U) {
-        if ((object->explicit_alignment & (object->explicit_alignment - 1U)) != 0U)
-            return false;
-        if (object->explicit_alignment > alignment)
-            alignment = object->explicit_alignment;
-    }
-    /* The complete CoreType owns the entire object extent, including arrays.
-     * CoreObject must not re-apply a second declarator repetition factor. */
-    result->extent = size;
-    result->alignment = alignment;
-    return true;
-}
-
-bool minic_core_object_storage_resolved(const MinicCoreTypeContext *types,
-                                        const MinicCoreObject *object,
-                                        MinicCoreObjectStorage *result) {
-    const MinicCoreType *type;
-    if (object == NULL || result == NULL ||
-        (type = minic_core_type_get(types, object->core_type_id)) == NULL ||
-        !type->has_layout)
-        return false;
-    return core_object_storage_checked_shape(
-        object, type->size, type->alignment, result);
-}
-
 bool minic_core_object_storage_plan_build(
     const MinicCoreFunction *function, MinicCoreObjectStoragePlan *plan) {
     size_t i;
@@ -47,12 +16,14 @@ bool minic_core_object_storage_plan_build(
     plan->objects = (MinicCoreObjectStorage *)calloc(
         function->object_count, sizeof(*plan->objects));
     if (plan->objects == NULL) return false;
-    for (i = 0U; i < function->object_count; ++i)
-        if (!minic_core_object_storage_resolved(
-                function->type_context, &function->objects[i], &plan->objects[i])) {
+    for (i = 0U; i < function->object_count; ++i) {
+        if (!minic_core_function_object_layout(
+                function, (MinicCoreObjectId)i,
+                &plan->objects[i].extent, &plan->objects[i].alignment)) {
             minic_core_object_storage_plan_destroy(plan);
             return false;
         }
+    }
     plan->count = function->object_count;
     return true;
 }

@@ -32,7 +32,6 @@ typedef struct MinicCoreIntegerConversionShape {
     size_t target_bytes;
     bool source_signed;
     bool target_signed;
-    bool source_bool;
     bool target_bool;
 } MinicCoreIntegerConversionShape;
 
@@ -62,7 +61,6 @@ static inline bool minic_core_integer_conversion_shape(
         .target_bytes = target->size,
         .source_signed = source->value.integer.is_signed,
         .target_signed = target->value.integer.is_signed,
-        .source_bool = source->value.integer.is_bool,
         .target_bool = target->value.integer.is_bool,
     };
     return true;

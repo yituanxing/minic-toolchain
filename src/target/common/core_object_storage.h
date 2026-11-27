@@ -17,13 +17,6 @@ typedef struct MinicCoreObjectStoragePlan {
     MinicCoreObjectStorage *objects;
 } MinicCoreObjectStoragePlan;
 
-/* Core-owned type layout + repeated objects + explicit alignment.  This is
- * the normal compiler path: an invalid or unlaid-out CoreType fails closed,
- * without consulting the C frontend's DataLayout. */
-bool minic_core_object_storage_resolved(const MinicCoreTypeContext *,
-                                        const MinicCoreObject *,
-                                        MinicCoreObjectStorage *);
-
 bool minic_core_object_storage_plan_build(
     const MinicCoreFunction *, MinicCoreObjectStoragePlan *);
 void minic_core_object_storage_plan_destroy(
