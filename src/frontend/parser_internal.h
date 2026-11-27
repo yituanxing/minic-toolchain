@@ -452,6 +452,15 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator,
     bool retain_inner_parameter_scope);
+typedef enum MinicFunctionPointerObjectRole {
+    MINIC_POINTER_OBJECT_PARAMETER,
+    MINIC_POINTER_OBJECT_RECORD_FIELD,
+    MINIC_POINTER_OBJECT_EXTERN
+} MinicFunctionPointerObjectRole;
+bool minic_parser_parse_function_pointer_object(
+    MinicParser *parser, MinicType return_type,
+    MinicSourceSpan *name_span, bool *has_name, MinicType *type,
+    MinicFunctionPointerObjectRole role, bool require_parameter_name);
 bool minic_parser_starts_named_parenthesized_pointer_array(const MinicParser *parser);
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     MinicParser *parser,

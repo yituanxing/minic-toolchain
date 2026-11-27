@@ -73,30 +73,6 @@ static bool record_field_starts_attributed_function_pointer(const MinicParser *p
     return attributes.count != 0U && probe.current.kind == MINIC_TOKEN_STAR;
 }
 
-static bool parse_function_pointer_field_declarator(MinicParser *parser,
-                                                    MinicType return_type,
-                                                    MinicSourceSpan *name_span,
-                                                    MinicType *field_type) {
-    MinicParsedFunctionDeclarator declarator;
-
-    if (parser == NULL || name_span == NULL || field_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator, false)) {
-        return false;
-    }
-    if (!minic_parser_build_function_declarator_type(
-            parser, return_type, &declarator, field_type)) {
-        minic_parser_error(parser, "cannot build function pointer field type");
-        return false;
-    }
-    if (!minic_parser_apply_function_pointer_declarator_attributes(
-            parser, &declarator.attributes, field_type,
-            "unsupported GNU attribute in function-pointer record declarator")) {
-        return false;
-    }
-    *name_span = declarator.name_span;
-    return true;
-}
-
 typedef struct MinicRecordFieldAttributeContext {
     MinicType field_type;
     size_t explicit_alignment;
@@ -330,8 +306,9 @@ static bool parse_record_field_declarator(MinicParser *parser,
         }
         if (probe.current.kind == MINIC_TOKEN_STAR ||
             record_field_starts_attributed_function_pointer(parser)) {
-            if (!parse_function_pointer_field_declarator(
-                    parser, field_type, &name_span, &field_type)) {
+            if (!minic_parser_parse_function_pointer_object(
+                    parser, field_type, &name_span, NULL, &field_type,
+                    MINIC_POINTER_OBJECT_RECORD_FIELD, true)) {
                 return false;
             }
         } else if (!minic_parser_parse_direct_declarator_name(parser, &name_span)) {

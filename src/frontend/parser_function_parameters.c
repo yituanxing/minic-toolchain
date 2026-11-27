@@ -64,34 +64,6 @@ bool minic_parser_calling_convention_fixed_scalar_supported(
     return true;
 }
 
-static bool parse_function_pointer_parameter_declarator(MinicParser *parser,
-                                                        MinicType return_type,
-                                                        MinicSourceSpan *name_span,
-                                                        bool *has_name,
-                                                        MinicType *parameter_type,
-                                                        bool require_name) {
-    MinicParsedFunctionDeclarator declarator;
-
-    if (parser == NULL || name_span == NULL || has_name == NULL || parameter_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(
-            parser, require_name, false, &declarator, false)) {
-        return false;
-    }
-    if (!minic_parser_build_function_declarator_type(
-            parser, return_type, &declarator, parameter_type)) {
-        minic_parser_error(parser, "cannot build function pointer parameter type");
-        return false;
-    }
-    if (!minic_parser_apply_function_pointer_declarator_attributes(
-            parser, &declarator.attributes, parameter_type,
-            "unsupported GNU ABI attribute on function pointer parameter")) {
-        return false;
-    }
-    *name_span = declarator.name_span;
-    *has_name = declarator.has_name;
-    return true;
-}
-
 static bool parameter_starts_parenthesized_pointer_to_array(const MinicParser *parser) {
     MinicParser probe;
     size_t pointer_depth;
@@ -438,12 +410,10 @@ bool minic_parser_parse_parameter_list(MinicParser *parser,
             (void)declarator_name_array_count;
             declarator_has_name = true;
         } else if (is_function_pointer_parameter &&
-                   !parse_function_pointer_parameter_declarator(parser,
-                                                                parameter_type,
-                                                                &declarator_name_span,
-                                                                &declarator_has_name,
-                                                                &parameter_type,
-                                                                require_names)) {
+                   !minic_parser_parse_function_pointer_object(
+                        parser, parameter_type, &declarator_name_span,
+                        &declarator_has_name, &parameter_type,
+                        MINIC_POINTER_OBJECT_PARAMETER, require_names)) {
             return false;
         }
         if (is_function_pointer_parameter || is_pointer_to_array_parameter) {

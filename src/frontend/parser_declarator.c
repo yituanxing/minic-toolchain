@@ -562,3 +562,46 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
                                                  &array_suffix,
                                                  declarator_type);
 }
+
+/* Use one parse/build path for parameter, record-field and extern
+ * function-pointer objects, preserving each context's admission rules. */
+bool minic_parser_parse_function_pointer_object(
+    MinicParser *parser, MinicType return_type,
+    MinicSourceSpan *name_span, bool *has_name, MinicType *type,
+    MinicFunctionPointerObjectRole role, bool require_parameter_name) {
+    MinicParsedFunctionDeclarator declarator;
+    const bool parameter = role == MINIC_POINTER_OBJECT_PARAMETER;
+    const bool field = role == MINIC_POINTER_OBJECT_RECORD_FIELD;
+    const bool external = role == MINIC_POINTER_OBJECT_EXTERN;
+
+    if (parser == NULL || name_span == NULL || type == NULL ||
+        (!parameter && !field && !external) ||
+        (parameter && has_name == NULL) ||
+        !minic_parser_parse_parenthesized_function_declarator(
+            parser, !parameter || require_parameter_name, !parameter,
+            &declarator, false))
+        return false;
+    if (external && declarator.is_variadic) {
+        minic_parser_error(parser,
+            "variadic extern function pointer objects are not supported yet");
+        return false;
+    }
+    if (!minic_parser_build_function_declarator_type(
+            parser, return_type, &declarator, type)) {
+        minic_parser_error(parser, parameter
+            ? "cannot build function pointer parameter type"
+            : field ? "cannot build function pointer field type"
+                    : "cannot build extern function pointer object type");
+        return false;
+    }
+    if (!external &&
+        !minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, type,
+            parameter ? "unsupported GNU ABI attribute on function pointer parameter"
+                      : "unsupported GNU attribute in function-pointer record declarator"))
+        return false;
+    *name_span = declarator.name_span;
+    if (has_name != NULL)
+        *has_name = declarator.has_name;
+    return true;
+}

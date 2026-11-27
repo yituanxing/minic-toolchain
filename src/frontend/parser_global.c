@@ -261,30 +261,6 @@ static bool parse_static_declarator_tail(MinicParser *parser, MinicType base_typ
                               minic_parser_find_global_object_entity(parser, name_span));
 }
 
-static bool parse_extern_function_pointer_object_declarator(MinicParser *parser,
-                                                            MinicType return_type,
-                                                            MinicSourceSpan *name_span,
-                                                            MinicType *object_type) {
-    MinicParsedFunctionDeclarator declarator;
-
-    if (parser == NULL || name_span == NULL || object_type == NULL ||
-        !minic_parser_parse_parenthesized_function_declarator(parser, true, true, &declarator, false)) {
-        return false;
-    }
-    if (declarator.is_variadic) {
-        minic_parser_error(parser,
-                           "variadic extern function pointer objects are not supported yet");
-        return false;
-    }
-    if (!minic_parser_build_function_declarator_type(
-            parser, return_type, &declarator, object_type)) {
-        minic_parser_error(parser, "cannot build extern function pointer object type");
-        return false;
-    }
-    *name_span = declarator.name_span;
-    return true;
-}
-
 static bool parse_extern_object_declarator(MinicParser *parser,
                                            MinicType base_type,
                                            MinicSourceSpan *name_span,
@@ -294,8 +270,9 @@ static bool parse_extern_object_declarator(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        return parse_extern_function_pointer_object_declarator(
-            parser, *object_type, name_span, object_type);
+        return minic_parser_parse_function_pointer_object(
+            parser, *object_type, name_span, NULL, object_type,
+            MINIC_POINTER_OBJECT_EXTERN, true);
     }
     if (parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
         minic_parser_error(parser, "expected extern object name");
