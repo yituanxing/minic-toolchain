@@ -20,3 +20,138 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+
+  temporary-semantic-clone-census:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install C AST parser and sparse nearest-neighbor search
+        shell: bash
+        run: |
+          python3 -m venv /tmp/minic-clone-venv
+          /tmp/minic-clone-venv/bin/pip -q install --disable-pip-version-check tree-sitter tree-sitter-c scikit-learn
+      - name: Rank all compiler functions by structural and call-semantics fingerprints
+        shell: bash
+        run: |
+          cat > /tmp/minic-clone-scan.py <<'PY'
+          import collections
+          import math
+          import pathlib
+          import re
+          import time
+          
+          from tree_sitter import Language, Parser
+          import tree_sitter_c
+          from sklearn.feature_extraction.text import TfidfVectorizer
+          from sklearn.neighbors import NearestNeighbors
+          
+          start = time.monotonic()
+          parser = Parser(Language(tree_sitter_c.language()))
+          records = []
+          keywords = {"if", "while", "for", "switch", "return", "sizeof", "typeof",
+                      "defined", "_Alignof", "__builtin_choose_expr"}
+          ast_types = {"if_statement", "for_statement", "while_statement", "do_statement",
+                       "switch_statement", "case_statement", "binary_expression",
+                       "unary_expression", "assignment_expression", "conditional_expression",
+                       "call_expression", "pointer_expression", "field_expression",
+                       "subscript_expression", "cast_expression", "return_statement",
+                       "goto_statement", "declaration", "init_declarator",
+                       "compound_statement", "break_statement", "continue_statement",
+                       "update_expression"}
+          def getname(node, data):
+              declarator = node.child_by_field_name("declarator")
+              if declarator is None:
+                  return None
+              code = data[declarator.start_byte:declarator.end_byte].decode("utf-8", "replace")
+              match = re.search(r"\b([A-Za-z_]\w*)\s*\(", code)
+              return match.group(1) if match else None
+          
+          for p in sorted(pathlib.Path("src").rglob("*.c")):
+              data = p.read_bytes()
+              root = parser.parse(data).root_node
+              stack = [root]
+              while stack:
+                  n = stack.pop()
+                  if n.type != "function_definition":
+                      stack.extend(reversed(n.named_children))
+                      continue
+                  name = getname(n, data)
+                  body = n.child_by_field_name("body")
+                  if body is None or not name:
+                      continue
+                  start_line = n.start_point.row + 1
+                  nlines = n.end_point.row - n.start_point.row + 1
+                  if nlines < 15 or nlines > 500:
+                      continue
+                  code = data[body.start_byte:body.end_byte].decode("utf-8", "replace")
+                  counts = collections.Counter()
+                  ns = [body]
+                  while ns:
+                      cur = ns.pop()
+                      if cur.type in ast_types:
+                          counts["AST_"+cur.type] += 1
+                          if cur.parent is not None and cur.parent.type in ast_types:
+                              counts["EDGE_"+cur.parent.type+"_"+cur.type] += 1
+                      ns.extend(cur.named_children)
+                  calls = set(re.findall(r"\b([a-zA-Z_]\w*)\s*\(", code)) - keywords
+                  important = {c for c in calls if c.startswith(("minic_", "core_", "a64_", "rv_", "loong_", "x86_"))}
+                  for c in important:
+                      counts["CALL_"+c] += 6
+                  consts = set(re.findall(r"\b(?:MINIC|CORE|RV|LOONG|A64|X86)_[A-Z][A-Z0-9_]+\b", code))
+                  for c in consts:
+                      counts["SYMBOL_"+c] += 3
+                  normalized = re.sub(r"^(minic_|core_|a64_|rv_|loong_|x86_)+", "", name)
+                  namewords = set(w for w in normalized.split("_") if len(w) > 3 and w not in {"function", "internal"})
+                  for w in namewords: counts["NAME_"+w] += 2
+                  text = " ".join((k + " ")*min(v, 8) for k,v in counts.items())
+                  records.append(dict(path=str(p), name=name, line=start_line, length=nlines,
+                                      text=text, calls=important, symbols=consts))
+          print("AUDIT_SRC_FILES", len(list(pathlib.Path("src").rglob("*.c"))))
+          print("AUDIT_ELIGIBLE_FUNCTIONS", len(records))
+          if len(records) < 100: raise RuntimeError("Tree-sitter scan extracted too few functions")
+          vectorizer = TfidfVectorizer(token_pattern=r"[^ ]+", lowercase=False, sublinear_tf=True)
+          mat = vectorizer.fit_transform(r["text"] for r in records)
+          nn = NearestNeighbors(n_neighbors=min(22, len(records)), algorithm="brute", metric="cosine", n_jobs=4)
+          nn.fit(mat)
+          dist,idx = nn.kneighbors(mat)
+          ranked = []
+          seen = set()
+          for i in range(len(records)):
+              for distance,j in zip(dist[i],idx[i]):
+                  j = int(j)
+                  if i == j: continue
+                  a,b = sorted((i,j))
+                  if (a,b) in seen: continue
+                  seen.add((a,b))
+                  x,y = records[a],records[b]
+                  ratio = min(x["length"],y["length"])/max(x["length"],y["length"])
+                  shared = x["calls"] & y["calls"]
+                  joint = x["calls"] | y["calls"]
+                  call_jac = len(shared)/len(joint) if joint else 0
+                  sym_joint = x["symbols"] | y["symbols"]
+                  sym_jac = len(x["symbols"] & y["symbols"])/len(sym_joint) if sym_joint else 0
+                  if ratio < .5 or (len(shared) < 2 and sym_jac < .3):
+                      continue
+                  score = .7*(1.0-float(distance)) + .2*call_jac + .1*sym_jac
+                  if score < .58: continue
+                  ranked.append((score,a,b,round(1.0-float(distance),3),round(call_jac,3), sorted(shared)[:8]))
+          ranked.sort(reverse=True)
+          print("AUDIT_CANDIDATE_PAIRS",len(ranked))
+          for k,(score,i,j,cos,cjac,calls) in enumerate(ranked[:100],1):
+              a,b=records[i],records[j]
+              print("AUDIT_PAIR",k,"score",round(score,3),"cos",cos,"call_j",cjac,
+                  a["path"]+":"+str(a["line"])+":"+a["name"]+":"+str(a["length"]),
+                  b["path"]+":"+str(b["line"])+":"+b["name"]+":"+str(b["length"]),
+                  "shared="+",".join(calls),sep=" | ")
+          print("AUDIT_SECONDS",round(time.monotonic()-start,2))
+          PY
+          timeout 460s /tmp/minic-clone-venv/bin/python /tmp/minic-clone-scan.py > /tmp/minic-clone-report.txt 2>&1 || { rc=$?; tail -100 /tmp/minic-clone-report.txt; exit "$rc"; }
+          cat /tmp/minic-clone-report.txt
+      - name: Upload semantic clone candidates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minic-semantic-clone-candidates
+          path: /tmp/minic-clone-report.txt
+          retention-days: 7
