@@ -293,17 +293,6 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     }
     if (!minic_core_frame_align_up(pos, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX) return false;
-    if (getenv("MINIC_X86_FRAME_TRACE") != NULL && fn->name != NULL &&
-        strstr(fn->name, "blake2s_compress_generic") != NULL) {
-        (void)fprintf(stderr,
-            "MINIC_X86_FRAME function=%s scratch_bytes=%zu "
-            "allocated_object_bytes=%zu objects=%zu values=%zu final_frame=%zu\n",
-            fn->name, value_bytes,
-            pos >= value_bytes ? pos - value_bytes : 0U,
-            fn->object_count, fn->value_count, frame->frame_size);
-        if (getenv("MINIC_X86_FRAME_DUMP") != NULL)
-            (void)minic_core_function_dump(stderr, fn);
-    }
     return true;
 }
 

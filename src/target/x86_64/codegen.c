@@ -1457,11 +1457,6 @@ static bool x86_visit_module_global(
     }
     if (minic_x86_64_emit_module_global(out, target, module, index))
         return true;
-    if (getenv("MINIC_X86_GLOBAL_TRACE") != NULL)
-        (void)fprintf(stderr,
-            "MINIC_X86_MODULE_GLOBAL_REJECT object=%s index=%zu fragments=%zu\n",
-            global->name != NULL ? global->name : "<unnamed>",
-            index, global->fragment_count);
     x86_error(ctx->diagnostic, ctx->path,
               "x86-64 cannot emit Core module global");
     return false;

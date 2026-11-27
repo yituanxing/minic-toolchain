@@ -1627,15 +1627,6 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !array_type->is_query_materialized &&
             !(array_owners != NULL ? array_owners[index] != 0U
                                     : incomplete_array_has_semantic_owner(program, index))) {
-            if (getenv("MINIC_AST_VERIFY_TRACE") != NULL)
-                (void)fprintf(stderr,
-                    "AST_ORPHAN_ARRAY id=%zu element_base=%d element_array=%zu "
-                    "element_pointer_depth=%u program_arrays=%zu expressions=%zu aliases=%zu\n",
-                    index, (int)array_type->element_type.base_kind,
-                    array_type->element_type.array_type_id,
-                    array_type->element_type.pointer_depth,
-                    program->array_type_count, program->expression_count,
-                    program->type_alias_count);
             MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
         }
         if (array_type->is_query_materialized &&
@@ -1836,22 +1827,6 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
-                if (getenv("MINIC_AST_VERIFY_TRACE") != NULL) {
-                    const MinicType t = function->parameter_types[parameter_index];
-                    (void)fprintf(stderr,
-                        "MINIC_AST_PARAMETER_FRONTIER function=%s index=%zu "
-                        "base=%u rank=%u sign=%u plain_char=%d ptr=%u qualifiers=%u "
-                        "ptrqual=%u top_unqualified=%d type_valid=%d\n",
-                        function->name != NULL ? function->name : "<unnamed>",
-                        parameter_index, (unsigned int)t.base_kind,
-                        (unsigned int)t.integer_rank,
-                        (unsigned int)t.integer_sign, t.is_plain_char ? 1 : 0,
-                        (unsigned int)t.pointer_depth,
-                        (unsigned int)t.base_qualifiers,
-                        (unsigned int)t.pointer_qualifiers,
-                        type_is_top_level_unqualified(t) ? 1 : 0,
-                        type_is_valid(program, target, t) ? 1 : 0);
-                }
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }

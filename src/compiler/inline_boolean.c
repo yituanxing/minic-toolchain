@@ -530,10 +530,6 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
          * it; its fallback scans all live calls on index failure. */
         const size_t boolean_function_limit = program->function_count;
         MinicInlineCallWorklist worklist = {0};
-        size_t boolean_index_builds = 0U;
-        size_t boolean_caller_scans = 0U;
-        size_t boolean_call_candidates = 0U;
-        size_t boolean_skipped_other_owner = 0U;
         bool boolean_index_attempted = false;
         const bool section_closure_required =
             minic_inline_spec_sections_present(program);
@@ -560,10 +556,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             if (!caller_has_range && !section_closure_required) {
                 continue;
             }
-            boolean_caller_scans += 1U;
             if (!boolean_index_attempted) {
                 boolean_index_attempted = true;
-                boolean_index_builds += 1U;
                 if (!minic_inline_call_worklist_build(
                         program, boolean_function_limit, call_plan, &worklist)) {
                     minic_inline_call_worklist_destroy(&worklist);
@@ -590,7 +584,6 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 if (nested->kind != MINIC_EXPRESSION_CALL) {
                     continue;
                 }
-                boolean_call_candidates += 1U;
                 if (!minic_inline_spec_resolve_call(
                         call_plan, nested_expression_index, program->function_count,
                         &current_id, &source_id, &current, &source))
@@ -639,19 +632,6 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                     transitive_clone_count += 1U;
                 }
             }
-            boolean_skipped_other_owner += cursor.skipped_other_owner;
-        }
-        if (getenv("MINIC_BOOLEAN_TRANSITIVE_PERF") != NULL) {
-            (void)fprintf(stderr,
-                          "MINIC_BOOLEAN_TRANSITIVE_INDEX callers=%zu "
-                          "index_builds=%zu call_entries=%zu candidates=%zu "
-                          "skipped_other_owner=%zu calls_ready=%u "
-                          "owners_ready=%u\n",
-                          boolean_caller_scans, boolean_index_builds,
-                          worklist.call_count, boolean_call_candidates,
-                          boolean_skipped_other_owner,
-                          (unsigned int)worklist.ready,
-                          (unsigned int)worklist.owner_ready);
         }
         minic_inline_call_worklist_destroy(&worklist);
     }
