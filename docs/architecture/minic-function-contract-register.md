@@ -536,7 +536,7 @@
 
 **第五轮 Common 分片结论：** `CoreFunctionPlan` 是五目标共用的一次性 ABI-neutral owner；A64/Loong `LP64` 同处只表示共享**策略化调用位置规划**，不表示两 ISA 共用同一物理指令生成或完全相同的 ABI。RV32/RV64 object reuse 的旧全扫描已无独立慢路径消费者，而 Compiler 的 legacy inline fallback 仍是另一项真实语义。当前没有依据把这些活跃保守实现直接删掉。
 
-### 第五轮 Compiler / Driver / Target registration（30 个函数）
+### 第五轮 Compiler / Driver / Target registration（27 个函数）
 
 这些函数在本轮按 caller→callee→失败出口复核；`minic-cc` 五目标直接发射 `.s` 的能力，不能和历史 RV64 staged driver 的链接能力混为一谈。以下只有 `R2/U2/E1` 源码证据，不等于新一轮目标运行。
 
@@ -545,7 +545,7 @@
 | `F5-C01` `minic_bootstrap_trace_enabled` — `compiler/compiler.c` | R env，按变量存在性启用，不解析 `0`；trace-stage 唯一消费。 | R2/U2/E1 |
 | `F5-C02` `minic_bootstrap_trace_stage` — 同上 | R path/stage，W stderr，不改变 Program，Compiler 五个阶段调用。 | R2/U2/E1 |
 | `F5-C03` `minic_set_diagnostic` — 同上 | R format/path，W caller Diagnostic 内联 buffer，不保留借用字符串；file/verify/compile 错误共享。 | R2/U2/E1 |
-| `F5-C04` `minic_validate_core_functions` — 同上 | R CoreSet status，W Diagnostic；census 可多报错，但返回仍是 false，不能掩盖 lower 失败。 | R2/U2/E1 |
+| `F5-C04` `minic_validate_core_functions` — 同上 | R CoreSet status，W Diagnostic；可多报错，但返回仍是 false，不能掩盖 lower 失败。 | R2/U2/E1 |
 | `F5-C05` `minic_read_file` — 同上 | OWN FILE/SourceBuffer，读/分配失败本地清理，成功 XFER buffer 给 Compiler 的统一退出。 | R2/U2/E1 |
 | `F5-C06` `minic_set_ast_verify_diagnostic` — 同上 | R verifier stage/index，W Diagnostic；非法下标/NULL detail 降级成安全错误信息。 | R2/U2/E1 |
 | `F5-C07` `minic_compile_preprocessed_file_for_target` — 同上 | OWN SourceBuffer/Program/CoreSet，R 调用方 invocation Target；Parse→Normalize→Inline→Core→Validate→Backend，失败共同析构。 | R2/U2/E1 |
@@ -555,23 +555,20 @@
 | `F5-C11` `minic_core_function_set_initialize` — 同上 | W caller 新/已释放 CoreSet 归零；不可用来释放 live owner。 | R2/U2/E1 |
 | `F5-C12` `minic_core_function_set_destroy` — 同上 | OWN 逐槽 CoreFunction 与顶层 functions/status；LOWER_ERROR 槽也可释放。 | R2/U2/E1 |
 | `F5-C13` `minic_prepare_core_function_set` — 同上 | OWN 暂态 CoreSet+可选 reentry index；构造失败保留旧 output，成功整体 XFER；单函数 lower 结果交 C04 验证。 | R2/U2/E1 |
-| `F5-C14` `minic_backend_usage_group` — `target/backend_core_usage.c` | R Core opcode→census 诊断分类；dump 消费，不是 ISA 可发射性判定。 | R2/U2/E1 |
-| `F5-C15` `minic_backend_usage_bits` — 同上 | R Core result/argument + target type width；未知宽度回报 unknown，未证明机器支持。 | R2/U2/E1 |
-| `F5-C16` `minic_backend_core_usage_dump` — 同上 | R CoreSet 全函数 Core 指令，输出分组统计到诊断流；不修改 IR，也不替代合法性验证。 | R2/U2/E1 |
-| `F5-C17` `minic_target_machine_options_resolve` — `target/target_machine_options.c` | R Target + CLI machine flags；W caller resolved options，拒目标未定义扩展，source/codegen ISA 分离。 | R2/U2/E1 |
-| `F5-C18` `minic_print_usage` — `tools/minic-cc/main.c` | R target catalog，打印已注册用法，无编译资源所有权。 | R2/U2/E1 |
-| `F5-C19` `main` — 同上 | OWN CLI path/Target invocation；从选项进入唯一 Compiler Pipeline，错误退出与信息打印分开。 | R2/U2/E1 |
-| `F5-C20` `minic_target_catalog_all` — `target/target_catalog.c` | R static Target registration，只借条目，调用方不得释放。 | R2/U2/E1 |
-| `F5-C21` `minic_target_catalog_find` — 同上 | R target name，返回已注册 borrowed descriptor，未知目标 fail closed。 | R2/U2/E1 |
-| `F5-C22` `minic_target_catalog_for_architecture` — 同上 | R ArchitectureId，选择唯一注册目标；不将机器实现写进前端。 | R2/U2/E1 |
-| `F5-C23` `minic_target_catalog_default` — 同上 | R catalog 默认入口；用于兼容历史 target 选择，不与独立 ABI 混同。 | R2/U2/E1 |
-| `F5-C24` `minic_target_info_for_architecture` — `target/target_info.c` | R registered per-target DataLayout/ABI/ASM policy；不是 Compiler 架构 switch。 | R2/U2/E1 |
-| `F5-C25` `minic_target_invocation_begin` — 同上 | W caller invocation，绑定目标快照和 machine options 生命周期。 | R2/U2/E1 |
-| `F5-C26` `minic_target_invocation_plain_char` — 同上 | R invocation TargetInfo，返回 C plain char signedness，不写 Program。 | R2/U2/E1 |
-| `F5-C27` `minic_target_invocation_short_wchar` — 同上 | R target wchar policy，决定短 wchar 类型语义，与 C parser/布局契约衔接。 | R2/U2/E1 |
-| `F5-C28` `minic_backend_for_target` — `target/backend.c` | R registered target，返回 target-specific emit callback，未知描述符拒绝；不复制通用 Core 算法。 | R2/U2/E1 |
-| `F5-C29` `minic_backend_emit_assembly` — 同上 | R verified CoreSet + immutable Program/Target，执行后端发射；失败由 caller 回收 Core owner。 | R2/U2/E1 |
-| `F5-C30` `minic_program_emit_write` — `target/common/program_emit.c` | OWN 临时输出文件/事务式写入；最终 rename 仅在完整发射成功后发生；多个目标复用相同提交协议。 | R2/U2/E1 |
+| `F5-C14` `minic_target_machine_options_resolve` — `target/target_machine_options.c` | R Target + CLI machine flags；W caller resolved options，拒目标未定义扩展，source/codegen ISA 分离。 | R2/U2/E1 |
+| `F5-C15` `minic_print_usage` — `tools/minic-cc/main.c` | R target catalog，打印已注册用法，无编译资源所有权。 | R2/U2/E1 |
+| `F5-C16` `main` — 同上 | OWN CLI path/Target invocation；从选项进入唯一 Compiler Pipeline，错误退出与信息打印分开。 | R2/U2/E1 |
+| `F5-C17` `minic_target_catalog_all` — `target/target_catalog.c` | R static Target registration，只借条目，调用方不得释放。 | R2/U2/E1 |
+| `F5-C18` `minic_target_catalog_find` — 同上 | R target name，返回已注册 borrowed descriptor，未知目标 fail closed。 | R2/U2/E1 |
+| `F5-C19` `minic_target_catalog_for_architecture` — 同上 | R ArchitectureId，选择唯一注册目标；不将机器实现写进前端。 | R2/U2/E1 |
+| `F5-C20` `minic_target_catalog_default` — 同上 | R catalog 默认入口；用于兼容历史 target 选择，不与独立 ABI 混同。 | R2/U2/E1 |
+| `F5-C21` `minic_target_info_for_architecture` — `target/target_info.c` | R registered per-target DataLayout/ABI/ASM policy；不是 Compiler 架构 switch。 | R2/U2/E1 |
+| `F5-C22` `minic_target_invocation_begin` — 同上 | W caller invocation，绑定目标快照和 machine options 生命周期。 | R2/U2/E1 |
+| `F5-C23` `minic_target_invocation_plain_char` — 同上 | R invocation TargetInfo，返回 C plain char signedness，不写 Program。 | R2/U2/E1 |
+| `F5-C24` `minic_target_invocation_short_wchar` — 同上 | R target wchar policy，决定短 wchar 类型语义，与 C parser/布局契约衔接。 | R2/U2/E1 |
+| `F5-C25` `minic_backend_for_target` — `target/backend.c` | R registered target，返回 target-specific emit callback，未知描述符拒绝；不复制通用 Core 算法。 | R2/U2/E1 |
+| `F5-C26` `minic_backend_emit_assembly` — 同上 | R verified CoreSet + immutable Program/Target，执行后端发射；失败由 caller 回收 Core owner。 | R2/U2/E1 |
+| `F5-C27` `minic_program_emit_write` — `target/common/program_emit.c` | OWN 临时输出文件/事务式写入；最终 rename 仅在完整发射成功后发生；多个目标复用相同提交协议。 | R2/U2/E1 |
 
 ### 第五轮 Frontend：静态初始化器、枚举、属性与 Record（30 组）
 
