@@ -7,7 +7,6 @@
 /* This profile is shared only by the two GNU/QEMU-validated direct LP64
  * emitters. It is not an RV64 or x86 SysV ABI contract. */
 typedef struct MinicDirectLP64FunctionProfile {
-    size_t variadic_address_count;
     size_t fixed_gp_count;
     size_t fixed_fp_count;
     bool has_dynamic_stack;

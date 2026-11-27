@@ -1,4 +1,4 @@
-#include "frontend/token.h"
+#include "token_names.h"
 
 const char *minic_token_kind_name(MinicTokenKind kind) {
     switch (kind) {

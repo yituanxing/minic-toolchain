@@ -108,7 +108,6 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         return false;
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
-    frame->reachable_blocks = NULL;
     frame->parameter_locations = NULL;
     frame->parameter_location_count = 0U;
     frame->has_return_abi_value = false;
@@ -463,5 +462,4 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     free(frame->object_offsets);
     frame->object_offsets = NULL;
     frame->object_storage = NULL;
-    frame->reachable_blocks = NULL;
 }

@@ -84,8 +84,7 @@ static bool rv64_emit_typed_function(
             minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
-    old_frame.reachable_blocks = facts->reachable_blocks;
-    if (old_frame.reachable_blocks == NULL ||
+    if (facts->reachable_blocks == NULL ||
         !minic_riscv64_machine_physical_frame(&old_frame,
             &physical, callee_saved, 12U)) goto done;
     bridge.target = target;
@@ -102,7 +101,7 @@ static bool rv64_emit_typed_function(
     bridge.abi64 = &bridge.abi64_view;
     {
         const MinicMachineProductionSource source = {
-            .core = function, .reachable_blocks = old_frame.reachable_blocks,
+            .core = function, .reachable_blocks = facts->reachable_blocks,
             .target = target, .symbol = symbol->symbol_name
         };
         if (!minic_riscv_machine_select_core_for_production(

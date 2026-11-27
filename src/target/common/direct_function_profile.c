@@ -26,7 +26,6 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     starts = facts->variadic_start_count;
     cursors = facts->variadic_address_count;
     (void)memset(profile, 0, sizeof(*profile));
-    profile->variadic_address_count = facts->variadic_address_count;
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (minic_core_function_is_variadic(fn)) {
         for (i = 0U; i < minic_core_function_parameter_count(fn); ++i)
@@ -87,10 +86,10 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * __stack cursor beyond the named stack slots; the incoming plan
          * already tracks those slots. Rejecting >8 fixed arguments here
          * suppressed a valid ABI case and hid cursor-placement bugs. */
-        if (cursors != profile->variadic_address_count ||
+        if (cursors != facts->variadic_address_count ||
             (starts != 0U && !minic_core_function_is_variadic(fn)))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
-    } else if (profile->variadic_address_count != 0U) {
+    } else if (facts->variadic_address_count != 0U) {
         size_t consumed_gp =
             minic_lp64_core_indirect_result(fn->type_context,
                 minic_core_function_return_type(fn), abi->core_indirect_return)
@@ -110,7 +109,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * mutable 32-byte va_list state. Multiple GNU va_start executions
          * are valid and each receives the same ABI starting address.
          * A Core ABI-state va_copy must never be confused with va_start. */
-        if (!minic_core_function_is_variadic(fn) || cursors != profile->variadic_address_count ||
+        if (!minic_core_function_is_variadic(fn) || cursors != facts->variadic_address_count ||
             starts != cursors || starts == 0U)
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     }

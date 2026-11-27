@@ -166,7 +166,6 @@ MINIC_SOURCES := \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
 	src/frontend/parser_typedef.c \
-	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \

@@ -53,7 +53,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 ? "variadic_preflight" : "function_preflight";
         return false;
     }
-    machine_frame->variadic_count = profile.variadic_address_count;
+    machine_frame->variadic_count = facts->variadic_address_count;
     machine_frame->variadic_gp_count = profile.fixed_gp_count;
     machine_frame->variadic_fp_count = profile.fixed_fp_count;
     machine_frame->has_dynamic_stack = profile.has_dynamic_stack;

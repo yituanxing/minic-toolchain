@@ -107,6 +107,39 @@ static int check_large_type_index(void) {
     return 0;
 }
 
+/* A provisional incomplete record/union is published before its recursive
+ * fields are imported.  Registration must snapshot the zero-field state
+ * instead of retaining an uninitialized caller descriptor. */
+static int check_provisional_record_union(void) {
+    MinicCoreTypeContext context;
+    MinicCoreType type;
+    MinicCoreTypeId id;
+    const MinicCoreType *stored;
+    int is_union;
+
+    minic_core_type_context_initialize(&context);
+    for (is_union = 0; is_union <= 1; ++is_union) {
+        (void)memset(&type, 0, sizeof(type));
+        type.kind = MINIC_CORE_TYPE_RECORD;
+        type.value.record.is_union = is_union != 0;
+        if (!minic_core_type_register(&context, &type, &id)) {
+            minic_core_type_context_destroy(&context);
+            return 1;
+        }
+        stored = minic_core_type_get(&context, id);
+        if (stored == NULL || stored->kind != MINIC_CORE_TYPE_RECORD ||
+            stored->value.record.is_union != (is_union != 0) ||
+            stored->value.record.is_complete ||
+            stored->value.record.fields != NULL ||
+            stored->value.record.field_count != 0U) {
+            minic_core_type_context_destroy(&context);
+            return 2;
+        }
+    }
+    minic_core_type_context_destroy(&context);
+    return 0;
+}
+
 int main(void) {
     MinicCoreTypeContext context;
     MinicCoreType type;
@@ -351,6 +384,7 @@ int main(void) {
     minic_core_type_context_destroy(&context);
     CHECK(context.types == NULL && context.type_count == 0U);
     CHECK(check_large_type_index() == 0);
-    (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record fixed_zero_incomplete_array function_abi ownership rollback");
+    CHECK(check_provisional_record_union() == 0);
+    (void)puts("CORE_TYPE_CONTEXT=PASS scalar pointer recursive_record provisional_record_union fixed_zero_incomplete_array function_abi ownership rollback");
     return 0;
 }

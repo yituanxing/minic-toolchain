@@ -152,8 +152,6 @@ bool minic_type_is_fixed_vector64_storage(MinicType type);
 bool minic_type_is_fixed_vector_register_storage(MinicType type);
 /* Source C identity and CV-qualification check shared by parser and verifier.
  * Target admission of each builtin kind is deliberately the caller's duty. */
-bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
-                                            MinicType *result);
 bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
                                            MinicType *result);
 MinicType minic_type_function(MinicFunctionTypeId function_type_id);
@@ -185,7 +183,6 @@ bool minic_type_is_integer(MinicType type);
 bool minic_type_is_bool_integer(MinicType type);
 bool minic_type_is_char_integer(MinicType type);
 bool minic_type_is_plain_char(MinicType type);
-bool minic_type_is_long_integer(MinicType type);
 bool minic_type_is_int128_integer(MinicType type);
 bool minic_type_is_signed_integer(MinicType type);
 bool minic_type_is_unsigned_integer(MinicType type);

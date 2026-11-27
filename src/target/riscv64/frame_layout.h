@@ -35,9 +35,6 @@ typedef struct MinicRiscv64CoreFrame {
     bool has_return_abi_value;
     MinicRiscv64AbiCursor named_parameter_cursor;
     bool has_named_parameter_cursor;
-    /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
-       that have no executable predecessor after semantic CFG pruning. */
-    const bool *reachable_blocks;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t dynamic_call_area_size;

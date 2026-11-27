@@ -317,12 +317,6 @@ bool minic_type_fixed_vector_binary_result(MinicType left, MinicType right,
     return true;
 }
 
-bool minic_type_fixed_vector128_binary_result(MinicType left, MinicType right,
-                                            MinicType *result) {
-    return minic_type_is_fixed_vector128_storage(left) &&
-           minic_type_fixed_vector_binary_result(left, right, result);
-}
-
 MinicType minic_type_function(MinicFunctionTypeId function_type_id) {
     MinicType type;
 
@@ -662,11 +656,6 @@ bool minic_type_is_char_integer(MinicType type) {
 
 bool minic_type_is_plain_char(MinicType type) {
     return minic_type_is_char_integer(type) && type.is_plain_char;
-}
-
-bool minic_type_is_long_integer(MinicType type) {
-    return minic_type_is_integer(type) && (type.integer_rank == MINIC_INTEGER_RANK_LONG ||
-                                           type.integer_rank == MINIC_INTEGER_RANK_LONG_LONG);
 }
 
 bool minic_type_is_int128_integer(MinicType type) {
