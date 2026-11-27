@@ -157,38 +157,6 @@ static bool add_array_object_element_assignment(MinicParser *parser,
     return add_runtime_initializer_assignment(parser, target_id, value_id, value_span);
 }
 
-static bool add_local_array_element_assignment(MinicParser *parser,
-                                               MinicLocalId local_id,
-                                               size_t index,
-                                               MinicExpressionId value_id) {
-    const MinicLocal *local;
-    const MinicExpression *value;
-    MinicArrayObjectInfo array_info;
-    MinicSourceSpan name_span;
-    MinicExpressionId base_id;
-
-    local = minic_c0_program_local(parser->program, local_id);
-    value = minic_c0_program_expression(parser->program, value_id);
-    if (local == NULL || value == NULL ||
-        !minic_c0_local_array_object_info(parser->program, local_id, &array_info)) {
-        minic_parser_error(parser, "invalid local array initializer element");
-        return false;
-    }
-    name_span = local->name_span;
-    if (!minic_parser_statement_assignment_conversion(
-            parser, array_info.element_type, &value_id) ||
-        !minic_c0_assignment_compatible(
-            parser->program, array_info.element_type, value_id)) {
-        minic_parser_error(parser,
-                           "local array initializer element type does not match element type");
-        return false;
-    }
-    if (!minic_parser_statement_local_lvalue(parser, local_id, name_span, &base_id)) {
-        return false;
-    }
-    return add_array_object_element_assignment(parser, base_id, index, value_id);
-}
-
 static bool add_array_object_zero_element(MinicParser *parser,
                                           MinicExpressionId base_id,
                                           size_t index,
@@ -813,13 +781,11 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
     const MinicLocal *local;
     MinicArrayObjectInfo array_info;
     MinicParser probe;
-    MinicSourceSpan initializer_span;
+    MinicSourceSpan name_span;
+    MinicExpressionId base_id;
     uint64_t string_size;
-    int *values;
     size_t element_size;
     size_t element_count;
-    size_t index;
-    bool success;
 
     local = minic_c0_program_local(parser->program, local_id);
     if (local == NULL ||
@@ -828,7 +794,7 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
                                                        parser->current.kind)) {
         return false;
     }
-    initializer_span = parser->current.span;
+    name_span = local->name_span;
     element_count = declared_count;
     if (infer_count) {
         probe = *parser;
@@ -853,28 +819,10 @@ static bool parse_local_character_array_string_initializer(MinicParser *parser,
         minic_parser_error(parser, "character array string initializer requires nonzero extent");
         return false;
     }
-
-    values = (int *)calloc(element_count, sizeof(*values));
-    if (values == NULL) {
-        minic_parser_error(parser, "out of memory while decoding local string initializer");
+    if (!minic_parser_statement_local_lvalue(parser, local_id, name_span, &base_id))
         return false;
-    }
-    success = minic_parser_parse_bounded_string_literal_values(parser, element_count, values);
-    for (index = 0U; success && index < element_count; ++index) {
-        MinicExpression value;
-        MinicExpressionId value_id;
-
-        (void)memset(&value, 0, sizeof(value));
-        value.kind = MINIC_EXPRESSION_INTEGER;
-        value.span = initializer_span;
-        value.type = minic_type_int();
-        value.value_category = MINIC_VALUE_RVALUE;
-        value.value.integer_value = (int64_t)values[index];
-        success = minic_parser_add_expression(parser, &value, &value_id) &&
-                  add_local_array_element_assignment(parser, local_id, index, value_id);
-    }
-    free(values);
-    return success;
+    return parse_runtime_character_array_string_initializer(
+        parser, base_id, array_info.element_type, element_count);
 }
 
 static bool parse_inferred_runtime_array_initializer(MinicParser *parser,
