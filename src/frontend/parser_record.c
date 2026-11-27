@@ -73,61 +73,6 @@ static bool record_field_starts_attributed_function_pointer(const MinicParser *p
     return attributes.count != 0U && probe.current.kind == MINIC_TOKEN_STAR;
 }
 
-static bool parse_pointer_to_array_field_declarator(MinicParser *parser,
-                                                    MinicType base_type,
-                                                    MinicSourceSpan *name_span,
-                                                    MinicType *field_type) {
-    unsigned int pointer_const_qualifiers;
-    unsigned int pointer_volatile_qualifiers;
-    MinicType type;
-    size_t pointer_depth;
-    size_t level;
-    bool is_array;
-
-    pointer_depth = 0U;
-    pointer_const_qualifiers = 0U;
-    pointer_volatile_qualifiers = 0U;
-    if (!minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before pointer-to-array field")) {
-        return false;
-    }
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        pointer_depth += 1U;
-        if (pointer_depth > sizeof(unsigned int) * CHAR_BIT || !minic_parser_advance(parser) ||
-            !minic_parser_parse_pointer_qualifier_sequence(
-                parser, pointer_depth, &pointer_const_qualifiers, &pointer_volatile_qualifiers)) {
-            return false;
-        }
-    }
-    if (pointer_depth == 0U || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "expected pointer-to-array field name");
-        return false;
-    }
-    *name_span = parser->current.span;
-    if (!minic_parser_advance(parser) ||
-        !minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after pointer-to-array field") ||
-        !minic_parser_parse_array_declarator_suffix(parser, base_type, true, &type, &is_array) ||
-        !is_array) {
-        return false;
-    }
-    for (level = 0U; level < pointer_depth; ++level) {
-        unsigned int bit = 1U << level;
-        if (!minic_type_pointer_to(type, &type)) {
-            minic_parser_error(parser, "cannot build pointer-to-array field type");
-            return false;
-        }
-        if ((pointer_const_qualifiers & bit) != 0U && !minic_type_add_const(type, &type)) {
-            return false;
-        }
-        if ((pointer_volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(type, &type)) {
-            return false;
-        }
-    }
-    *field_type = type;
-    return true;
-}
-
 static bool parse_function_pointer_field_declarator(MinicParser *parser,
                                                     MinicType return_type,
                                                     MinicSourceSpan *name_span,
@@ -365,12 +310,8 @@ static bool parse_record_field_declarator(MinicParser *parser,
         return false;
     }
     if (parser->current.kind == MINIC_TOKEN_LPAREN &&
-        minic_parser_starts_named_parenthesized_pointer_array(parser)) {
-        if (!parse_pointer_to_array_field_declarator(parser, field_type, &name_span, &field_type)) {
-            return false;
-        }
-    } else if (parser->current.kind == MINIC_TOKEN_LPAREN &&
-               record_field_starts_parenthesized_pointer_object(parser)) {
+        (minic_parser_starts_named_parenthesized_pointer_array(parser) ||
+         record_field_starts_parenthesized_pointer_object(parser))) {
         bool name_is_array;
         bool name_array_inferred;
         size_t name_array_count;
