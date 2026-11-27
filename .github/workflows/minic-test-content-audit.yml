@@ -20,3 +20,17 @@ jobs:
         run: make MODE=release CFLAGS=-Werror check-parser
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
+
+      - name: Verify LoongArch64 GNU ELF and QEMU runtime after SSA cleanup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-14-loongarch64-linux-gnu qemu-user
+          printf '%s\n' \
+            'static int calculate(int x) { int y = x + 1; return y * 2 - x; }' \
+            'int main(void) { volatile int x = 40; return calculate(x) == 42 ? 0 : 1; }' \
+            > /tmp/minic-loong-ssa.c
+          build/release/bin/minic --target=loongarch64-linux -S -o /tmp/minic-loong-ssa.s /tmp/minic-loong-ssa.c
+          loongarch64-linux-gnu-gcc-14 -static -no-pie /tmp/minic-loong-ssa.s -o /tmp/minic-loong-mini
+          loongarch64-linux-gnu-gcc-14 -static -no-pie /tmp/minic-loong-ssa.c -o /tmp/minic-loong-gnu
+          qemu-loongarch64 /tmp/minic-loong-mini
+          qemu-loongarch64 /tmp/minic-loong-gnu
