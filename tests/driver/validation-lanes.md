@@ -6,21 +6,24 @@ preprocessor, assembler, archiver or linker passes the full Linux runtime
 contract. Avoid silently counting one combined smoke as independently
 certifying its components.
 
-- Maintained test owner: `.github/workflows/minic-driver-v0.yml`.
-- Current opt-in push gate: `[minic-driver-v0]`; this directory is on its
-  declared trigger path list.
-- Its current integration uses a pinned external GNU RV64 compiler to build
-  musl, runs the existing driver-routing and dynamic-library tests, and
-  preserves the exact tested HEAD and trace.
+- The current checkout has no dedicated driver workflow. The scripts in this
+  directory are independent/manual validation lanes, not a live CI gate.
+- The live baseline workflow is
+  `.github/workflows/minic-test-content-audit.yml`; it covers the maintained
+  compiler matrix, parser rejections and MiniAS/MiniPP smoke gates, but does
+  not certify the complete driver/Linux runtime contract.
+- When a driver lane is run manually, it uses a pinned external GNU RV64
+  compiler to build musl, runs the existing driver-routing and dynamic-library
+  tests, and records the exact tested HEAD and trace.
 - Treat a green driver run as an orchestration/interface proof at precisely
   its tested scope; follow standalone GNU-baseline tool-specific contracts
   before native components can be promoted together.
 - Self-hosting and missing MiniObjdump implementation are intentionally out
   of scope for this validation stage.
 
-Do not add another GitHub Actions workflow for this owner.
+Do not describe a manual driver run as current CI certification.
 
-## Reproduced real QEMU defect and focused fix — 2026-10-11
+## Historical reproduced QEMU defect and focused fix — 2026-10-11
 
 Driver [#38150108182](https://github.com/yituanxing/minic-toolchain/actions/runs/38150108182)
 **failed** at the actual linked PIE runtime (`qemu-riscv64` SIGILL / exit 132).

@@ -13,7 +13,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicCoreFunctionFacts *facts,
     const MinicDirectLP64AbiPolicy *abi,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
-    size_t i, starts, cursors;
+    size_t i, starts;
 
     if (fn == NULL || fn->type_context == NULL || facts == NULL ||
         incoming == NULL || profile == NULL ||
@@ -24,7 +24,6 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         abi->core_indirect_return == NULL)
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
     starts = facts->variadic_start_count;
-    cursors = facts->variadic_address_count;
     (void)memset(profile, 0, sizeof(*profile));
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
     if (minic_core_function_is_variadic(fn)) {
@@ -86,8 +85,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * __stack cursor beyond the named stack slots; the incoming plan
          * already tracks those slots. Rejecting >8 fixed arguments here
          * suppressed a valid ABI case and hid cursor-placement bugs. */
-        if (cursors != facts->variadic_address_count ||
-            (starts != 0U && !minic_core_function_is_variadic(fn)))
+        if (starts != 0U && !minic_core_function_is_variadic(fn))
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     } else if (facts->variadic_address_count != 0U) {
         size_t consumed_gp =
@@ -109,8 +107,8 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
          * mutable 32-byte va_list state. Multiple GNU va_start executions
          * are valid and each receives the same ABI starting address.
          * A Core ABI-state va_copy must never be confused with va_start. */
-        if (!minic_core_function_is_variadic(fn) || cursors != facts->variadic_address_count ||
-            starts != cursors || starts == 0U)
+        if (!minic_core_function_is_variadic(fn) ||
+            starts != facts->variadic_address_count || starts == 0U)
             return MINIC_DIRECT_LP64_PROFILE_VARIADIC_SHAPE;
     }
     return MINIC_DIRECT_LP64_PROFILE_OK;
