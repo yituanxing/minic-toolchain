@@ -40,7 +40,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     name = module_decl->name;
     if (!minic_multi_direct_lp64_function_preflight(
-            module_decl, fn, facts, architecture_name, name,
+            module_decl, fn, facts,
             qualify_opaque_asm, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(

@@ -5,9 +5,7 @@
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_frame.h"
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
 /* Only typed structured asm and target-whitelisted, zero-operand opaque
  * hardware instructions are admitted. Source-to-Core one-to-one ownership
@@ -74,64 +72,21 @@ done:
     free(used);
     return accepted;
 }
-
-
-/* Source-form inventory for the entire original Linux 3-ISA GNU corpus.
- * This never changes qualification or emits any hardware. An opaque
- * compiler ASM reject otherwise hides 1441 AArch and 504 Loong function
- * instances behind one undifferentiated "M1 unsupported" message.
- * Hash the COMPLETE normalized Core template but print a bounded mnemonic
- * prefix; the per-shard report records EVERY template owner. */
-static void direct_lp64_trace_asm_owners(
-    const MinicCoreFunction *fn,const char *arch,const char *name){
-    size_t i;
-    if(!fn||!arch||!name||getenv("MINIC_BACKEND_CENSUS")==NULL)return;
-    for(i=0U;i<fn->inline_asm_count;++i){
-        const MinicCoreInlineAsm *a=&fn->inline_asms[i];
-        uint64_t hash=UINT64_C(14695981039346656037);
-        char preview[49];size_t p=0U,j;
-        if(!a->template_text)continue;
-        for(j=0U;j<a->template_length;++j){
-            const unsigned char c=(unsigned char)a->template_text[j];
-            hash^=(uint64_t)c;
-            hash*=UINT64_C(1099511628211);
-            if(p<sizeof(preview)-1U){
-                if((c>='a'&&c<='z')||(c>='A'&&c<='Z')||
-                   (c>='0'&&c<='9')||c=='_')
-                    preview[p++]=(char)c;
-                else if(p==0U||preview[p-1U]!='_')
-                    preview[p++]='_';
-            }
-        }
-        preview[p]=0;
-        (void)fprintf(stderr,
-            "MINIC_BACKEND_ASM_FORM arch=%s function=%s id=%zu "
-            "template_length=%zu hash=%016llx preview=%s "
-            "clobbers=%zu memory=%d goto=%d\n",
-            arch,name,i,a->template_length,(unsigned long long)hash,
-            p?preview:"empty",
-            a->register_clobber_count,a->has_memory_clobber?1:0,
-            a->is_goto?1:0);
-    }
-}
-
 /* Both new direct LP64 ISA emitters had byte-equivalent admission policy.
  * Reject unsupported Core shapes before generating partial GNU assembly.
  * Caller owns target ABI, registers, frame and any failure diagnostics. */
 bool minic_multi_direct_lp64_function_preflight(
     const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
+    const MinicCoreFunctionFacts *facts,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     const MinicDirectLP64AbiPolicy *abi) {
     bool verified;
     bool return_valid;
-    bool visibility_valid, alias_present, constructor, weak;
-    bool has_section;
-    unsigned int visibility;
+    bool visibility_valid, alias_present;
     if (module_decl == NULL || fn == NULL ||
         fn->type_context == NULL ||
-        arch == NULL || !minic_direct_lp64_abi_policy_valid(abi)) return false;
+        !minic_direct_lp64_abi_policy_valid(abi)) return false;
     verified = minic_core_function_facts_verified(facts, fn);
     return_valid = minic_lp64_core_valid_return_with_policy(
         fn->type_context, minic_core_function_return_type(fn), abi);
@@ -139,40 +94,7 @@ bool minic_multi_direct_lp64_function_preflight(
         module_decl->visibility == MINIC_CORE_MODULE_VISIBILITY_DEFAULT ||
         minic_multi_elf_module_visibility_directive(module_decl->visibility) != NULL;
     alias_present = module_decl->alias_target_index != SIZE_MAX;
-    constructor = module_decl->is_constructor;
-    weak = module_decl->is_weak;
-    has_section = module_decl->section_name != NULL;
-    visibility = (unsigned int)module_decl->visibility;
-    /* Collect the ENTIRE admission error class for each failed function.
-     * This is not a feature gate or permissive fallback: all original
-     * policy checks below stay intact. The 3x7 GNU corpus aggregates
-     * actual typed reasons instead of 60 generic preflight errors. */
-    if (getenv("MINIC_BACKEND_CENSUS") != NULL) {
-        const char *reason=NULL;
-        if(name==NULL||name[0]=='\0')reason="symbol_name";
-        else if(!verified)reason="core_verify";
-        else if(!visibility_valid) reason="elf_visibility";
-        else if(alias_present)
-            reason="function_alias";
-        else if(!return_valid)
-            reason="return_abi";
-        else if(fn->block_count>2048U)reason="block_cap";
-        else if(!direct_lp64_only_structured_asm(fn, qualify_opaque_asm))
-            reason="gnu_asm_qualification";
-        else if(minic_core_function_parameter_count(fn)>MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS)
-            reason="parameter_cap";
-        else if(!minic_lp64_baseline_values_fit_frame(fn->value_count))reason="value_cap";
-        else if(fn->object_count>8192U)reason="object_cap";
-        if(reason!=NULL&&strcmp(reason,"gnu_asm_qualification")==0)
-            direct_lp64_trace_asm_owners(fn,arch,name);
-        if(reason!=NULL)
-            (void)fprintf(stderr,
-                "MINIC_BACKEND_PREFLIGHT_ROOT arch=%s function=%s reason=%s "
-                "blocks=%zu parameters=%zu inline=%zu\n",
-                arch,name!=NULL?name:"<unnamed>",reason,
-                fn->block_count,minic_core_function_parameter_count(fn),fn->inline_asm_count);
-    }
-    if (name == NULL || name[0] == '\0' ||
+    if (module_decl->name == NULL || module_decl->name[0] == '\0' ||
         !verified ||
         !visibility_valid ||
         alias_present ||
@@ -185,23 +107,7 @@ bool minic_multi_direct_lp64_function_preflight(
         minic_core_function_parameter_count(fn) > MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS ||
         !minic_lp64_baseline_values_fit_frame(fn->value_count) ||
         fn->object_count > 8192U)
-        {
-            if (getenv("MINIC_BACKEND_CENSUS") != NULL)
-                (void)fprintf(stderr,
-                              "MINIC_BACKEND_PREFLIGHT arch=%s function=%s "
-                              "blocks=%zu values=%zu objects=%zu params=%zu "
-                              "entry=%u inline=%zu return_valid=%d verified=%d "
-                              "constructor=%d weak=%d visibility=%d section=%d\n",
-                              arch, name != NULL ? name : "<unnamed>",
-                              fn->block_count, fn->value_count, fn->object_count,
-                              minic_core_function_parameter_count(fn), (unsigned int)fn->entry_block,
-                              fn->inline_asm_count,
-                              return_valid ? 1 : 0,
-                              verified ? 1 : 0,
-                              constructor ? 1 : 0, weak ? 1 : 0,
-                              (int)visibility, has_section ? 1 : 0);
-            return false;
-        }
+        return false;
     return true;
 }
 

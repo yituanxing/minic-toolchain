@@ -3,7 +3,6 @@
 #include "target/common/core_instruction_family.h"
 #include "target/common/lp64_aggregate.h"
 #include "target/common/lp64_scalar.h"
-#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -243,7 +242,7 @@ static bool minic_lp64_admit_call(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     const MinicCoreCallView *semantic_view,
     const MinicDirectLP64AbiPolicy *abi,
-    const char *arch, const char *name, size_t i,
+    const char *arch, const char *name,
     MinicCoreTypeId core_ids[MINIC_DIRECT_LP64_MAX_CALL_ARGUMENTS]) {
     MinicCoreCallView call;
     size_t j, begin, count, parameter_count;
@@ -291,21 +290,6 @@ static bool minic_lp64_admit_call(
                fn->values[ins->result].core_type_id != ins->core_type_id) ||
             !minic_lp64_core_valid_return_with_policy(
                 core_types, ins->core_type_id, abi))) {
-            const MinicCoreType *diagnostic_type =
-                minic_core_type_base(core_types, ins->core_type_id);
-            if (getenv("MINIC_BACKEND_CENSUS") != NULL)
-                (void)fprintf(stderr,
-                    "MINIC_CALL_RESULT_REJECT arch=%s function=%s "
-                    "instruction=%zu return_core_kind=%d is_float128=%d "
-                    "return_valid=%d value_match=%d\n",
-                    arch, name, i,
-                    diagnostic_type != NULL ? (int)diagnostic_type->kind : -1,
-                    minic_lp64_core_float_format(diagnostic_type,
-                        MINIC_CORE_FLOAT_BINARY128) ? 1 : 0,
-                    minic_lp64_core_valid_return_with_policy(
-                        core_types, ins->core_type_id, abi) ? 1 : 0,
-                    ins->result < fn->value_count &&
-                    fn->values[ins->result].core_type_id == ins->core_type_id ? 1 : 0);
             return false;
         }
         /* Core/ABI-neutral return shape was already checked by the view. */
@@ -321,18 +305,6 @@ static bool minic_lp64_admit_call(
         count = call.argument_count;
         parameter_count = call.parameter_count;
         is_variadic = call.is_variadic;
-        /* Batch Lua triage: expose actual ABI gate dimensions rather than
-         * spending a runner cycle on each failed translation unit. */
-        if (getenv("MINIC_BACKEND_CENSUS") != NULL && count > 8U)
-            (void)fprintf(stderr,
-                          "MINIC_BACKEND_CALL_GATE arch=%s function=%s "
-                          "instruction=%zu count=%zu fixed=%zu variadic=%d "
-                          "indirect=%d return_valid=%d\n",
-                          arch, name, i, count, parameter_count,
-                          is_variadic ? 1 : 0,
-                          ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ? 1 : 0,
-                          minic_lp64_core_valid_return_with_policy(
-                              core_types, call.core_return_type_id, abi) ? 1 : 0);
         if (call.core_return_type_id != ins->core_type_id ||
             /* Fixed binary64 call results are transferred from the target FP
              * ABI result register; aggregate and other types still fail closed. */
@@ -390,12 +362,6 @@ static bool minic_lp64_admit_call(
             }
             if (arg->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
                 arg->value.value_id >= fn->value_count) {
-                if (getenv("MINIC_BACKEND_CENSUS") != NULL)
-                    (void)fprintf(stderr,
-                        "MINIC_SQLITE_CALL_ARGUMENT arch=%s function=%s argument=%zu arg_kind=%d fixed=%zu total=%zu expected_core=%zu\n",
-                        arch, name, j, (int)arg->kind, parameter_count, count,
-                        j < parameter_count ? call.core_parameter_type_ids[j] :
-                                              MINIC_CORE_TYPE_INVALID);
                 return false;
             }
             if (!minic_lp64_core_valid_parameter_with_policy(
@@ -480,7 +446,7 @@ bool minic_lp64_plan_function_calls(
             !minic_lp64_admit_call(
                 fn, &fn->instructions[id],
                 &calls->sites[ordinal].view, abi,
-                arch, name, id, core_ids))
+                arch, name, core_ids))
             goto failed;
         *failed_preflight = false;
         hidden_indirect_result =

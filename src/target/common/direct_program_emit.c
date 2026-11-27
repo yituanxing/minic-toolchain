@@ -1,6 +1,5 @@
 #include "target/common/direct_program_emit.h"
 
-#include "target/backend_core_usage.h"
 #include "target/common/module_global_emit.h"
 #include "target/common/elf_alias_emit.h"
 #include "target/common/program_visit.h"
@@ -43,12 +42,8 @@ bool minic_multi_direct_machine_reject(const MinicCoreFunction *fn, const char *
     return false;
 }
 
-/* This adapter retains the M1 diagnostic and census behavior while the
- * program-wide walk is shared with x86/RV32/RV64. */
 typedef struct MinicDirectVisitContext {
     const MinicMultiDirectModuleConfig *config;
-    size_t scanned_functions, rejected_functions;
-    bool census;
 } MinicDirectVisitContext;
 
 static bool direct_emit_module_global(FILE *out,
@@ -104,11 +99,9 @@ static bool direct_visit_function(
     const MinicCoreObjectStoragePlan *storage, size_t index,
     bool function_sections, void *opaque) {
     MinicDirectVisitContext *ctx = opaque;
-    ++ctx->scanned_functions;
     if (ctx->config->emit_function(out, target, module, module_decl, fn,
                                    facts, storage, index, function_sections))
         return true;
-    ++ctx->rejected_functions;
     if (getenv("MINIC_M1_TRACE") != NULL) {
         (void)fprintf(stderr,
             "MINIC_M1_FRONTIER arch=%s function=%s "
@@ -118,7 +111,6 @@ static bool direct_visit_function(
             fn->name != NULL ? fn->name : "<unnamed>",
             fn->block_count, fn->object_count, minic_core_function_parameter_count(fn),
             fn->value_count, fn->instruction_count);
-        if (!ctx->census) (void)minic_core_function_dump(stderr, fn);
     }
     return false;
 }
@@ -146,8 +138,7 @@ bool minic_multi_direct_write_module(
     const MinicCoreModule *module, const MinicMultiDirectModuleConfig *config,
     MinicDiagnostic *diagnostic) {
     bool success;
-    const bool census = getenv("MINIC_BACKEND_CENSUS") != NULL;
-    MinicDirectVisitContext visits = { config, 0U, 0U, census };
+    MinicDirectVisitContext visits = { config };
 
     if (config == NULL || config->architecture_name == NULL ||
         config->display_name == NULL || config->gnu_stack_note == NULL ||
@@ -166,21 +157,12 @@ bool minic_multi_direct_write_module(
             direct_visit_function,
             NULL, direct_between,
             config->gnu_stack_note, NULL,
-            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, census
+            MINIC_PROGRAM_FUNCTION_LIVE_DEFINITIONS, false
         };
         success = minic_program_emit_write_module(
             path, module, target, core_functions, core_function_count,
             function_sections, &emit, &visits,
             direct_visit_module_global);
-    }
-    if (census) {
-        minic_backend_core_usage_dump(config->architecture_name,
-                                      module, core_functions,
-                                      core_function_count);
-        (void)fprintf(stderr,
-            "MINIC_BACKEND_CENSUS arch=%s scanned=%zu rejected=%zu\\n",
-            config->architecture_name, visits.scanned_functions,
-            visits.rejected_functions);
     }
     if (!success)
         return minic_multi_direct_fail(diagnostic, path, config->display_name,
