@@ -42,6 +42,13 @@ jobs:
             --scope src/target/x86_64 --output asam-out
           cat asam-out/report.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Rank structural near-duplicate candidates
+        run: |
+          python3 -m py_compile tools/asam/near_duplicates.py
+          python3 tools/asam/near_duplicates.py --repo . \
+            --input asam-out/symbols.json --output asam-out
+          cat asam-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v4
