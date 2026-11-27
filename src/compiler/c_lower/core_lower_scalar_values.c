@@ -227,26 +227,16 @@ MinicCoreLowerStatus minic_core_lower_internal_spill_scalar_value(MinicCoreLower
                                                MinicType type,
                                                MinicCoreValueId value_id,
                                                MinicCoreObjectId *object_id) {
-    MinicCoreValueId address_id;
-    MinicType pointer_type;
-
     if (context == NULL || context->function == NULL || object_id == NULL ||
         !core_memory_scalar_type(type) || minic_type_is_const(type) ||
         minic_type_is_volatile(type) || value_id >= context->function->value_count ||
         !minic_type_equal(minic_core_function_source_value_type(context->source, value_id), type)) {
         return MINIC_CORE_LOWER_ERROR;
     }
-    if (!minic_core_function_add_object(context->source, span, type, object_id) ||
-        !minic_type_pointer_to(type, &pointer_type)) {
+    if (!minic_core_function_add_object(context->source, span, type, object_id))
         return MINIC_CORE_LOWER_ERROR;
-    }
-
-    if (core_scalar_object_address(context, span, pointer_type,
-                                   *object_id, &address_id) != MINIC_CORE_LOWER_OK)
-        return MINIC_CORE_LOWER_ERROR;
-
-    return minic_core_lower_internal_emit_scalar_store(
-        context, span, address_id, value_id, false);
+    return minic_core_lower_internal_store_scalar_value(
+        context, span, type, *object_id, value_id);
 }
 
 MinicCoreLowerStatus minic_core_lower_internal_store_scalar_value(MinicCoreLowerContext *context,
