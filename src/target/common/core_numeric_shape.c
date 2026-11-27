@@ -153,27 +153,20 @@ bool minic_core_integer_overflow_u64_u32_to_i32_shape(
 bool minic_core_integer_overflow_mixed_multiply_i32_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
     bool *signed_left, bool *signed_right, bool *signed_result) {
-    MinicCoreValueId lhs, rhs;
-    MinicCoreTypeId result_id;
-    size_t left_width, right_width, result_width;
-    if (!fn || !ins || !signed_left ||
-        !signed_right || !signed_result ||
+    MinicCoreIntegerOverflowNarrowShape shape;
+    if (ins == NULL || signed_left == NULL || signed_right == NULL ||
+        signed_result == NULL ||
         ins->kind != MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
         ins->value.integer_overflow.operator_kind !=
-            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)
+            MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY ||
+        !core_numeric_overflow_widths(fn, ins, &shape) ||
+        shape.left_width != 4U || shape.right_width != 4U ||
+        shape.result_width != 4U)
         return false;
-    lhs = ins->value.integer_overflow.left;
-    rhs = ins->value.integer_overflow.right;
-    if (!core_numeric_overflow_result(fn, ins, &result_id) ||
-        !minic_lp64_function_integer_width(fn, result_id, &result_width, signed_result) ||
-        !minic_lp64_function_integer_width(fn, fn->values[lhs].core_type_id,
-                              &left_width, signed_left) ||
-        !minic_lp64_function_integer_width(fn, fn->values[rhs].core_type_id,
-                              &right_width, signed_right) ||
-        left_width != 4U || right_width != 4U || result_width != 4U)
-        return false;
-    /* Common is only classifying an otherwise unsupported mixed ABI shape.
-     * Uniform types are already governed by the original shape validator. */
+    *signed_left = shape.left_signed;
+    *signed_right = shape.right_signed;
+    *signed_result = shape.result_signed;
+    /* Only mixed ABI shapes need this special lowering. */
     return *signed_left != *signed_right || *signed_left != *signed_result;
 }
 
