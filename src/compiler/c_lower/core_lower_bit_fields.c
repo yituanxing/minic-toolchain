@@ -248,6 +248,51 @@ static MinicCoreLowerStatus core_bit_field_store_storage(
     return MINIC_CORE_LOWER_OK;
 }
 
+/* Shared byte-window extraction; read, compound and update must agree
+ * on bit offsets even when a packed field crosses addressable storage. */
+static MinicCoreLowerStatus bit_field_extract_storage(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicType storage_type, MinicCoreValueId *value,
+    size_t bit_offset, size_t field_width, unsigned int storage_width) {
+    MinicCoreValueId constant;
+    if (bit_offset != 0U) {
+        if (!bit_field_constant(context, span, minic_type_unsigned_int(),
+                                (uint64_t)bit_offset, &constant) ||
+            !bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
+                              storage_type, *value, constant, value))
+            return MINIC_CORE_LOWER_ERROR;
+    }
+    if (field_width < storage_width) {
+        if (!bit_field_constant(context, span, storage_type,
+                                minic_integer_mask64(field_width), &constant) ||
+            !bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                              storage_type, *value, constant, value))
+            return MINIC_CORE_LOWER_ERROR;
+    }
+    return MINIC_CORE_LOWER_OK;
+}
+
+/* One RMW merge for simple assignment, compound assignment, and ++/--.
+ * The callers preserve their own evaluation order and exact volatile loads. */
+static MinicCoreLowerStatus bit_field_merge_storage(
+    MinicCoreLowerContext *context, MinicSourceSpan span,
+    MinicCoreValueId address, MinicCoreValueId current,
+    MinicCoreValueId field_storage, MinicType storage_type,
+    size_t field_width, size_t bit_offset, unsigned int storage_width,
+    bool narrow, size_t byte_count, bool is_volatile) {
+    MinicCoreValueId constant, merged;
+    uint64_t field_mask = minic_integer_mask64(field_width) << bit_offset;
+    uint64_t clear_mask = (~field_mask) & minic_integer_mask64(storage_width);
+    if (!bit_field_constant(context, span, storage_type, clear_mask, &constant) ||
+        !bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
+                          storage_type, current, constant, &merged) ||
+        !bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
+                          storage_type, merged, field_storage, &merged))
+        return MINIC_CORE_LOWER_ERROR;
+    return core_bit_field_store_storage(
+        context, span, address, merged, narrow, byte_count, is_volatile);
+}
+
 MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
     MinicCoreLowerContext *context, const MinicExpression *target,
     MinicExpressionId source_id, MinicSourceSpan span,
@@ -278,7 +323,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
             MinicCoreValueId field_storage;
             MinicCoreValueId assigned_value;
             MinicCoreValueId constant;
-            MinicCoreValueId merged;
             MinicCoreLowerStatus bit_status;
             MinicType base_value_type;
             MinicType record_type;
@@ -292,9 +336,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
             unsigned int semantic_width;
             bool narrow;
             uint64_t low_mask;
-            uint64_t field_mask;
-            uint64_t clear_mask;
-            uint64_t storage_mask;
 
             if (base == NULL || record == NULL || field->bit_width == 0U ||
                 !minic_type_unqualified(target->type, &value_type) ||
@@ -419,19 +460,9 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_assignment(
                     return MINIC_CORE_LOWER_ERROR;
             }
 
-            field_mask = low_mask << bit_offset;
-            storage_mask = minic_integer_mask64(storage_width);
-            clear_mask = (~field_mask) & storage_mask;
-            if (!bit_field_constant(context, span, storage_type, clear_mask, &constant))
-                return MINIC_CORE_LOWER_ERROR;
-            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                                  storage_type, current, constant, &merged))
-                return MINIC_CORE_LOWER_ERROR;
-            if (!bit_field_binary(context, span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
-                                  storage_type, merged, field_storage, &merged))
-                return MINIC_CORE_LOWER_ERROR;
-            bit_status = core_bit_field_store_storage(
-                context, span, address, merged, narrow, byte_count,
+            bit_status = bit_field_merge_storage(
+                context, span, address, current, field_storage, storage_type,
+                field->bit_width, bit_offset, storage_width, narrow, byte_count,
                 minic_type_is_volatile(target->type));
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             if (result_value != NULL) {
@@ -460,7 +491,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
         MinicCoreValueId address_id;
         MinicCoreValueId base_id;
         MinicCoreValueId current;
-        MinicCoreValueId rhs;
         MinicCoreLowerStatus status;
         MinicType base_value_type;
         MinicType record_type;
@@ -472,7 +502,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
         size_t byte_count;
         unsigned int storage_width;
         bool narrow;
-        uint64_t mask_bits;
 
         base = minic_c0_program_expression(context->body->program, expression->value.member.base);
         record = minic_c0_program_record(context->body->program, expression->value.member.record_id);
@@ -534,21 +563,10 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_read(
                 context, expression->span, address_id, storage_type, narrow,
                 byte_count, minic_type_is_volatile(expression->type), &current);
             if (status != MINIC_CORE_LOWER_OK) return status;
-            if (bit_offset != 0U) {
-                if (!bit_field_constant(context, expression->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &rhs))
-                    return MINIC_CORE_LOWER_ERROR;
-                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
-                                      storage_type, current, rhs, &current))
-                    return MINIC_CORE_LOWER_ERROR;
-            }
-            if (field->bit_width < storage_width) {
-                mask_bits = minic_integer_mask64(field->bit_width);
-                if (!bit_field_constant(context, expression->span, storage_type, mask_bits, &rhs))
-                    return MINIC_CORE_LOWER_ERROR;
-                if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                                      storage_type, current, rhs, &current))
-                    return MINIC_CORE_LOWER_ERROR;
-            }
+            status = bit_field_extract_storage(
+                context, expression->span, storage_type, &current,
+                bit_offset, field->bit_width, storage_width);
+            if (status != MINIC_CORE_LOWER_OK) return status;
             if (minic_type_is_unsigned_integer(value_type)) {
                 if (minic_type_equal(storage_type, value_type)) {
                     *value_id = current;
@@ -627,7 +645,6 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             MinicCoreValueId bit_current_common;
             MinicCoreValueId bit_field_storage;
             MinicCoreValueId bit_merge_current;
-            MinicCoreValueId bit_merged;
             MinicCoreValueId bit_result;
             MinicCoreValueId bit_rhs;
             MinicCoreValueId bit_rhs_common;
@@ -647,10 +664,7 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
             size_t bit_byte_count;
             unsigned int bit_storage_width;
             unsigned int bit_semantic_width;
-            uint64_t bit_clear_mask;
-            uint64_t bit_field_mask;
             uint64_t bit_low_mask;
-            uint64_t bit_storage_mask;
             bool bit_shift_assignment;
             bool bit_narrow;
 
@@ -744,21 +758,11 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                 bit_narrow, bit_byte_count,
                 minic_type_is_volatile(bit_target->type), &bit_current);
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
-            if (bit_offset != 0U) {
-                if (!bit_field_constant(context, bit_target->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &bit_constant))
-                    return MINIC_CORE_LOWER_ERROR;
-                if (!bit_field_binary(context, bit_target->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
-                                      bit_storage_type, bit_current, bit_constant, &bit_current))
-                    return MINIC_CORE_LOWER_ERROR;
-            }
+            bit_status = bit_field_extract_storage(
+                context, bit_target->span, bit_storage_type, &bit_current,
+                bit_offset, bit_field->bit_width, bit_storage_width);
+            if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             bit_low_mask = minic_integer_mask64(bit_field->bit_width);
-            if (bit_field->bit_width < bit_storage_width) {
-                if (!bit_field_constant(context, bit_target->span, bit_storage_type, bit_low_mask, &bit_constant))
-                    return MINIC_CORE_LOWER_ERROR;
-                if (!bit_field_binary(context, bit_target->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                                      bit_storage_type, bit_current, bit_constant, &bit_current))
-                    return MINIC_CORE_LOWER_ERROR;
-            }
             if (!minic_type_equal(bit_storage_type, bit_value_type)) {
                 bit_status = minic_core_lower_internal_append_integer_conversion(context,
                                                        bit_target->span,
@@ -919,25 +923,15 @@ MinicCoreLowerStatus minic_core_lower_try_bit_field_compound(
                                       bit_storage_type, bit_field_storage, bit_constant, &bit_field_storage))
                     return MINIC_CORE_LOWER_ERROR;
             }
-            bit_field_mask = bit_low_mask << bit_offset;
-            bit_storage_mask = minic_integer_mask64(bit_storage_width);
-            bit_clear_mask = (~bit_field_mask) & bit_storage_mask;
             bit_status = core_bit_field_load_storage(
                 context, expression->span, bit_address, bit_storage_type,
                 bit_narrow, bit_byte_count,
                 minic_type_is_volatile(bit_target->type), &bit_merge_current);
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
-            if (!bit_field_constant(context, expression->span, bit_storage_type, bit_clear_mask, &bit_constant))
-                return MINIC_CORE_LOWER_ERROR;
-            if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                                  bit_storage_type, bit_merge_current, bit_constant, &bit_merged))
-                return MINIC_CORE_LOWER_ERROR;
-            if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
-                                  bit_storage_type, bit_merged, bit_field_storage, &bit_merged))
-                return MINIC_CORE_LOWER_ERROR;
-            bit_status = core_bit_field_store_storage(
-                context, expression->span, bit_address, bit_merged,
-                bit_narrow, bit_byte_count,
+            bit_status = bit_field_merge_storage(
+                context, expression->span, bit_address, bit_merge_current,
+                bit_field_storage, bit_storage_type, bit_field->bit_width,
+                bit_offset, bit_storage_width, bit_narrow, bit_byte_count,
                 minic_type_is_volatile(bit_target->type));
             if (bit_status != MINIC_CORE_LOWER_OK) return bit_status;
             *value_id = bit_stored_value;
@@ -967,7 +961,6 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     MinicCoreValueId current_promoted;
     MinicCoreValueId current_storage;
     MinicCoreValueId field_storage;
-    MinicCoreValueId merged;
     MinicCoreValueId shifted_current;
     MinicCoreValueId updated_promoted;
     MinicCoreValueId updated_value;
@@ -984,10 +977,7 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
     unsigned int storage_width;
     unsigned int semantic_width;
     bool narrow;
-    uint64_t clear_mask;
-    uint64_t field_mask;
     uint64_t low_mask;
-    uint64_t storage_mask;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
         context->function == NULL || expression == NULL || operand == NULL || value_id == NULL ||
@@ -1059,21 +1049,11 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
         minic_type_is_volatile(operand->type), &current_storage);
     if (status != MINIC_CORE_LOWER_OK) return status;
     shifted_current = current_storage;
-    if (bit_offset != 0U) {
-        if (!bit_field_constant(context, operand->span, minic_type_unsigned_int(), (uint64_t)((int64_t)bit_offset), &constant))
-            return MINIC_CORE_LOWER_ERROR;
-        if (!bit_field_binary(context, operand->span, MINIC_CORE_INSTRUCTION_INTEGER_SHIFT_RIGHT,
-                              storage_type, shifted_current, constant, &shifted_current))
-            return MINIC_CORE_LOWER_ERROR;
-    }
+    status = bit_field_extract_storage(
+        context, operand->span, storage_type, &shifted_current,
+        bit_offset, field->bit_width, storage_width);
+    if (status != MINIC_CORE_LOWER_OK) return status;
     low_mask = minic_integer_mask64(field->bit_width);
-    if (field->bit_width < storage_width) {
-        if (!bit_field_constant(context, operand->span, storage_type, low_mask, &constant))
-            return MINIC_CORE_LOWER_ERROR;
-        if (!bit_field_binary(context, operand->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                              storage_type, shifted_current, constant, &shifted_current))
-            return MINIC_CORE_LOWER_ERROR;
-    }
     current_field = shifted_current;
     if (!minic_type_equal(storage_type, value_type)) {
         status = minic_core_lower_internal_append_integer_conversion(
@@ -1155,20 +1135,10 @@ MinicCoreLowerStatus minic_core_lower_bit_field_update(
             return MINIC_CORE_LOWER_ERROR;
     }
 
-    field_mask = low_mask << bit_offset;
-    storage_mask = minic_integer_mask64(storage_width);
-    clear_mask = (~field_mask) & storage_mask;
-    if (!bit_field_constant(context, expression->span, storage_type, clear_mask, &constant))
-        return MINIC_CORE_LOWER_ERROR;
-    if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND,
-                          storage_type, current_storage, constant, &merged))
-        return MINIC_CORE_LOWER_ERROR;
-    if (!bit_field_binary(context, expression->span, MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR,
-                          storage_type, merged, field_storage, &merged))
-        return MINIC_CORE_LOWER_ERROR;
-    status = core_bit_field_store_storage(
-        context, expression->span, address, merged, narrow, byte_count,
-        minic_type_is_volatile(operand->type));
+    status = bit_field_merge_storage(
+        context, expression->span, address, current_storage, field_storage,
+        storage_type, field->bit_width, bit_offset, storage_width,
+        narrow, byte_count, minic_type_is_volatile(operand->type));
     if (status != MINIC_CORE_LOWER_OK) return status;
     *value_id = prefix ? updated_value : current_field;
     return MINIC_CORE_LOWER_OK;
