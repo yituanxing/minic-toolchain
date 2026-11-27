@@ -723,7 +723,8 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t child_count;
 
-            if (!global_object_type_initializer_slot_count_at(
+            if (base_slot > SIZE_MAX - total ||
+                !global_object_type_initializer_slot_count_at(
                     program, object, array_type->element_type, base_slot + total, &child_count) ||
                 total > SIZE_MAX - child_count) {
                 return false;
@@ -784,7 +785,8 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
             for (element_index = 0U; element_index < element_count; ++element_index) {
                 size_t child_count;
 
-                if (!global_object_type_initializer_slot_count_at(
+                if (base_slot > SIZE_MAX - total ||
+                    !global_object_type_initializer_slot_count_at(
                         program, object, field_element_type, base_slot + total, &child_count) ||
                     total > SIZE_MAX - child_count) {
                     return false;
