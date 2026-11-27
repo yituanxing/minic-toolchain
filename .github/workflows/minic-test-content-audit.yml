@@ -21,103 +21,7 @@ jobs:
       - name: Verify MiniAS and MiniPP native smoke contracts
         run: make MODE=release CFLAGS=-Werror check-toolchain
 
-  temporary-codeql-minic-audit:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 32
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install official C++ CodeQL bundle
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "CODEQL_BUNDLE_START=$(date -u +%FT%TZ)"
-          mkdir -p /tmp/minic-codeql-install
-          curl --fail --location --retry 3 --connect-timeout 30 --max-time 360 \
-            https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.27.6/codeql-bundle-cpp-linux64.tar.zst \
-            -o /tmp/minic-codeql-bundle.tar.zst
-          echo "CODEQL_DOWNLOAD_BYTES=$(stat -c%s /tmp/minic-codeql-bundle.tar.zst)"
-          tar --zstd -xf /tmp/minic-codeql-bundle.tar.zst -C /tmp/minic-codeql-install
-          /tmp/minic-codeql-install/codeql/codeql version
-          echo "CODEQL_CPACKS=$(/tmp/minic-codeql-install/codeql/codeql resolve packs 2>&1 | grep -c 'codeql/cpp-queries' || true)"
-          df -h .
-      - name: Create CodeQL database from complete MiniC production build
-        shell: bash
-        run: |
-          set -euo pipefail
-          START=$SECONDS
-          echo "CODEQL_DB_START=$(date -u +%FT%TZ)"
-          timeout --signal=TERM --kill-after=20s 900s \
-            /tmp/minic-codeql-install/codeql/codeql database create /tmp/minic-codeql-db \
-            --language=cpp --source-root=. --threads=4 --ram=8500 \
-            --command='make -B -j4 MODE=release CFLAGS=-Werror all' \
-            > /tmp/minic-codeql-db.log 2>&1 || {
-              rc=$?
-              echo "CODEQL_DATABASE_EXIT=$rc"
-              tail -110 /tmp/minic-codeql-db.log
-              exit "$rc"
-            }
-          echo "CODEQL_DATABASE_EXIT=0"
-          echo "CODEQL_DATABASE_SECONDS=$((SECONDS-START))"
-          du -sh /tmp/minic-codeql-db
-          tail -35 /tmp/minic-codeql-db.log
-      - name: Run C++ security and quality queries, extract dead-code diagnoses
-        shell: bash
-        run: |
-          set -euo pipefail
-          START=$SECONDS
-          echo "CODEQL_ANALYSIS_START=$(date -u +%FT%TZ)"
-          timeout --signal=TERM --kill-after=20s 900s \
-            /tmp/minic-codeql-install/codeql/codeql database analyze /tmp/minic-codeql-db \
-            'codeql/cpp-queries:codeql-suites/cpp-security-and-quality.qls' \
-            --format=sarif-latest --output=/tmp/minic-codeql.sarif \
-            --threads=4 --ram=8500 \
-            > /tmp/minic-codeql-analysis.log 2>&1 || {
-              rc=$?
-              echo "CODEQL_ANALYSIS_EXIT=$rc"
-              tail -110 /tmp/minic-codeql-analysis.log
-              exit "$rc"
-            }
-          echo "CODEQL_ANALYSIS_EXIT=0"
-          echo "CODEQL_ANALYSIS_SECONDS=$((SECONDS-START))"
-          python3 - <<'PY'
-          import collections,json,pathlib
-          p=pathlib.Path('/tmp/minic-codeql.sarif')
-          j=json.loads(p.read_text())
-          rules=collections.Counter()
-          rows=[]
-          for run in j.get('runs',[]):
-              for r in run.get('results',[]):
-                  rule=r.get('ruleId','unknown')
-                  rules[rule]+=1
-                  locs=r.get('locations') or []
-                  pl=locs[0].get('physicalLocation',{}) if locs else {}
-                  art=pl.get('artifactLocation',{}).get('uri','')
-                  ln=pl.get('region',{}).get('startLine',0)
-                  msg=r.get('message',{}).get('text','').replace('\n',' ')[:240]
-                  rows.append((rule,art,ln,msg))
-          wanted=('unused','dead-code','useless','constant','unreachable')
-          focus=[r for r in rows if any(t in r[0].lower() for t in wanted)]
-          print('CODEQL_RULES_WITH_FINDINGS',len(rules))
-          print('CODEQL_TOTAL_ALERTS',len(rows))
-          print('CODEQL_FOCUSED_ALERTS',len(focus))
-          for k,n in sorted(rules.items(),key=lambda x:-x[1])[:60]:print('CODEQL_RULE',n,k)
-          for row in focus[:150]:print('CODEQL_FOCUS',*row,sep=' | ')
-          print('CODEQL_COMPILER_ALERTS',sum(1 for x in rows if '/compiler/' in x[1] or '/frontend/' in x[1] or '/core/' in x[1]))
-          PY
-          tail -35 /tmp/minic-codeql-analysis.log
-      - name: Upload CodeQL SARIF report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minic-codeql-deadcode-sarif
-          path: |
-            /tmp/minic-codeql.sarif
-            /tmp/minic-codeql-analysis.log
-            /tmp/minic-codeql-db.log
-          if-no-files-found: ignore
-          retention-days: 7
-
-  temporary-joern-minic-audit:
+  temporary-joern-callgraph-audit:
     runs-on: ubuntu-24.04
     timeout-minutes: 32
     steps:
@@ -168,11 +72,29 @@ jobs:
           cat > /tmp/minic-joern-query.sc <<'SCALA'
           @main def exec(cpgFile: String) = {
             importCpg(cpgFile)
-            println("JOERN_METHOD_TOTAL=" + cpg.method.size)
-            println("JOERN_CALL_TOTAL=" + cpg.call.size)
-            println("JOERN_TYPES_TOTAL=" + cpg.typeDecl.size)
-            println("JOERN_COMPILER_METHODS=" + cpg.method.filename(".*src/(compiler|frontend|core)/.*").size)
-            println("JOERN_COMPILER_METHOD_SAMPLE=" + cpg.method.filename(".*src/(compiler|frontend|core)/.*").name.l.take(20).mkString(","))
+            val names = cpg.method.filename.l.distinct
+            val methods = cpg.method.l.filter(m => !m.isExternal && m.name != "<global>")
+            val directNames = cpg.call.methodFullName.l.toSet
+            val noDirect = methods.filter(m => !directNames.contains(m.fullName))
+            val userMethods = methods.filter(m =>
+              m.filename.contains("compiler/") ||
+              m.filename.contains("frontend/") ||
+              m.filename.contains("core/") ||
+              m.filename.contains("target/"))
+            val userNoDirect = noDirect.filter(m =>
+              m.filename.contains("compiler/") ||
+              m.filename.contains("frontend/") ||
+              m.filename.contains("core/") ||
+              m.filename.contains("target/"))
+            println("JOERN_ALL_METHODS=" + cpg.method.size)
+            println("JOERN_FILENAMES_SAMPLE=" + names.take(25).mkString("|"))
+            println("JOERN_SOURCE_METHODS=" + methods.size)
+            println("JOERN_SOURCE_NO_DIRECT_CALLS=" + noDirect.size)
+            println("JOERN_USER_METHODS=" + userMethods.size)
+            println("JOERN_USER_NO_DIRECT_CALLS=" + userNoDirect.size)
+            for (m <- userNoDirect.sortBy(_.filename).take(150)) {
+              println("JOERN_DIRECT_CALL_CANDIDATE|" + m.filename + "|" + m.lineNumber.getOrElse(0) + "|" + m.name + "|" + m.fullName)
+            }
           }
           SCALA
           QUERY_START=$SECONDS
@@ -188,14 +110,15 @@ jobs:
             }
           echo "JOERN_QUERY_EXIT=0"
           echo "JOERN_QUERY_SECONDS=$((SECONDS-QUERY_START))"
-          grep -E 'JOERN_(METHOD|CALL|TYPES|COMPILER)' /tmp/minic-joern-query.log | tail -20
+          grep -E 'JOERN_(ALL_METHODS|FILENAMES_SAMPLE|SOURCE_METHODS|SOURCE_NO_DIRECT_CALLS|USER_METHODS|USER_NO_DIRECT_CALLS|DIRECT_CALL_CANDIDATE)' /tmp/minic-joern-query.log | head -180
       - name: Upload Joern CPG diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: minic-joern-cpg-diagnostics
+          name: minic-joern-callgraph-candidates
           path: |
             /tmp/minic-joern-build.log
             /tmp/minic-joern-query.log
+            /tmp/minic-joern.cpg.bin.zip
           if-no-files-found: ignore
           retention-days: 7
