@@ -6,13 +6,13 @@
 
 /* One Core scan both computes semantic facts and, for the prepared visitor,
  * collects va_start results. Standalone consumers remain allocation-free. */
-bool minic_core_function_facts_analyze_collect(
+bool minic_core_function_facts_analyze(
     const MinicCoreFunction *function, MinicCoreFunctionFacts *facts,
     MinicCoreValueId **variadic_results) {
     size_t index, capacity = 0U;
     if (function == NULL || facts == NULL ||
         (function->instruction_count != 0U && function->instructions == NULL) ||
-        (variadic_results != NULL && *variadic_results != NULL))
+        variadic_results == NULL || *variadic_results != NULL)
         return false;
     memset(facts, 0, sizeof(*facts));
     for (index = 0U; index < function->instruction_count; ++index) {
@@ -22,14 +22,6 @@ bool minic_core_function_facts_analyze_collect(
                 ++facts->direct_call_count;
             else
                 ++facts->indirect_call_count;
-            {
-                const size_t arity =
-                    instruction->kind == MINIC_CORE_INSTRUCTION_CALL
-                        ? instruction->value.call.argument_count
-                        : instruction->value.indirect_call.argument_count;
-                if (arity > facts->max_call_arity)
-                    facts->max_call_arity = arity;
-            }
             facts->needs_saved_return_address = true;
             continue;
         }
@@ -46,7 +38,7 @@ bool minic_core_function_facts_analyze_collect(
             facts->uses_dynamic_stack_alloc = true;
             break;
         case MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS:
-            if (variadic_results != NULL) {
+            {
                 const size_t n = facts->variadic_address_count;
                 if (n == capacity) {
                     size_t next;
@@ -63,22 +55,18 @@ bool minic_core_function_facts_analyze_collect(
                 (*variadic_results)[n] = instruction->result;
             }
             ++facts->variadic_address_count;
+            if (!instruction->value.variadic_address.copy_destination)
+                ++facts->variadic_start_count;
             break;
         default:
             break;
         }
     }
-    if (variadic_results != NULL)
-        facts->variadic_address_results = *variadic_results;
+    facts->variadic_address_results = *variadic_results;
     return true;
 failed:
     free(*variadic_results);
     *variadic_results = NULL;
     memset(facts, 0, sizeof(*facts));
     return false;
-}
-
-bool minic_core_function_facts_analyze(
-    const MinicCoreFunction *function, MinicCoreFunctionFacts *facts) {
-    return minic_core_function_facts_analyze_collect(function, facts, NULL);
 }

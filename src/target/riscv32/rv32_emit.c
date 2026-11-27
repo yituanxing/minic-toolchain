@@ -38,7 +38,6 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
                        MinicDiagnostic *diag) {
     Rv32Frame fr = {0};
     const bool *reachable = NULL;
-    bool *owned_reachable = NULL;
     MinicRiscvFunctionSymbol sym;
     bool ok = false;
     /* RV32FunctionAbiPlan checks both return and parameter types once,
@@ -56,16 +55,12 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
         rv32_frame_destroy(&fr);
         return false;
     }
-    if (minic_core_function_facts_verified(facts, f)) {
-        reachable = facts->reachable_blocks;
-    } else {
-        owned_reachable = calloc(f->block_count == 0U ? 1U : f->block_count,
-                                 sizeof(*owned_reachable));
-        if (owned_reachable != NULL &&
-            minic_core_function_mark_reachable_blocks(
-                f, owned_reachable, f->block_count))
-            reachable = owned_reachable;
+    /* Common Program Visitor verifies and owns the exact Core CFG once. */
+    if (!minic_core_function_facts_verified(facts, f)) {
+        rv32_diag(diag, "<rv32-core>", "rv32i: prepared Core function facts missing");
+        goto done;
     }
+    reachable = facts->reachable_blocks;
     if (reachable == NULL) {
         rv32_diag(diag, "<rv32-core>", "rv32i: cannot classify Core CFG reachability");
         goto done;
@@ -98,7 +93,7 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
             };
             reject_stage = "select";
             admitted = minic_riscv_machine_select_core_for_production(
-                &machine, &bridge);
+                &machine, &bridge, facts);
             if (admitted) {
                 reject_stage = "policy";
                 admitted = minic_riscv_machine_gnu_asm_policy(target, &policy);
@@ -124,7 +119,6 @@ static bool rv32_func(FILE *out, const MinicCoreModule *module,
         goto done;
     }
 done:
-    free(owned_reachable);
     rv32_frame_destroy(&fr);
     return ok;
 }

@@ -101,8 +101,6 @@ bool minic_riscv_machine_select_frame_transfer(MinicMachineBuilder *,
     unsigned register_number, unsigned base_register, size_t offset,
     bool load, unsigned bytes);
 
-bool minic_riscv_machine_select_frame_object(MinicMachineBuilder *,
-    size_t frame_index, size_t byte_displacement, unsigned register_number,
-    bool load, unsigned bytes);
+
 
 #endif

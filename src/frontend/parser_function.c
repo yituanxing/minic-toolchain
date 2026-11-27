@@ -1015,6 +1015,41 @@ static bool parse_post_type_declaration_specifiers(
            parse_declaration_specifiers(parser, prefix, false);
 }
 
+static bool persist_function_symbol_metadata(
+    MinicParser *parser, MinicFunctionId function_id, bool is_weak,
+    const char *assembler_name, size_t assembler_name_length, bool has_assembler_name,
+    MinicSymbolVisibility visibility, bool has_visibility,
+    const char *section_name, size_t section_name_length, bool has_section,
+    size_t explicit_alignment) {
+    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
+        minic_parser_error(parser, "conflicting GNU weak function linkage");
+        return false;
+    }
+    if (has_assembler_name &&
+        !minic_c0_program_set_function_assembler_name(
+            parser->program, function_id, assembler_name, assembler_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function asm label");
+        return false;
+    }
+    if (has_visibility &&
+        !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
+        minic_parser_error(parser, "conflicting GNU function visibility");
+        return false;
+    }
+    if (has_section && !minic_c0_program_set_function_section(
+                           parser->program, function_id, section_name, section_name_length)) {
+        minic_parser_error(parser, "conflicting or invalid GNU function section");
+        return false;
+    }
+    if (explicit_alignment != 0U &&
+        !minic_c0_program_set_function_alignment(parser->program, function_id,
+                                                 explicit_alignment)) {
+        minic_parser_error(parser, "invalid GNU function entry alignment");
+        return false;
+    }
+    return true;
+}
+
 static bool record_function_declaration_entity(MinicParser *parser,
                                                MinicSourceSpan name_span,
                                                MinicType return_type,
@@ -1104,32 +1139,10 @@ static bool record_function_declaration_entity(MinicParser *parser,
         minic_parser_error(parser, "cannot persist noreturn function metadata");
         return false;
     }
-    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
-        minic_parser_error(parser, "conflicting GNU weak function linkage");
-        return false;
-    }
-    if (has_assembler_name &&
-        !minic_c0_program_set_function_assembler_name(
-            parser->program, function_id, assembler_name, assembler_name_length)) {
-        minic_parser_error(parser, "conflicting or invalid GNU function asm label");
-        return false;
-    }
-    if (has_visibility &&
-        !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
-        minic_parser_error(parser, "conflicting GNU function visibility");
-        return false;
-    }
-    if (has_section && !minic_c0_program_set_function_section(
-                           parser->program, function_id, section_name, section_name_length)) {
-        minic_parser_error(parser, "conflicting or invalid GNU function section");
-        return false;
-    }
-    if (explicit_alignment != 0U &&
-        !minic_c0_program_set_function_alignment(parser->program, function_id,
-                                                 explicit_alignment)) {
-        minic_parser_error(parser, "invalid GNU function entry alignment");
-        return false;
-    }
+    if (!persist_function_symbol_metadata(parser, function_id, is_weak,
+            assembler_name, assembler_name_length, has_assembler_name,
+            visibility, has_visibility, section_name, section_name_length, has_section,
+            explicit_alignment)) return false;
     return minic_parser_persist_function_diagnostic(parser, function_id, diagnostic);
 }
 
@@ -2148,32 +2161,10 @@ static bool parse_function_inner(MinicParser *parser, bool is_internal) {
         minic_parser_error(parser, "cannot persist GNU constructor startup metadata");
         return false;
     }
-    if (is_weak && !minic_c0_program_set_function_weak(parser->program, function_id, true)) {
-        minic_parser_error(parser, "conflicting GNU weak function linkage");
-        return false;
-    }
-    if (has_assembler_name &&
-        !minic_c0_program_set_function_assembler_name(
-            parser->program, function_id, assembler_name, assembler_name_length)) {
-        minic_parser_error(parser, "conflicting or invalid GNU function asm label");
-        return false;
-    }
-    if (has_visibility &&
-        !minic_c0_program_set_function_visibility(parser->program, function_id, visibility)) {
-        minic_parser_error(parser, "conflicting GNU function visibility");
-        return false;
-    }
-    if (has_section && !minic_c0_program_set_function_section(
-                           parser->program, function_id, section_name, section_name_length)) {
-        minic_parser_error(parser, "conflicting or invalid GNU function section");
-        return false;
-    }
-    if (object_explicit_alignment != 0U &&
-        !minic_c0_program_set_function_alignment(parser->program, function_id,
-                                                 object_explicit_alignment)) {
-        minic_parser_error(parser, "invalid GNU function entry alignment");
-        return false;
-    }
+    if (!persist_function_symbol_metadata(parser, function_id, is_weak,
+            assembler_name, assembler_name_length, has_assembler_name,
+            visibility, has_visibility, section_name, section_name_length, has_section,
+            object_explicit_alignment)) return false;
     if (!minic_parser_persist_function_diagnostic(
             parser, function_id, &function_diagnostic)) {
         return false;

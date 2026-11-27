@@ -368,8 +368,7 @@ int minic_compile_preprocessed_file_for_target(const char *input_path,
      * completes its normal sealed Core ingress and closes again until the
      * executable graph is stable. Core closure itself never reads C AST. */
     if (success && !minic_complete_core_function_set_reachability(
-                       &program, invocation, &core_set,
-                       backend->emit_reachable_core_blocks_only)) {
+                       &program, invocation, &core_set)) {
         minic_set_diagnostic(diagnostic, input_path, 1U, 1U,
                              "cannot compute Core/Module symbol reachability");
         success = false;

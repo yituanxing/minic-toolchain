@@ -37,7 +37,7 @@ bool minic_prepare_core_function_set(const MinicC0Program *program,
  * further live FunctionId is missing its Core result. */
 bool minic_complete_core_function_set_reachability(
     const MinicC0Program *program, const MinicTargetInvocation *target,
-    MinicCoreFunctionSet *set, bool emit_reachable_core_blocks_only);
+    MinicCoreFunctionSet *set);
 /* Final C->Core module snapshot, after static pruning and DataLayout checks.
  * On failure the existing CoreFunctionSet remains owned by its caller. */
 bool minic_finalize_core_function_set_module(const MinicC0Program *program,

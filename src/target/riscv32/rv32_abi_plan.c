@@ -35,7 +35,6 @@ void rv32_function_abi_plan_destroy(Rv32FunctionAbiPlan *plan) {
             free(plan->calls[i].arguments);
     free(plan->calls);
     free(plan->parameters);
-    minic_core_call_index_handle_destroy(&plan->semantic_calls);
     (void)memset(plan, 0, sizeof(*plan));
 }
 
@@ -201,14 +200,13 @@ bool rv32_function_abi_plan_build(const MinicCoreFunction *function,
         plan->calls != NULL || plan->parameters != NULL ||
         plan->call_count != 0U || plan->parameter_count != 0U ||
         plan->max_outgoing_stack_words != 0U ||
-        plan->semantic_calls.index != NULL ||
+        plan->semantic_calls != NULL || semantic_calls == NULL ||
         (function->instruction_count != 0U && function->instructions == NULL))
         return false;
-    if (!rv32_plan_incoming(function, plan) ||
-        !minic_core_call_index_handle_prepare(
-            function, semantic_calls, &plan->semantic_calls))
+    if (!rv32_plan_incoming(function, plan))
         goto failure;
-    calls = plan->semantic_calls.index;
+    plan->semantic_calls = semantic_calls;
+    calls = plan->semantic_calls;
     if (calls->count > SIZE_MAX / sizeof(*plan->calls))
         goto failure;
     plan->call_count = calls->count;
@@ -245,16 +243,15 @@ failure:
     return false;
 }
 
-/* Common is the ONLY sparse CALL lookup in both visitor and standalone
- * ILP32. Physical register/stack placement remains owned by this plan. */
+/* Common owns the sparse CALL lookup; ILP32 owns physical ABI locations. */
 const Rv32CallAbiPlan *rv32_function_abi_call(
     const Rv32FunctionAbiPlan *plan, MinicCoreInstructionId index) {
     const MinicCoreCallIndex *calls;
     size_t ordinal;
-    if (plan == NULL || plan->semantic_calls.index == NULL ||
+    if (plan == NULL || plan->semantic_calls == NULL ||
         (plan->call_count != 0U && plan->calls == NULL))
         return NULL;
-    calls = plan->semantic_calls.index;
+    calls = plan->semantic_calls;
     if (calls->count != plan->call_count ||
         minic_core_call_index_find(calls, (size_t)index, &ordinal) == NULL ||
         ordinal >= plan->call_count ||

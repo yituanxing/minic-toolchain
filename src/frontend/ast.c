@@ -1296,28 +1296,18 @@ bool minic_c0_program_add_incomplete_array_type(MinicC0Program *program,
 bool minic_c0_program_add_query_incomplete_array_type(MinicC0Program *program,
                                                       MinicType element_type,
                                                       MinicType *array_type) {
-    MinicType created;
-
-    if (program == NULL || array_type == NULL ||
-        !minic_c0_program_add_array_descriptor(program, element_type, 0U, &created)) {
+    if (!minic_c0_program_add_incomplete_array_type(program, element_type, array_type))
         return false;
-    }
-    program->array_types[created.array_type_id].is_query_materialized = true;
-    *array_type = created;
+    program->array_types[array_type->array_type_id].is_query_materialized = true;
     return true;
 }
 
 bool minic_c0_program_add_zero_length_array_type(MinicC0Program *program,
                                                  MinicType element_type,
                                                  MinicType *array_type) {
-    MinicType created;
-
-    if (program == NULL || array_type == NULL ||
-        !minic_c0_program_add_array_descriptor(program, element_type, 0U, &created)) {
+    if (!minic_c0_program_add_incomplete_array_type(program, element_type, array_type))
         return false;
-    }
-    program->array_types[created.array_type_id].is_zero_length = true;
-    *array_type = created;
+    program->array_types[array_type->array_type_id].is_zero_length = true;
     return true;
 }
 

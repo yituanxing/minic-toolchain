@@ -240,20 +240,6 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
@@ -483,20 +469,6 @@ MinicCoreLowerStatus core_asm_try_mixed_memory_forms(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
@@ -601,8 +573,10 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
        existing execution-effect table; this does not add source-level volatile
        semantics or target-specific IR. */
     if (!source->is_goto && source->template_text != NULL &&
-        source->template_length != 0U && source->outputs != NULL && source->inputs != NULL &&
-        source->output_count == 1U && source->input_count != 0U &&
+        source->template_length != 0U && source->outputs != NULL &&
+        source->output_count == 1U &&
+        ((source->input_count != 0U && source->inputs != NULL) ||
+         (source->input_count == 0U && source->is_volatile)) &&
         source->label_count == 0U && source->register_clobber_count == 0U &&
         source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
         const MinicInlineAsmOperand *output;
@@ -627,8 +601,8 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
             !minic_type_is_volatile(output_expression->type) &&
             minic_type_unqualified(output_expression->type, &output_type) &&
             core_memory_scalar_type(output_type) &&
-            core_inline_asm_specialize_register_output_immediates(
-                context, source, &specialized_template, &specialized_length)) {
+            (source->input_count == 0U || core_inline_asm_specialize_register_output_immediates(
+                context, source, &specialized_template, &specialized_length))) {
             local = minic_c0_program_local(
                 context->body->program, output_expression->value.local_id);
             if (local == NULL) {
@@ -644,8 +618,10 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                    literal %% escapes. Retain it as an execution effect because
                    its SSA result is semantically required. */
                 if (!minic_core_function_add_opaque_inline_asm(context->function,
-                                                               specialized_template,
-                                                               specialized_length,
+                                                               specialized_template != NULL
+                                                                   ? specialized_template : source->template_text,
+                                                               specialized_template != NULL
+                                                                   ? specialized_length : source->template_length,
                                                                true,
                                                                source->has_memory_clobber,
                                                                &inline_asm_id)) {
@@ -682,115 +658,11 @@ MinicCoreLowerStatus core_asm_try_readwrite_and_output_specialization(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }
         }
         free(specialized_template);
-    }
-
-    if (source->is_volatile && !source->is_goto && source->template_text != NULL &&
-        source->template_length != 0U && source->outputs != NULL &&
-        source->output_count == 1U && source->input_count == 0U &&
-        source->label_count == 0U && source->register_clobber_count == 0U &&
-        source->clobber_count == (source->has_memory_clobber ? 1U : 0U)) {
-        const MinicInlineAsmOperand *output;
-        const MinicExpression *output_expression;
-        const MinicLocal *local;
-        MinicCoreValueId address_id;
-        MinicCoreValueId output_value;
-        MinicType output_type;
-        bool register_constraint;
-
-        output = &source->outputs[0];
-        output_expression = minic_c0_program_expression(context->body->program, output->expression);
-        register_constraint = core_inline_asm_register_output_constraint(output);
-        if (output->access == MINIC_INLINE_ASM_OPERAND_WRITE_ONLY && register_constraint &&
-            output_expression != NULL && output_expression->kind == MINIC_EXPRESSION_LOCAL &&
-            output_expression->value_category == MINIC_VALUE_LVALUE &&
-            !minic_type_is_const(output_expression->type) &&
-            !minic_type_is_volatile(output_expression->type) &&
-            minic_type_unqualified(output_expression->type, &output_type) &&
-            core_memory_scalar_type(output_type)) {
-            local = minic_c0_program_local(
-                context->body->program, output_expression->value.local_id);
-            if (local == NULL) {
-                { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-            }
-            if (!minic_c0_local_array_object_info(context->body->program,
-                    output_expression->value.local_id, NULL) &&
-                minic_c0_program_local_fixed_register_binding(
-                    context->body->program, output_expression->value.local_id) == NULL &&
-                minic_type_equal(local->type, output_expression->type)) {
-                if (!minic_core_function_add_opaque_inline_asm(context->function,
-                                                               source->template_text,
-                                                               source->template_length,
-                                                               source->is_volatile,
-                                                               source->has_memory_clobber,
-                                                               &inline_asm_id)) {
-                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                }
-                (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM;
-                instruction.span = statement->span;
-                instruction_source_type = output_type;
-                instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.structured_inline_asm.inline_asm_id = inline_asm_id;
-                instruction.value.structured_inline_asm.operand_count = 1U;
-                instruction.value.structured_inline_asm.operands[0].kind =
-                    MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_RESULT;
-                instruction.value.structured_inline_asm.operands[0].operand_index = 0U;
-                instruction.value.structured_inline_asm.operands[0].value = MINIC_CORE_VALUE_INVALID;
-                if (!minic_core_function_append_source_value_instruction(
-                        context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
-                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                }
-                if (lower_address(context, output->expression, &address_id) != MINIC_CORE_LOWER_OK) {
-                    { *handled = true; return MINIC_CORE_LOWER_ERROR; }
-                }
-                (void)memset(&instruction, 0, sizeof(instruction));
-                instruction.kind = MINIC_CORE_INSTRUCTION_STORE;
-                instruction.span = statement->span;
-                instruction_source_type = minic_type_void();
-                instruction.result = MINIC_CORE_VALUE_INVALID;
-                instruction.value.store.address = address_id;
-                instruction.value.store.stored_value = output_value;
-                instruction.value.store.is_volatile = false;
-                {
-                    bool stored = minic_core_function_append_source_effect_instruction(
-                        context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
-                    { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
-                }
-            }
-        }
     }
 
     return MINIC_CORE_LOWER_OK;

@@ -363,6 +363,48 @@ static bool minic_core_ir_direct_call_return_type(MinicType type) {
     return minic_type_is_void(type) || minic_core_ir_call_scalar_type(type) || minic_type_is_record(type);
 }
 
+/* Call sites and indirect signatures share the same source-type contract.
+ * Only their identities and destination collections are different. */
+static bool source_call_type_supported(MinicType return_type,
+                                      const MinicType *parameter_types,
+                                      size_t parameter_count,
+                                      MinicFunctionCallingConvention calling_convention) {
+    size_t index;
+    if (!minic_core_ir_direct_call_return_type(return_type) ||
+        !minic_function_calling_convention_valid(calling_convention) ||
+        (parameter_count != 0U && parameter_types == NULL) ||
+        parameter_count > SIZE_MAX / sizeof(*parameter_types))
+        return false;
+    for (index = 0U; index < parameter_count; ++index)
+        if (!minic_core_ir_call_parameter_type(parameter_types[index]))
+            return false;
+    return true;
+}
+
+static bool source_call_type_copy(MinicCoreSourceCallType *stored,
+                                  MinicFunctionTypeId function_type_id,
+                                  MinicType return_type,
+                                  const MinicType *parameter_types,
+                                  size_t parameter_count,
+                                  bool is_variadic,
+                                  MinicFunctionCallingConvention calling_convention) {
+    (void)memset(stored, 0, sizeof(*stored));
+    stored->function_type_id = function_type_id;
+    stored->return_type = return_type;
+    stored->parameter_count = parameter_count;
+    stored->is_variadic = is_variadic;
+    stored->calling_convention = calling_convention;
+    if (parameter_count == 0U)
+        return true;
+    stored->parameter_types = (MinicType *)malloc(
+        parameter_count * sizeof(*stored->parameter_types));
+    if (stored->parameter_types == NULL)
+        return false;
+    (void)memcpy(stored->parameter_types, parameter_types,
+                 parameter_count * sizeof(*stored->parameter_types));
+    return true;
+}
+
 static bool source_call_types_equal(const MinicCoreSourceCallType *source,
                                    MinicType return_type,
                                    const MinicType *parameter_types,
@@ -406,16 +448,9 @@ bool minic_core_function_add_callee(MinicCoreSourceBuilder *builder,
         draft->callee_count != function->callee_count ||
         name == NULL || name_length == 0U || callee_id == NULL ||
         function->callee_count >= (size_t)UINT32_MAX ||
-        !minic_core_ir_direct_call_return_type(return_type) ||
-        !minic_function_calling_convention_valid(calling_convention) ||
-        (parameter_count != 0U && parameter_types == NULL) ||
-        parameter_count > SIZE_MAX / sizeof(*source_stored.parameter_types)) {
+        !source_call_type_supported(return_type, parameter_types,
+                                    parameter_count, calling_convention)) {
         return false;
-    }
-    for (index = 0U; index < parameter_count; ++index) {
-        if (!minic_core_ir_call_parameter_type(parameter_types[index])) {
-            return false;
-        }
     }
     /* The inline-ASM ingress validates its own records and the Core verifier
      * validates consumers. Adding a CALL must not rescan an unrelated ASM
@@ -440,29 +475,17 @@ bool minic_core_function_add_callee(MinicCoreSourceBuilder *builder,
         }
     }
     (void)memset(&stored, 0, sizeof(stored));
-    (void)memset(&source_stored, 0, sizeof(source_stored));
     stored.name = minic_core_ir_copy_name(name, name_length);
-    if (stored.name == NULL) {
+    if (stored.name == NULL)
         return false;
-    }
-    if (parameter_count != 0U) {
-        source_stored.parameter_types =
-            (MinicType *)malloc(parameter_count * sizeof(*source_stored.parameter_types));
-        if (source_stored.parameter_types == NULL) {
-            free(stored.name);
-            return false;
-        }
-        (void)memcpy(source_stored.parameter_types,
-                     parameter_types,
-                     parameter_count * sizeof(*source_stored.parameter_types));
+    if (!source_call_type_copy(&source_stored, MINIC_FUNCTION_TYPE_INVALID,
+                               return_type, parameter_types, parameter_count,
+                               is_variadic, calling_convention)) {
+        free(stored.name);
+        return false;
     }
     stored.name_length = name_length;
     stored.core_function_type_id = MINIC_CORE_TYPE_INVALID;
-    source_stored.function_type_id = MINIC_FUNCTION_TYPE_INVALID;
-    source_stored.return_type = return_type;
-    source_stored.parameter_count = parameter_count;
-    source_stored.is_variadic = is_variadic;
-    source_stored.calling_convention = calling_convention;
     if (!minic_core_ir_grow_array((void **)&function->callees,
                     &function->callee_capacity,
                     function->callee_count,
@@ -514,17 +537,10 @@ bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
         draft->call_signature_count != function->call_signature_count ||
         signature_id == NULL ||
         function_type_id == MINIC_FUNCTION_TYPE_INVALID ||
-        !minic_function_calling_convention_valid(calling_convention) ||
         function->call_signature_count >= (size_t)UINT32_MAX ||
-        !minic_core_ir_direct_call_return_type(return_type) ||
-        (parameter_count != 0U && parameter_types == NULL) ||
-        parameter_count > SIZE_MAX / sizeof(*source_stored.parameter_types)) {
+        !source_call_type_supported(return_type, parameter_types,
+                                    parameter_count, calling_convention)) {
         return false;
-    }
-    for (index = 0U; index < parameter_count; ++index) {
-        if (!minic_core_ir_call_parameter_type(parameter_types[index])) {
-            return false;
-        }
     }
     for (index = 0U; index < function->call_signature_count; ++index) {
         if (call_signature_equal(&draft->call_signatures[index],
@@ -539,23 +555,11 @@ bool minic_core_function_add_call_signature(MinicCoreSourceBuilder *builder,
         }
     }
     (void)memset(&stored, 0, sizeof(stored));
-    (void)memset(&source_stored, 0, sizeof(source_stored));
-    source_stored.function_type_id = function_type_id;
     stored.core_function_type_id = MINIC_CORE_TYPE_INVALID;
-    source_stored.return_type = return_type;
-    source_stored.parameter_count = parameter_count;
-    source_stored.is_variadic = is_variadic;
-    source_stored.calling_convention = calling_convention;
-    if (parameter_count != 0U) {
-        source_stored.parameter_types =
-            (MinicType *)malloc(parameter_count * sizeof(*source_stored.parameter_types));
-        if (source_stored.parameter_types == NULL) {
-            return false;
-        }
-        (void)memcpy(source_stored.parameter_types,
-                     parameter_types,
-                     parameter_count * sizeof(*source_stored.parameter_types));
-    }
+    if (!source_call_type_copy(&source_stored, function_type_id,
+                               return_type, parameter_types, parameter_count,
+                               is_variadic, calling_convention))
+        return false;
     if (!minic_core_ir_grow_array((void **)&function->call_signatures,
                     &function->call_signature_capacity,
                     function->call_signature_count,

@@ -109,9 +109,10 @@ bool minic_c0_program_seed_parameter_locals(
 static bool visit_direct_local_effect(
     const MinicC0Program *program, MinicExpressionId target,
     MinicDirectLocalEffect effect, MinicExpressionId rhs,
+    MinicStatementId statement_origin, MinicExpressionId expression_origin,
     MinicDirectLocalEffectVisitor visitor, void *context) {
     const MinicLocalId id = stable_parameter_direct_local(program, target);
-    return id >= program->local_count || visitor(context, id, effect, rhs);
+    return id >= program->local_count || visitor(context, id, effect, rhs, statement_origin, expression_origin);
 }
 
 bool minic_c0_program_visit_direct_local_effects(
@@ -133,7 +134,8 @@ bool minic_c0_program_visit_direct_local_effects(
                    statement->kind == MINIC_STATEMENT_XOR_ASSIGN)
                     ? MINIC_DIRECT_LOCAL_CLOBBER : MINIC_DIRECT_LOCAL_TARGET_ONLY;
         if (!visit_direct_local_effect(program, statement->target_expression,
-                effect, statement->expression, visitor, context)) return false;
+                effect, statement->expression, (MinicStatementId)i,
+                MINIC_EXPRESSION_INVALID, visitor, context)) return false;
     }
     for (i = 0U; i < program->expression_count; ++i) {
         const MinicExpression *expression = &program->expressions[i];
@@ -158,6 +160,7 @@ bool minic_c0_program_visit_direct_local_effects(
         }
         if (target != MINIC_EXPRESSION_INVALID &&
             !visit_direct_local_effect(program, target, effect, rhs,
+                                       MINIC_STATEMENT_INVALID, (MinicExpressionId)i,
                                        visitor, context)) return false;
     }
     for (i = 0U; i < program->inline_asm_count; ++i) {
@@ -167,7 +170,7 @@ bool minic_c0_program_visit_direct_local_effects(
         for (output = 0U; output < assembly->output_count; ++output) {
             if (!visit_direct_local_effect(program, assembly->outputs[output].expression,
                     MINIC_DIRECT_LOCAL_CLOBBER, MINIC_EXPRESSION_INVALID,
-                    visitor, context)) return false;
+                    MINIC_STATEMENT_INVALID, MINIC_EXPRESSION_INVALID, visitor, context)) return false;
         }
     }
     return true;
@@ -175,9 +178,13 @@ bool minic_c0_program_visit_direct_local_effects(
 
 static bool stable_parameter_kill(void *context, MinicLocalId id,
                                   MinicDirectLocalEffect effect,
-                                  MinicExpressionId rhs) {
+                                  MinicExpressionId rhs,
+                                  MinicStatementId statement_origin,
+                                  MinicExpressionId expression_origin) {
     bool *stable = context;
     (void)rhs;
+    (void)statement_origin;
+    (void)expression_origin;
     if (effect != MINIC_DIRECT_LOCAL_TARGET_ONLY) stable[id] = false;
     return true;
 }

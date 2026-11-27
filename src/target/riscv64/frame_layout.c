@@ -101,60 +101,39 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     size_t maximum_object_alignment;
     size_t scalar_reuse_pool_slots;
 
-    if (function == NULL || frame == NULL || facts == NULL) {
+    if (function == NULL || frame == NULL ||
+        !minic_core_function_facts_verified(facts, function) ||
+        facts->call_index == NULL || facts->reachable_blocks == NULL ||
+        abi_plan == NULL || !abi_plan->prepared)
         return false;
-    }
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
-    frame->reachable_blocks = NULL;
-    frame->owned_reachable_blocks = NULL;
     frame->parameter_locations = NULL;
     frame->parameter_location_count = 0U;
     frame->has_return_abi_value = false;
     frame->has_named_parameter_cursor = false;
     frame->value_slot_count = 0U;
-    frame->object_storage = (MinicCoreObjectStoragePlan){0};
-    frame->borrows_object_storage = false;
+    frame->object_storage = NULL;
     frame->object_reuse = (MinicCoreObjectReusePlan){0};
     frame->semantic_calls = NULL;
-    frame->call_index = (MinicCoreCallIndexHandle){0};
     frame->outgoing_calls = (MinicRiscv64CallPlanCache){0};
-    if (!minic_core_object_storage_plan_acquire(
-            function, storage,
-            &frame->object_storage, &frame->borrows_object_storage))
+    if (!minic_core_object_storage_plan_borrow(
+            function, storage, &frame->object_storage))
         return false;
     frame->has_dynamic_stack_alloc = facts->uses_dynamic_stack_alloc;
     frame->saved_frame_base_offset = 0U;
-    /* All five targets now use the same Common CALL-index ownership
-     * contract. RV64's standalone API owns its generated snapshot, while
-     * production borrows the visitor's exact immutable CALL index. Keep
-     * the historical facts-count consistency gate for standalone callers. */
+    /* Common FunctionPlan lends the immutable CALL index. The target's
+     * validated ABI classification is transferred into this frame once. */
+    frame->semantic_calls = facts->call_index;
     if (facts->direct_call_count > SIZE_MAX - facts->indirect_call_count ||
-        !minic_core_call_index_handle_prepare(
-            function, facts->call_index, &frame->call_index))
-        return false;
-    frame->semantic_calls = frame->call_index.index;
-    if (facts->call_index == NULL &&
         frame->semantic_calls->count !=
-            facts->direct_call_count + facts->indirect_call_count)
+            facts->direct_call_count + facts->indirect_call_count ||
+        abi_plan->outgoing_calls.count != frame->semantic_calls->count ||
+        (frame->semantic_calls->count != 0U &&
+         abi_plan->outgoing_calls.sites == NULL))
         return false;
-    if (abi_plan != NULL) {
-        /* Capability admission already checked and qualified this exact
-         * ordered CALL index. Transfer its psABI locations into the frame;
-         * never classify the same calls again with a different FP mode. */
-        if (!abi_plan->prepared ||
-            abi_plan->outgoing_calls.count != frame->semantic_calls->count ||
-            (frame->semantic_calls->count != 0U &&
-             abi_plan->outgoing_calls.sites == NULL))
-            return false;
-        frame->outgoing_calls = abi_plan->outgoing_calls;
-        abi_plan->outgoing_calls = (MinicRiscv64CallPlanCache){0};
-    } else if (!minic_riscv64_call_plan_cache_build(
-                   function, false,
-                   frame->semantic_calls, &frame->outgoing_calls)) {
-        /* Standalone legacy frame entry retains its checked fallback. */
-        return false;
-    }
+    frame->outgoing_calls = abi_plan->outgoing_calls;
+    abi_plan->outgoing_calls = (MinicRiscv64CallPlanCache){0};
     outgoing_argument_size = frame->outgoing_calls.maximum_stack_bytes;
     frame->outgoing_argument_size = outgoing_argument_size;
     frame->dynamic_call_area_size = 0U;
@@ -174,7 +153,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
     }
     for (object_index = 0U; object_index < function->object_count; ++object_index) {
         const MinicCoreObjectStorage *object =
-            &frame->object_storage.objects[object_index];
+            &frame->object_storage->objects[object_index];
         const size_t object_size = object->extent;
         const size_t object_alignment = object->alignment;
         if (object_size == 0U &&
@@ -264,10 +243,9 @@ bool minic_riscv64_core_frame_initialize_with_storage(
 
     frame->has_hidden_result_pointer = false;
     frame->hidden_result_pointer_offset = 0U;
-    if (abi_plan != NULL) {
+    {
         MinicRiscv64AbiValue return_value;
-        if (!abi_plan->prepared ||
-            abi_plan->parameter_location_count != minic_core_function_parameter_count(function) ||
+        if (abi_plan->parameter_location_count != minic_core_function_parameter_count(function) ||
             (minic_core_function_parameter_count(function) != 0U &&
              abi_plan->parameter_locations == NULL)) {
             return false;
@@ -379,7 +357,7 @@ bool minic_riscv64_core_frame_initialize_with_storage(
         cached_offset = frame->outgoing_argument_size;
         for (cached_index = 0U; cached_index < function->object_count; ++cached_index) {
             const MinicCoreObjectStorage *object =
-                &frame->object_storage.objects[cached_index];
+                &frame->object_storage->objects[cached_index];
             const size_t object_size = object->extent;
             const size_t object_alignment = object->alignment;
             if (cached_index <= UINT32_MAX) {
@@ -472,7 +450,6 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     }
     minic_riscv64_asm_function_plan_destroy(&frame->asm_plan);
     minic_riscv64_call_plan_cache_destroy(&frame->outgoing_calls);
-    minic_core_call_index_handle_destroy(&frame->call_index);
     frame->semantic_calls = NULL;
     minic_core_object_reuse_plan_destroy(&frame->object_reuse);
     free(frame->value_offsets);
@@ -484,30 +461,5 @@ void minic_riscv64_core_frame_destroy(MinicRiscv64CoreFrame *frame) {
     frame->has_named_parameter_cursor = false;
     free(frame->object_offsets);
     frame->object_offsets = NULL;
-    minic_core_object_storage_plan_release(
-        &frame->object_storage, frame->borrows_object_storage);
-    free(frame->owned_reachable_blocks);
-    frame->owned_reachable_blocks = NULL;
-    frame->reachable_blocks = NULL;
+    frame->object_storage = NULL;
 }
-
-
-
-
-bool minic_riscv64_core_frame_mark_reachable_blocks(
-    const MinicCoreFunction *function, const MinicCoreFunctionFacts *facts,
-    MinicRiscv64CoreFrame *frame) {
-    if (function == NULL || frame == NULL || function->block_count == 0U)
-        return false;
-    if (minic_core_function_facts_verified(facts, function)) {
-        frame->reachable_blocks = facts->reachable_blocks;
-        return frame->reachable_blocks != NULL;
-    }
-    frame->owned_reachable_blocks =
-        calloc(function->block_count, sizeof(*frame->owned_reachable_blocks));
-    frame->reachable_blocks = frame->owned_reachable_blocks;
-    return frame->owned_reachable_blocks != NULL &&
-           minic_core_function_mark_reachable_blocks(
-               function, frame->owned_reachable_blocks, function->block_count);
-}
-

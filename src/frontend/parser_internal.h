@@ -252,7 +252,7 @@ void minic_parser_error(MinicParser *parser, const char *format, ...);
 bool minic_parser_advance(MinicParser *parser);
 bool minic_parser_expect(MinicParser *parser, MinicTokenKind kind, const char *message);
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value);
-bool minic_parser_parse_zero_pointer_constant(MinicParser *parser);
+
 bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value);
 bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
                                                  MinicIntegerLiteralBase *base,
@@ -452,6 +452,15 @@ bool minic_parser_parse_parenthesized_function_declarator(
     bool require_pointer,
     MinicParsedFunctionDeclarator *declarator,
     bool retain_inner_parameter_scope);
+typedef enum MinicFunctionPointerObjectRole {
+    MINIC_POINTER_OBJECT_PARAMETER,
+    MINIC_POINTER_OBJECT_RECORD_FIELD,
+    MINIC_POINTER_OBJECT_EXTERN
+} MinicFunctionPointerObjectRole;
+bool minic_parser_parse_function_pointer_object(
+    MinicParser *parser, MinicType return_type,
+    MinicSourceSpan *name_span, bool *has_name, MinicType *type,
+    MinicFunctionPointerObjectRole role, bool require_parameter_name);
 bool minic_parser_starts_named_parenthesized_pointer_array(const MinicParser *parser);
 bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     MinicParser *parser,

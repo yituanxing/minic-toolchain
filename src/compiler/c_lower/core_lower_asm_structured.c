@@ -374,14 +374,6 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                     free(specialized_template);
                     specialized_template = NULL;
                     if (!added) {
-                        if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                            (void)fprintf(stderr,
-                                          "ASM_OUTPUT_STAGE function=%s stage=add-opaque status=ERROR\n",
-                                          context->source_function != NULL &&
-                                                  context->source_function->name != NULL
-                                              ? context->source_function->name
-                                              : "?");
-                        }
                         { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                     }
                 }
@@ -403,39 +395,11 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                     MINIC_CORE_VALUE_INVALID;
                 if (!minic_core_function_append_source_value_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type, &output_value)) {
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=append-output-value status=ERROR "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return MINIC_CORE_LOWER_ERROR; }
                 }
                 {
                     MinicCoreLowerStatus address_status =
                         lower_address(context, output->expression, &address_id);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=lower-output-address status=%d "
-                                      "address=%u block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      (int)address_status,
-                                      (unsigned int)address_id,
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     if (address_status != MINIC_CORE_LOWER_OK) {
                         { *handled = true; return address_status; }
                     }
@@ -451,20 +415,6 @@ MinicCoreLowerStatus core_asm_try_immediate_output_csr(
                 {
                     bool stored = minic_core_function_append_source_effect_instruction(
                         context->source, context->block_id, &instruction, instruction_source_type);
-                    if (getenv("MINIC_ASM_BATCH_TRACE") != NULL) {
-                        (void)fprintf(stderr,
-                                      "ASM_OUTPUT_STAGE function=%s stage=store-output status=%s "
-                                      "block=%u instructions=%zu values=%zu objects=%zu\n",
-                                      context->source_function != NULL &&
-                                              context->source_function->name != NULL
-                                          ? context->source_function->name
-                                          : "?",
-                                      stored ? "OK" : "ERROR",
-                                      (unsigned int)context->block_id,
-                                      context->function->instruction_count,
-                                      context->function->value_count,
-                                      context->function->object_count);
-                    }
                     { *handled = true; return stored ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR; }
                 }
             }

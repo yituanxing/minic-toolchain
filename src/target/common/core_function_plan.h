@@ -21,7 +21,6 @@ typedef struct MinicCoreFunctionPlan {
     MinicCoreValueId *variadic_results;
     bool *reachable_blocks;
     size_t *value_use_counts;
-    bool prepared;
 } MinicCoreFunctionPlan;
 
 void minic_core_function_plan_destroy(MinicCoreFunctionPlan *);

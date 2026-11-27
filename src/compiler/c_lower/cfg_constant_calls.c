@@ -396,51 +396,18 @@ static bool core_cfg_small_loop_add_values(MinicCoreLowerContext *context,
                                            bool subtract,
                                            MinicConstValue *result) {
     MinicType common_type;
-    MinicConstValue l;
-    MinicConstValue r;
     MinicConstValue common_result;
 
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || left == NULL || right == NULL || result == NULL ||
-        !minic_type_is_integer(left->type) || !minic_type_is_integer(right->type) ||
-        !minic_target_info_integer_common_for_program(context->target,
-                                                      context->body->program,
-                                                      left->type,
-                                                      right->type,
-                                                      &common_type) ||
-        !minic_const_value_convert_integer(context->body->program,
-                                           context->target,
-                                           left,
-                                           common_type,
-                                           &l) ||
-        !minic_const_value_convert_integer(context->body->program,
-                                           context->target,
-                                           right,
-                                           common_type,
-                                           &r)) {
-        return false;
-    }
-    /* The interpreter is used only for tiny bounded loops.  Refuse signed
-       arithmetic when it could overflow instead of relying on host behavior. */
-    if (minic_type_is_signed_integer(common_type)) {
-        int64_t ls;
-        int64_t rs;
-        if (!core_const_signed_value(context, &l, &ls) ||
-            !core_const_signed_value(context, &r, &rs) ||
-            (!subtract && ((rs > 0 && ls > INT64_MAX - rs) ||
-                           (rs < 0 && ls < INT64_MIN - rs))) ||
-            (subtract && ((rs < 0 && ls > INT64_MAX + rs) ||
-                          (rs > 0 && ls < INT64_MIN + rs)))) {
-            return false;
-        }
-    }
-    common_result.type = common_type;
-    common_result.bits = subtract ? l.bits - r.bits : l.bits + r.bits;
-    return minic_const_value_convert_integer(context->body->program,
-                                             context->target,
-                                             &common_result,
-                                             result_type,
-                                             result);
+    return context != NULL && context->body != NULL && context->body->program != NULL &&
+           context->target != NULL && left != NULL && right != NULL && result != NULL &&
+           minic_target_info_integer_common_for_program(context->target, context->body->program,
+                                                         left->type, right->type, &common_type) &&
+           minic_const_eval_integer_binary_values(
+               context->body->program, context->target,
+               subtract ? MINIC_BINARY_SUBTRACT : MINIC_BINARY_ADD,
+               common_type, *left, *right, &common_result) &&
+           minic_const_value_convert_integer(context->body->program, context->target,
+                                              &common_result, result_type, result);
 }
 
 static bool core_cfg_small_loop_update_expression(MinicCoreLowerContext *context,

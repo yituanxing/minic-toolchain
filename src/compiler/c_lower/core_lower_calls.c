@@ -365,26 +365,6 @@ static const MinicFunction *core_select_direct_call_specialization(
             best_exact_symbolic = exact_symbolic;
         }
     }
-    if (best != source_callee) {
-        const char *caller_name = context->source_function != NULL &&
-            context->source_function->name != NULL
-                ? context->source_function->name : "?";
-        const char *from_name = source_callee->name != NULL
-                                   ? source_callee->name : "?";
-        const char *to_name = best->name != NULL ? best->name : "?";
-        if (getenv("MINIC_INLINE_SPEC_TRANSITIVE_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_TRANSITIVE_SELECT caller=%s from=%s to=%s known=%zu\n",
-                caller_name, from_name, to_name, best_integer);
-        if (getenv("MINIC_INLINE_SPEC_SYMBOLIC_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_SYMBOLIC_SELECT caller=%s from=%s to=%s symbols=%zu\n",
-                caller_name, from_name, to_name, best_symbolic);
-        if (getenv("MINIC_INLINE_SPEC_BOOLEAN_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_BOOLEAN_SELECT caller=%s from=%s to=%s ranges=%zu\n",
-                caller_name, from_name, to_name, best_boolean);
-    }
     return best;
 }
 
@@ -727,6 +707,69 @@ static MinicCoreLowerStatus core_lower_straight_gnu_inline(
     return status;
 }
 
+/* Both CALL flavors use the same Core transport for named arguments.
+ * Only direct GNU variadic calls support a record in the unnamed tail;
+ * indirect variadic arguments remain scalar-only by current target policy. */
+static bool core_call_argument_source_type(
+    const MinicCoreLowerContext *context, const MinicExpression *call,
+    size_t index, const MinicType *parameter_types, size_t parameter_count,
+    bool indirect, MinicType *type) {
+    const MinicExpression *argument;
+    if (context == NULL || context->body == NULL ||
+        context->body->program == NULL || call == NULL || type == NULL)
+        return false;
+    if (index < parameter_count) {
+        if (parameter_types == NULL) return false;
+        *type = parameter_types[index];
+        return core_memory_scalar_type(*type) ||
+               minic_type_is_record(*type) ||
+               minic_type_is_fixed_vector_register_storage(*type);
+    }
+    argument = minic_c0_program_expression(
+        context->body->program, minic_c0_call_argument(call, index));
+    if (argument == NULL) return false;
+    if (!indirect && minic_type_is_record(argument->type))
+        return minic_type_unqualified(argument->type, type) &&
+               minic_type_is_record(*type);
+    return core_scalar_expression_value_type(context->body, argument, type) &&
+           core_memory_scalar_type(*type);
+}
+
+/* Direct and indirect Core CALLs have separate callee resolution but one
+ * result transport contract: address-backed aggregate, void effect, or SSA. */
+static MinicCoreLowerStatus core_append_call_result(
+    MinicCoreLowerContext *context, const MinicExpression *call,
+    MinicCoreInstruction *instruction, MinicType return_type,
+    MinicCoreValueId *value_id, MinicCoreObjectId *result_object) {
+    MinicCoreObjectId *destination;
+    if (context == NULL || call == NULL || instruction == NULL ||
+        ((value_id == NULL) == (result_object == NULL)))
+        return MINIC_CORE_LOWER_ERROR;
+    if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL)
+        destination = &instruction->value.call.result_object;
+    else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)
+        destination = &instruction->value.indirect_call.result_object;
+    else return MINIC_CORE_LOWER_ERROR;
+    if (result_object != NULL) {
+        if (!minic_core_function_add_object(
+                context->source, call->span, return_type, result_object))
+            return MINIC_CORE_LOWER_ERROR;
+        *destination = *result_object;
+        return minic_core_function_append_source_effect_instruction(
+            context->source, context->block_id, instruction, return_type)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    if (minic_type_is_void(return_type)) {
+        *value_id = MINIC_CORE_VALUE_INVALID;
+        return minic_core_function_append_source_effect_instruction(
+            context->source, context->block_id, instruction, return_type)
+            ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    }
+    return minic_core_function_append_source_value_instruction(
+        context->source, context->block_id, instruction, return_type, value_id)
+        ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+}
+
 /* Direct scalar, void, and record calls share their one callee resolution,
  * source-order argument snapshot, Core callee registration, and CALL append
  * owner. Indirect calls retain their distinct first-class callee path below. */
@@ -829,29 +872,11 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
         }
     }
 
-    for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
-        if (argument_index < callee->parameter_count) {
-            argument_types[argument_index] = callee->parameter_types[argument_index];
-            if (!core_memory_scalar_type(argument_types[argument_index]) &&
-                !minic_type_is_record(argument_types[argument_index]) &&
-                !minic_type_is_fixed_vector_register_storage(argument_types[argument_index]))
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-        } else {
-            const MinicExpression *argument_expression = minic_c0_program_expression(
-                context->body->program, minic_c0_call_argument(expression, argument_index));
-            if (argument_expression == NULL)
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            if (minic_type_is_record(argument_expression->type)) {
-                if (!minic_type_unqualified(
-                        argument_expression->type, &argument_types[argument_index]) ||
-                    !minic_type_is_record(argument_types[argument_index]))
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
-            } else if (!core_scalar_expression_value_type(
-                           context->body, argument_expression, &argument_types[argument_index]) ||
-                       !core_memory_scalar_type(argument_types[argument_index]))
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-    }
+    for (argument_index = 0U; argument_index < argument_count; ++argument_index)
+        if (!core_call_argument_source_type(
+                context, expression, argument_index, callee->parameter_types,
+                callee->parameter_count, false, &argument_types[argument_index]))
+            return MINIC_CORE_LOWER_UNSUPPORTED;
 
     /* Only a sealed machine-builtin descriptor may request an immediate.
      * The compiler does not recognize an ISA, opcode or source builtin name;
@@ -924,24 +949,9 @@ static MinicCoreLowerStatus core_lower_direct_call_impl(
         instruction.value.call.machine_builtin_effect =
             minic_target_info_machine_builtin_effect(
                 &context->target->machine, callee_name, callee_name_length);
-    if (result_object != NULL) {
-        if (!minic_core_function_add_object(
-                context->source, expression->span, callee->return_type, result_object))
-            return MINIC_CORE_LOWER_ERROR;
-        instruction.value.call.result_object = *result_object;
-        return minic_core_function_append_source_effect_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type)
-                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
-    }
-    if (returns_void) {
-        *value_id = MINIC_CORE_VALUE_INVALID;
-        return minic_core_function_append_source_effect_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type)
-                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
-    }
-    return minic_core_function_append_source_value_instruction(
-               context->source, context->block_id, &instruction, instruction_source_type, value_id)
-               ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
+    return core_append_call_result(
+        context, expression, &instruction, instruction_source_type,
+        value_id, result_object);
 }
 
 MinicCoreLowerStatus minic_core_lower_direct_call(
@@ -1048,25 +1058,11 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
        evaluated so the final indirect call block owns all SSA inputs. */
     for (argument_index = 0U; argument_index < argument_count; ++argument_index) {
         bool fixed = argument_index < signature->parameter_count;
-        if (fixed) {
-            argument_types[argument_index] = signature->parameter_types[argument_index];
-            if (!minic_type_is_record(argument_types[argument_index]) &&
-                !core_memory_scalar_type(argument_types[argument_index]) &&
-                !minic_type_is_fixed_vector_register_storage(argument_types[argument_index])) {
-                free(arguments);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
-        } else {
-            const MinicExpression *arg = minic_c0_program_expression(
-                context->body->program,
-                minic_c0_call_argument(expression, argument_index));
-            if (arg == NULL ||
-                !core_scalar_expression_value_type(
-                    context->body, arg, &argument_types[argument_index]) ||
-                !core_memory_scalar_type(argument_types[argument_index])) {
-                free(arguments);
-                return MINIC_CORE_LOWER_UNSUPPORTED;
-            }
+        if (!core_call_argument_source_type(
+                context, expression, argument_index, signature->parameter_types,
+                signature->parameter_count, true, &argument_types[argument_index])) {
+            free(arguments);
+            return MINIC_CORE_LOWER_UNSUPPORTED;
         }
         status = core_prepare_call_argument(
             context, expression, argument_index,
@@ -1120,28 +1116,9 @@ static MinicCoreLowerStatus core_lower_indirect_call_impl(MinicCoreLowerContext 
     instruction.value.indirect_call.argument_begin = argument_begin;
     instruction.value.indirect_call.argument_count = argument_count;
     instruction.value.indirect_call.result_object = MINIC_CORE_OBJECT_INVALID;
-    if (returns_record) {
-        if (!minic_core_function_add_object(
-                context->source, expression->span,
-                signature->return_type, result_object)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        instruction.value.indirect_call.result_object = *result_object;
-        return minic_core_function_append_source_effect_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type)
-                   ? MINIC_CORE_LOWER_OK : MINIC_CORE_LOWER_ERROR;
-    }
-    if (returns_void) {
-        *value_id = MINIC_CORE_VALUE_INVALID;
-        return minic_core_function_append_source_effect_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    return minic_core_function_append_source_value_instruction(
-               context->source, context->block_id, &instruction, instruction_source_type, value_id)
-               ? MINIC_CORE_LOWER_OK
-               : MINIC_CORE_LOWER_ERROR;
+    return core_append_call_result(
+        context, expression, &instruction, instruction_source_type,
+        value_id, result_object);
 }
 
 MinicCoreLowerStatus minic_core_lower_indirect_call(MinicCoreLowerContext *context,

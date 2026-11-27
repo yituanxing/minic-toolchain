@@ -540,27 +540,30 @@ bool minic_c0_global_initializer_slot_count(const MinicC0Program *program,
     return minic_c0_type_initializer_slot_count(program, type, slot_count);
 }
 
+static const MinicGlobalUnionSelection *find_union_selection(
+    const MinicC0Program *program, const MinicGlobalObject *object,
+    size_t initializer_slot, MinicRecordId record_id) {
+    size_t index;
+    if (program == NULL || object == NULL || record_id >= program->record_count)
+        return NULL;
+    for (index = 0U; index < object->union_selection_count; ++index) {
+        const MinicGlobalUnionSelection *selection = &object->union_selections[index];
+        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id)
+            return selection;
+    }
+    return NULL;
+}
+
 bool minic_c0_global_object_union_member_selection(const MinicC0Program *program,
                                                    const MinicGlobalObject *object,
                                                    size_t initializer_slot,
                                                    MinicRecordId record_id,
                                                    size_t *field_index) {
-    size_t index;
-
-    if (program == NULL || object == NULL || field_index == NULL ||
-        record_id >= program->record_count) {
-        return false;
-    }
-    for (index = 0U; index < object->union_selection_count; ++index) {
-        const MinicGlobalUnionSelection *selection;
-
-        selection = &object->union_selections[index];
-        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
-            *field_index = selection->field_index;
-            return true;
-        }
-    }
-    return false;
+    const MinicGlobalUnionSelection *selection =
+        find_union_selection(program, object, initializer_slot, record_id);
+    if (selection == NULL || field_index == NULL) return false;
+    *field_index = selection->field_index;
+    return true;
 }
 
 bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *program,
@@ -568,22 +571,11 @@ bool minic_c0_global_object_union_member_initializer_span(const MinicC0Program *
                                                           size_t initializer_slot,
                                                           MinicRecordId record_id,
                                                           size_t *initializer_span) {
-    size_t index;
-
-    if (program == NULL || object == NULL || initializer_span == NULL ||
-        record_id >= program->record_count) {
-        return false;
-    }
-    for (index = 0U; index < object->union_selection_count; ++index) {
-        const MinicGlobalUnionSelection *selection;
-
-        selection = &object->union_selections[index];
-        if (selection->initializer_slot == initializer_slot && selection->record_id == record_id) {
-            *initializer_span = selection->initializer_span;
-            return true;
-        }
-    }
-    return false;
+    const MinicGlobalUnionSelection *selection =
+        find_union_selection(program, object, initializer_slot, record_id);
+    if (selection == NULL || initializer_span == NULL) return false;
+    *initializer_span = selection->initializer_span;
+    return true;
 }
 
 bool minic_c0_global_object_select_union_member_with_span(MinicC0Program *program,
@@ -731,7 +723,8 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
         for (element_index = 0U; element_index < array_type->element_count; ++element_index) {
             size_t child_count;
 
-            if (!global_object_type_initializer_slot_count_at(
+            if (base_slot > SIZE_MAX - total ||
+                !global_object_type_initializer_slot_count_at(
                     program, object, array_type->element_type, base_slot + total, &child_count) ||
                 total > SIZE_MAX - child_count) {
                 return false;
@@ -792,7 +785,8 @@ static bool global_object_type_initializer_slot_count_at(const MinicC0Program *p
             for (element_index = 0U; element_index < element_count; ++element_index) {
                 size_t child_count;
 
-                if (!global_object_type_initializer_slot_count_at(
+                if (base_slot > SIZE_MAX - total ||
+                    !global_object_type_initializer_slot_count_at(
                         program, object, field_element_type, base_slot + total, &child_count) ||
                     total > SIZE_MAX - child_count) {
                     return false;

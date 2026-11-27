@@ -26,9 +26,8 @@ bool minic_lp64_frame_plan_objects_with_storage(
         return false;
     /* Shared one-time Core storage plan also serves x86 and RV64.
      * The LP64 emitters keep their exact 8-byte slots and 1 MiB frame cap. */
-    if (!minic_core_object_storage_plan_acquire(
-            fn, shared,
-            &plan->object_storage, &plan->borrows_object_storage))
+    if (!minic_core_object_storage_plan_borrow(
+            fn, shared, &plan->object_storage))
         return false;
     if (fn->object_count != 0U) {
         plan->object_offsets =
@@ -65,8 +64,8 @@ bool minic_lp64_frame_plan_objects_with_storage(
         minic_core_object_reuse_plan_destroy(&reuse);
         return false;
     }
-    for (i = 0U; i < plan->object_storage.count; ++i) {
-        const MinicCoreObjectStorage *storage = &plan->object_storage.objects[i];
+    for (i = 0U; i < plan->object_storage->count; ++i) {
+        const MinicCoreObjectStorage *storage = &plan->object_storage->objects[i];
         const size_t align = storage->alignment;
         const size_t extent = storage->extent;
         bool reusable;
@@ -96,7 +95,7 @@ bool minic_lp64_frame_plan_objects_with_storage(
         minic_core_object_reuse_plan_destroy(&reuse);
         return false;
     }
-    for (i = 0U; i < plan->object_storage.count; ++i) {
+    for (i = 0U; i < plan->object_storage->count; ++i) {
         bool reusable;
         size_t slot, peak;
         if (!minic_core_object_reuse_plan_get(
@@ -167,8 +166,6 @@ void minic_lp64_frame_plan_destroy(MinicLP64FramePlan *plan) {
     free(plan->object_offsets);
     free(plan->value_offsets);
     free(plan->wide_offsets);
-    minic_core_object_storage_plan_release(
-        &plan->object_storage, plan->borrows_object_storage);
     *plan = (MinicLP64FramePlan){0};
 }
 

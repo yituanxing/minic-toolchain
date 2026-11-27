@@ -65,19 +65,4 @@ void minic_machine_gnu_asm_prepared_destroy(
 bool minic_machine_gnu_asm_preflight(const MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy);
 
-/* Safe reusable common case for source-owned, operand-free inline ASM with
- * no GNU % substitution. Target validate_source_asm must still independently
- * admit this source template and all its effects. */
-bool minic_machine_gnu_asm_emit_unbound_source_asm(FILE *output,
-    const MinicMachineFunction *function,
-    const MinicMachineInstruction *instruction,
-    const MinicMachineGNUAsmLabels *labels, void *context);
-
-/* Emits the body only after the WHOLE function has passed verification.
- * The caller must not emit the ELF envelope before it has committed to this
- * same verification gate, as a failed body may leave the output partial. */
-bool minic_machine_gnu_asm_emit_body(FILE *output,
-    const MinicMachineFunction *function,
-    const MinicMachineGNUAsmPolicy *policy);
-
 #endif

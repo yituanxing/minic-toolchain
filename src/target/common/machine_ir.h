@@ -277,8 +277,7 @@ bool minic_machine_function_add_frame_object(MinicMachineFunction *,
     const MinicMachineFrameObject *, size_t *id);
 bool minic_machine_function_add_block(MinicMachineFunction *,
     const char *exported_label, bool indirect_entry, size_t *id);
-bool minic_machine_block_add_alias_label(MinicMachineFunction *,
-    size_t block_id, const char *alias_label);
+
 bool minic_machine_block_add_successor(MinicMachineFunction *, size_t from,
     size_t to);
 bool minic_machine_block_set_fallthrough(MinicMachineFunction *, size_t from,

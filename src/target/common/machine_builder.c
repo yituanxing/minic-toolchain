@@ -20,25 +20,9 @@ bool minic_machine_builder_position_at(MinicMachineBuilder *builder,
     return true;
 }
 
-bool minic_machine_builder_add_alias_label(MinicMachineBuilder *builder,
-    const char *alias_label) {
-    return builder != NULL && builder->has_position &&
-        minic_machine_block_add_alias_label(builder->function,
-                                            builder->current_block,
-                                            alias_label);
-}
 
-bool minic_machine_builder_emit_local_label(MinicMachineBuilder *builder,
-    const char *name) {
-    MinicMachineInstruction label = {0};
-    if (builder == NULL || !builder->has_position || name == NULL ||
-        name[0] == '\0') return false;
-    label.kind = MINIC_MACHINE_INSTRUCTION_LOCAL_LABEL;
-    label.local_label_name = (char *)name;
-    return minic_machine_block_append_instruction(builder->function,
-                                                  builder->current_block,
-                                                  &label);
-}
+
+
 
 bool minic_machine_builder_create_block(MinicMachineBuilder *builder,
     const char *exported_label, bool indirect_entry, bool auxiliary,
@@ -105,48 +89,13 @@ static bool machine_builder_append(MinicMachineBuilder *builder,
             builder->current_block, instruction);
 }
 
-static bool machine_builder_append_directive(MinicMachineBuilder *builder,
-    const MinicMachineDirective *directive,
-    const MinicMachineOperand *operands, size_t operand_count) {
-    MinicMachineInstruction instruction = {0};
-    if (builder == NULL || directive == NULL ||
-        (operand_count != 0U && operands == NULL) ||
-        operand_count > 2U) return false;
-    instruction.kind = MINIC_MACHINE_INSTRUCTION_DIRECTIVE;
-    instruction.directive = (MinicMachineDirective *)directive;
-    instruction.operands = (MinicMachineOperand *)operands;
-    instruction.operand_count = operand_count;
-    return machine_builder_append(builder, &instruction);
-}
 
-bool minic_machine_builder_emit_section_push(MinicMachineBuilder *builder,
-    const char *section_name, unsigned int section_flags,
-    MinicMachineDirectiveSectionType section_type,
-    const char *link_order_symbol) {
-    MinicMachineDirective directive = {0};
-    directive.kind = MINIC_MACHINE_DIRECTIVE_PUSH_SECTION;
-    directive.section_name = (char *)section_name;
-    directive.section_flags = section_flags;
-    directive.section_type = section_type;
-    directive.link_order_symbol = (char *)link_order_symbol;
-    return machine_builder_append_directive(builder, &directive, NULL, 0U);
-}
 
-bool minic_machine_builder_emit_section_pop(MinicMachineBuilder *builder) {
-    MinicMachineDirective directive = {0};
-    directive.kind = MINIC_MACHINE_DIRECTIVE_POP_SECTION;
-    return machine_builder_append_directive(builder, &directive, NULL, 0U);
-}
 
-bool minic_machine_builder_emit_data(MinicMachineBuilder *builder,
-    unsigned int width_bytes, const MinicMachineOperand *operands,
-    size_t operand_count) {
-    MinicMachineDirective directive = {0};
-    directive.kind = MINIC_MACHINE_DIRECTIVE_DATA;
-    directive.data_width_bytes = width_bytes;
-    return machine_builder_append_directive(builder, &directive,
-                                            operands, operand_count);
-}
+
+
+
+
 
 bool minic_machine_builder_emit_selected(MinicMachineBuilder *builder,
     uint32_t target_opcode, unsigned int effects,
@@ -210,23 +159,7 @@ bool minic_machine_builder_emit_compiler_barrier(
     return machine_builder_append(builder, &instruction);
 }
 
-bool minic_machine_builder_emit_source_asm(MinicMachineBuilder *builder,
-    const char *source_bytes, size_t byte_length, unsigned int effects,
-    const MinicMachineOperand *bindings, size_t binding_count,
-    const MinicMachineRegisterEffect *implicit, size_t implicit_count,
-    bool terminates_block, bool permits_fallthrough) {
-    MinicMachineSourceAsmInput input = {0};
-    input.source_bytes = source_bytes;
-    input.source_byte_length = byte_length;
-    input.effects = effects;
-    input.bindings = bindings;
-    input.binding_count = binding_count;
-    input.implicit = implicit;
-    input.implicit_count = implicit_count;
-    input.terminates_block = terminates_block;
-    input.permits_fallthrough = permits_fallthrough;
-    return minic_machine_builder_emit_source_asm_typed(builder, &input);
-}
+
 
 bool minic_machine_builder_emit_source_asm_typed(MinicMachineBuilder *builder,
     const MinicMachineSourceAsmInput *input) {

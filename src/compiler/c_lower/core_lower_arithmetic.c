@@ -141,7 +141,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
                    : MINIC_CORE_LOWER_ERROR;
     }
     if (expression->kind == MINIC_EXPRESSION_UNARY &&
-        expression->value.unary.operator_kind == MINIC_UNARY_NEGATE) {
+        (expression->value.unary.operator_kind == MINIC_UNARY_NEGATE ||
+         expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT)) {
         *handled = true;
         const MinicExpression *operand_expression;
         MinicCoreValueId operand_value;
@@ -168,45 +169,8 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_unary(
             return status;
         }
         (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_NEGATE;
-        instruction.span = expression->span;
-        instruction_source_type = expression->type;
-        instruction.result = MINIC_CORE_VALUE_INVALID;
-        instruction.value.operand = operand_value;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_UNARY &&
-        expression->value.unary.operator_kind == MINIC_UNARY_BITWISE_NOT) {
-        *handled = true;
-        const MinicExpression *operand_expression;
-        MinicCoreValueId operand_value;
-        MinicCoreLowerStatus status;
-        MinicType promoted_type;
-
-        operand_expression = minic_c0_program_expression(
-            context->body->program, expression->value.unary.operand);
-        if (context->target == NULL || operand_expression == NULL ||
-            !minic_type_is_integer(expression->type) ||
-            !minic_type_is_integer(operand_expression->type) ||
-            !minic_target_info_integer_promotion_for_program(
-                context->target, context->body->program, operand_expression->type, &promoted_type) ||
-            !minic_type_equal(promoted_type, expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = lower_expression(context, expression->value.unary.operand, &operand_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        status = minic_core_lower_internal_append_integer_conversion(
-            context, operand_expression->span, promoted_type, operand_value, &operand_value);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        (void)memset(&instruction, 0, sizeof(instruction));
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT;
+        instruction.kind = expression->value.unary.operator_kind == MINIC_UNARY_NEGATE
+            ? MINIC_CORE_INSTRUCTION_INTEGER_NEGATE : MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_NOT;
         instruction.span = expression->span;
         instruction_source_type = expression->type;
         instruction.result = MINIC_CORE_VALUE_INVALID;
@@ -296,7 +260,10 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
          expression->value.binary.operator_kind == MINIC_BINARY_MULTIPLY ||
          expression->value.binary.operator_kind == MINIC_BINARY_DIVIDE ||
          expression->value.binary.operator_kind == MINIC_BINARY_REMAINDER ||
-         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR) &&
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_XOR ||
+         expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR) &&
         minic_type_is_integer(expression->type)) {
         *handled = true;
         MinicCoreValueId left;
@@ -326,6 +293,15 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
             break;
         case MINIC_BINARY_BITWISE_XOR:
             instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_XOR;
+            break;
+        case MINIC_BINARY_ADD:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
+            break;
+        case MINIC_BINARY_BITWISE_AND:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
+            break;
+        case MINIC_BINARY_BITWISE_OR:
+            instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
             break;
         default:
             return MINIC_CORE_LOWER_ERROR;
@@ -420,86 +396,15 @@ MinicCoreLowerStatus minic_core_lower_try_arithmetic_binary(
                    : MINIC_CORE_LOWER_ERROR;
     }
 
+    /* The frontend has already handled vector and floating ADD above.
+     * Preserve the original unsupported result for other non-integer
+     * ADD/AND/OR expressions rather than letting later probes handle them. */
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_ADD) {
+        (expression->value.binary.operator_kind == MINIC_BINARY_ADD ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND ||
+         expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR)) {
         *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_AND) {
-        *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_AND;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
-    }
-    if (expression->kind == MINIC_EXPRESSION_BINARY &&
-        expression->value.binary.operator_kind == MINIC_BINARY_BITWISE_OR) {
-        *handled = true;
-        MinicCoreValueId left;
-        MinicCoreValueId right;
-        MinicCoreLowerStatus status;
-
-        if (!minic_type_is_integer(expression->type)) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        status = minic_core_lower_internal_lower_integer_binary_operands(context,
-                                               expression->value.binary.left,
-                                               expression->value.binary.right,
-                                               expression->type,
-                                               &left,
-                                               &right);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        instruction.kind = MINIC_CORE_INSTRUCTION_INTEGER_BITWISE_OR;
-        instruction.value.binary.left = left;
-        instruction.value.binary.right = right;
-        return minic_core_function_append_source_value_instruction(
-                   context->source, context->block_id, &instruction, instruction_source_type, value_id)
-                   ? MINIC_CORE_LOWER_OK
-                   : MINIC_CORE_LOWER_ERROR;
+        return MINIC_CORE_LOWER_UNSUPPORTED;
     }
     if (expression->kind == MINIC_EXPRESSION_BINARY &&
         (expression->value.binary.operator_kind == MINIC_BINARY_SHIFT_LEFT ||

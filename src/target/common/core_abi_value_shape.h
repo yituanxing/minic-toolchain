@@ -11,7 +11,6 @@ typedef struct MinicCoreAbiValueShape {
     size_t bytes;
     size_t integer_width;
     bool integer_signed;
-    bool integer_bool;
     MinicCoreFloatFormat float_format;
 } MinicCoreAbiValueShape;
 
@@ -39,7 +38,6 @@ static inline bool minic_core_abi_value_shape(
             return false;
         shape->integer_width = type->size;
         shape->integer_signed = type->value.integer.is_signed;
-        shape->integer_bool = type->value.integer.is_bool;
         return true;
     case MINIC_CORE_TYPE_FLOAT:
         if (!minic_core_floating_format(type, type->value.floating.format))

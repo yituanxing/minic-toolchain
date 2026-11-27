@@ -43,7 +43,7 @@ typedef struct MinicLP64PreparedCall {
 typedef struct MinicLP64CallPlanCache {
     size_t call_count;
     MinicLP64PreparedCall **sites; /* one pointer per actual CALL */
-    MinicCoreCallIndexHandle semantic_calls; /* borrowed or Common-owned */
+    const MinicCoreCallIndex *semantic_calls; /* borrowed from FunctionPlan */
 } MinicLP64CallPlanCache;
 bool minic_lp64_plan_function_calls(
     const MinicCoreFunction *, const MinicCoreCallIndex *,

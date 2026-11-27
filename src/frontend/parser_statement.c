@@ -57,27 +57,13 @@ bool minic_parser_statement_assignment_conversion(MinicParser *parser,
     if (minic_c0_assignment_compatible(parser->program, target_type, source_id)) {
         return true;
     }
-    if (minic_type_gnu_discard_const_one_pointer_compatible(target_type, source->type)) {
-        /* Preserve a precise cast in the AST. This is the same underlying
-         * pointer representation; never silently permit deeper pointer chains or
-         * a volatile qualification drop. */
-        (void)memset(&conversion, 0, sizeof(conversion));
-        conversion.kind = MINIC_EXPRESSION_CAST;
-        conversion.span = source->span;
-        conversion.type = target_type;
-        conversion.value_category = MINIC_VALUE_RVALUE;
-        conversion.value.unary.operand = source_id;
-        return minic_parser_add_expression(parser, &conversion, expression_id);
-    }
-    /* Statement-level assignment/initializer/return conversion must match
-       the expression-assignment path. When plain assignment compatibility is
-       insufficient, materialize any non-pointer scalar cast that the frontend
-       already accepts explicitly. This covers standard arithmetic conversions
-       such as double -> unsigned without admitting implicit pointer casts. */
-    if (minic_type_is_pointer(target_type) || minic_type_is_pointer(source->type) ||
-        !minic_type_cast_compatible(target_type, source->type)) {
+    /* Preserve explicit casts for GNU's permitted one-level const drop and
+     * ordinary non-pointer scalar conversions. Other mismatches are diagnosed
+     * by the assignment owner. */
+    if (!minic_type_gnu_discard_const_one_pointer_compatible(target_type, source->type) &&
+        (minic_type_is_pointer(target_type) || minic_type_is_pointer(source->type) ||
+         !minic_type_cast_compatible(target_type, source->type)))
         return true;
-    }
 
     (void)memset(&conversion, 0, sizeof(conversion));
     conversion.kind = MINIC_EXPRESSION_CAST;
@@ -135,13 +121,6 @@ static bool add_record_copy_statement(MinicParser *parser,
     return minic_parser_add_statement(parser, &statement);
 }
 
-static bool minic_parser_statement_record_copy(MinicParser *parser,
-                                        MinicExpressionId target_id,
-                                        MinicExpressionId source_id,
-                                        MinicSourceSpan span) {
-    return add_record_copy_statement(
-        parser, target_id, source_id, span, MINIC_STATEMENT_RECORD_COPY);
-}
 
 bool minic_parser_statement_record_initialize(MinicParser *parser,
                                         MinicExpressionId target_id,
@@ -375,76 +354,32 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         source = minic_c0_program_expression(parser->program, statement.expression);
         if (source == NULL || !minic_type_is_record(source->type) ||
             source->type.record_id != first_type.record_id ||
-            !minic_parser_statement_record_copy(
-                parser, statement.target_expression, statement.expression, source->span)) {
+            !add_record_copy_statement(
+                parser, statement.target_expression, statement.expression,
+                source->span, MINIC_STATEMENT_RECORD_COPY)) {
             return false;
         }
         return minic_parser_expect(parser, MINIC_TOKEN_SEMICOLON, "expected ';'");
     }
-    if (assignment_token == MINIC_TOKEN_PLUS_EQUAL) {
-        const MinicExpression *right_expression;
-        MinicExpression addition;
-        MinicExpressionId right_id;
-        MinicType common_type;
-
-        right_id = statement.expression;
-        right_expression = minic_c0_program_expression(parser->program, right_id);
-        if (right_expression == NULL || !minic_type_is_integer(right_expression->type)) {
-            minic_parser_error(
-                parser,
-                "compound addition assignment requires pointer/integer or integer operands");
-            return false;
-        }
-        if (minic_type_is_pointer(first_type)) {
-            MinicType pointee_type;
-
-            if (!minic_type_pointee(first_type, &pointee_type) ||
-                !minic_parser_require_complete_object_type(
-                    parser, pointee_type, "pointer update requires a complete object type")) {
-                return false;
-            }
-            common_type = first_type;
-        } else if (!minic_type_is_integer(first_type) ||
-                   !minic_target_info_integer_common_for_program(parser->invocation,
-                                                                 parser->program,
-                                                                 first_type,
-                                                                 right_expression->type,
-                                                                 &common_type)) {
-            minic_parser_error(
-                parser,
-                "compound addition assignment requires pointer/integer or integer operands");
-            return false;
-        }
-        (void)memset(&addition, 0, sizeof(addition));
-        addition.kind = MINIC_EXPRESSION_BINARY;
-        addition.span.begin = statement.span.begin;
-        addition.span.end = right_expression->span.end;
-        addition.type = common_type;
-        addition.value_category = MINIC_VALUE_RVALUE;
-        addition.value.binary.operator_kind = MINIC_BINARY_ADD;
-        addition.value.binary.left = statement.target_expression;
-        addition.value.binary.right = right_id;
-        if (!minic_parser_add_expression(parser, &addition, &statement.expression)) {
-            return false;
-        }
-    } else if (assignment_token == MINIC_TOKEN_MINUS_EQUAL ||
-               assignment_token == MINIC_TOKEN_STAR_EQUAL) {
+    if (assignment_token == MINIC_TOKEN_PLUS_EQUAL || assignment_token == MINIC_TOKEN_MINUS_EQUAL ||
+        assignment_token == MINIC_TOKEN_STAR_EQUAL) {
         const MinicExpression *right_expression;
         MinicExpression arithmetic;
         MinicExpressionId right_id;
         MinicType common_type;
+        const char *error = assignment_token == MINIC_TOKEN_STAR_EQUAL
+            ? "compound multiplication assignment requires integer operands"
+            : assignment_token == MINIC_TOKEN_PLUS_EQUAL
+                ? "compound addition assignment requires pointer/integer or integer operands"
+                : "compound subtraction assignment requires pointer/integer or integer operands";
 
         right_id = statement.expression;
         right_expression = minic_c0_program_expression(parser->program, right_id);
         if (right_expression == NULL || !minic_type_is_integer(right_expression->type)) {
-            minic_parser_error(parser,
-                               assignment_token == MINIC_TOKEN_STAR_EQUAL
-                                   ? "compound multiplication assignment requires integer operands"
-                                   : "compound subtraction assignment requires pointer/integer or "
-                                     "integer operands");
+            minic_parser_error(parser, "%s", error);
             return false;
         }
-        if (assignment_token == MINIC_TOKEN_MINUS_EQUAL && minic_type_is_pointer(first_type)) {
+        if (assignment_token != MINIC_TOKEN_STAR_EQUAL && minic_type_is_pointer(first_type)) {
             MinicType pointee_type;
 
             if (!minic_type_pointee(first_type, &pointee_type) ||
@@ -459,11 +394,7 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
                                                                  first_type,
                                                                  right_expression->type,
                                                                  &common_type)) {
-            minic_parser_error(parser,
-                               assignment_token == MINIC_TOKEN_STAR_EQUAL
-                                   ? "compound multiplication assignment requires integer operands"
-                                   : "compound subtraction assignment requires pointer/integer or "
-                                     "integer operands");
+            minic_parser_error(parser, "%s", error);
             return false;
         }
         (void)memset(&arithmetic, 0, sizeof(arithmetic));
@@ -474,7 +405,8 @@ static bool parse_expression_or_assignment_statement(MinicParser *parser,
         arithmetic.value_category = MINIC_VALUE_RVALUE;
         arithmetic.value.binary.operator_kind = assignment_token == MINIC_TOKEN_STAR_EQUAL
                                                     ? MINIC_BINARY_MULTIPLY
-                                                    : MINIC_BINARY_SUBTRACT;
+                                                    : assignment_token == MINIC_TOKEN_PLUS_EQUAL
+                                                        ? MINIC_BINARY_ADD : MINIC_BINARY_SUBTRACT;
         arithmetic.value.binary.left = statement.target_expression;
         arithmetic.value.binary.right = right_id;
         if (!minic_parser_add_expression(parser, &arithmetic, &statement.expression)) {

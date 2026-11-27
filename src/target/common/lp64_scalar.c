@@ -78,13 +78,20 @@ bool minic_lp64_core_valid_return_type(const MinicCoreTypeContext *context,
                                                &fp_elements, &fp_width)));
 }
 
+bool minic_lp64_core_indirect_result(
+    const MinicCoreTypeContext *context, MinicCoreTypeId id,
+    MinicDirectLP64CoreIndirectRecord policy) {
+    size_t bytes = 0U;
+    return policy != NULL &&
+           minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_RECORD) &&
+           policy(context, id, &bytes) && bytes > 16U;
+}
+
 bool minic_lp64_core_valid_return_with_indirect(
     const MinicCoreTypeContext *context, MinicCoreTypeId id,
     MinicDirectLP64CoreIndirectRecord policy) {
-    size_t bytes;
     return minic_lp64_core_valid_return_type(context, id) ||
-           (policy != NULL && minic_lp64_core_kind(context, id, MINIC_CORE_TYPE_RECORD) &&
-            policy(context, id, &bytes) && bytes > 16U);
+           minic_lp64_core_indirect_result(context, id, policy);
 }
 
 bool minic_lp64_core_valid_parameter_with_policy(

@@ -56,7 +56,6 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         facts == NULL || frame == NULL ||
         fn->value_count > (size_t)INT32_MAX / 8U) return false;
     (void)memset(frame, 0, sizeof(*frame));
-    frame->semantic_calls = facts->call_index;
     if (!minic_x86_64_plan_incoming_arguments(
             fn, &frame->incoming_arguments))
         return x86_frame_preflight_reject(fn, "incoming-abi");
@@ -65,11 +64,11 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
             fn, facts->call_index,
             &frame->outgoing_call_plans))
         return x86_frame_preflight_reject(fn, "outgoing-abi");
-    if (!minic_core_object_storage_plan_acquire(
-            fn, storage,
-            &frame->object_storage, &frame->borrows_object_storage))
+    if (!minic_core_object_storage_plan_borrow(
+            fn, storage, &frame->object_storage))
         return x86_frame_preflight_reject(fn, "object-storage");
     frame->varargs_count = facts->variadic_address_count;
+    frame->varargs_results = facts->variadic_address_results;
     frame->value_count = fn->value_count;
     frame->object_count = fn->object_count;
     /* Core's proven block-local last-use allocator supplies offsets from
@@ -160,7 +159,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     if (frame->varargs_count != 0U) {
         const MinicX86AbiRegisters *abi = minic_x86_64_abi_registers(
             MINIC_CALLING_CONVENTION_DEFAULT);
-        size_t count = 0U, gp_used, fp_used, stack_used;
+        size_t gp_used, fp_used, stack_used;
         size_t save_gp_bytes, save_fp_bytes, save_bytes;
         if (abi == NULL || abi->gp_argument_count > SIZE_MAX / 8U ||
             abi->fp_argument_count > SIZE_MAX / 16U)
@@ -169,29 +168,12 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         save_fp_bytes = abi->fp_argument_count * 16U;
         if (save_gp_bytes > SIZE_MAX - save_fp_bytes) return false;
         save_bytes = save_gp_bytes + save_fp_bytes;
+        /* Each va_start result is indexed once by the prepared Core owner. */
         if (frame->varargs_count > SIZE_MAX / sizeof(*frame->varargs_results) ||
-            (frame->varargs_results = (MinicCoreValueId *)calloc(
-                 frame->varargs_count, sizeof(*frame->varargs_results))) == NULL)
-            return false;
-        if (facts->variadic_address_results != NULL) {
-            /* Borrow once-checked Common semantic result IDs in production. */
-            for (i = 0U; i < frame->varargs_count; ++i) {
-                const MinicCoreValueId result = facts->variadic_address_results[i];
-                if (result >= fn->value_count) return false;
-                frame->varargs_results[count++] = result;
-            }
-        } else {
-            /* Standalone frame clients have no visitor-owned site index. */
-            for (i = 0U; i < fn->instruction_count; ++i) {
-                const MinicCoreInstruction *ins = &fn->instructions[i];
-                if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-                    continue;
-                if (count >= frame->varargs_count ||
-                    ins->result >= fn->value_count) return false;
-                frame->varargs_results[count++] = ins->result;
-            }
+            frame->varargs_results == NULL) return false;
+        for (i = 0U; i < frame->varargs_count; ++i) {
+            if (frame->varargs_results[i] >= fn->value_count) return false;
         }
-        if (count != frame->varargs_count) return false;
         /* The single SysV planner has already classified *all* named
          * parameters, including aggregates and empty GNU records. The
          * cursor below is therefore the ABI ground truth for va_start;
@@ -222,7 +204,7 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
      * Above 16, a separate %rsp-relative, dynamically aligned object base
      * is needed.  An offset aligned relative to %rbp is NOT enough. */
     for (i = 0U; i < fn->object_count; ++i) {
-        const size_t alignment = frame->object_storage.objects[i].alignment;
+        const size_t alignment = frame->object_storage->objects[i].alignment;
         /* SysV frame offsets are constrained to signed 32-bit displacements. */
         if (alignment > (size_t)INT32_MAX) return false;
         if (alignment > maximum_alignment) maximum_alignment = alignment;
@@ -245,8 +227,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
          * crypto stay within the 16KiB kernel stack without weakening
          * address identity for other (potentially escaping) objects. */
         for (i = 0U; valid && i < fn->object_count; ++i) {
-            const size_t size = frame->object_storage.objects[i].extent;
-            const size_t alignment = frame->object_storage.objects[i].alignment;
+            const size_t size = frame->object_storage->objects[i].extent;
+            const size_t alignment = frame->object_storage->objects[i].alignment;
             size_t slot, peak;
             bool reusable;
             valid = minic_core_object_reuse_plan_get(
@@ -282,8 +264,8 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
         if (!valid) return false;
     } else {
         for (i = 0U; i < fn->object_count; ++i) {
-            const size_t size = frame->object_storage.objects[i].extent;
-            const size_t alignment = frame->object_storage.objects[i].alignment;
+            const size_t size = frame->object_storage->objects[i].extent;
+            const size_t alignment = frame->object_storage->objects[i].alignment;
             /* Positive offsets from dynamically aligned %rsp denote START. */
             if (!minic_core_frame_align_up(pos, alignment, &pos) ||
                 pos > SIZE_MAX - size) return false;
@@ -305,17 +287,6 @@ bool minic_x86_64_frame_init_with_storage(const MinicTargetInfo *target, const M
     }
     if (!minic_core_frame_align_up(pos, 16U, &frame->frame_size) ||
         frame->frame_size > (size_t)INT32_MAX) return false;
-    if (getenv("MINIC_X86_FRAME_TRACE") != NULL && fn->name != NULL &&
-        strstr(fn->name, "blake2s_compress_generic") != NULL) {
-        (void)fprintf(stderr,
-            "MINIC_X86_FRAME function=%s scratch_bytes=%zu "
-            "allocated_object_bytes=%zu objects=%zu values=%zu final_frame=%zu\n",
-            fn->name, value_bytes,
-            pos >= value_bytes ? pos - value_bytes : 0U,
-            fn->object_count, fn->value_count, frame->frame_size);
-        if (getenv("MINIC_X86_FRAME_DUMP") != NULL)
-            (void)minic_core_function_dump(stderr, fn);
-    }
     return true;
 }
 
@@ -325,9 +296,6 @@ void minic_x86_64_frame_destroy(MinicX86Frame *frame) {
     free(frame->object_offsets);
     minic_x86_64_argument_plan_destroy(&frame->incoming_arguments);
     minic_x86_64_outgoing_call_plans_destroy(&frame->outgoing_call_plans);
-    minic_core_object_storage_plan_release(
-        &frame->object_storage, frame->borrows_object_storage);
-    free(frame->varargs_results);
     (void)memset(frame, 0, sizeof(*frame));
 }
 

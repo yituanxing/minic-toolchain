@@ -205,21 +205,16 @@ bool minic_parser_current_integer_literal_syntax(const MinicParser *parser,
     return true;
 }
 
-bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value) {
-    MinicSourceSpan span;
-    size_t digit_end;
-    size_t offset;
-    uint64_t parsed;
-    uint64_t base;
+/* One radix/digit parser for the two public literal-width contracts.
+ * Callers retain their own accepted token kinds and diagnostics. */
+static bool parse_integer_literal_digits(MinicParser *parser, uint64_t maximum,
+                                         const char *range_error, uint64_t *value) {
+    MinicSourceSpan span = parser->current.span;
+    size_t digit_end = integer_digit_end(parser, span);
+    size_t offset = span.begin.offset;
+    uint64_t base = 10U;
+    uint64_t parsed = 0U;
 
-    if (value == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
-        minic_parser_error(parser, "expected integer constant");
-        return false;
-    }
-    span = parser->current.span;
-    digit_end = integer_digit_end(parser, span);
-    offset = span.begin.offset;
-    base = 10U;
     if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
         (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
         base = 16U;
@@ -229,82 +224,51 @@ bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *
         base = 2U;
         offset += 2U;
     } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
-        base = 8U; /* C integer constants with a leading zero are octal. */
+        base = 8U;
     }
-
-    parsed = 0U;
     for (; offset < digit_end; ++offset) {
-        int digit_value;
+        int digit_value = minic_parser_hex_digit_value(parser->source[offset]);
         uint64_t digit;
-
-        digit_value = minic_parser_hex_digit_value(parser->source[offset]);
         if (digit_value < 0 || (uint64_t)digit_value >= base) {
             minic_parser_error(parser, "invalid integer constant digit");
             return false;
         }
         digit = (uint64_t)digit_value;
-        if (parsed > (UINT64_MAX - digit) / base) {
-            minic_parser_error(parser, "integer constant exceeds unsigned 64-bit literal range");
+        if (parsed > (maximum - digit) / base) {
+            minic_parser_error(parser, "%s", range_error);
             return false;
         }
         parsed = parsed * base + digit;
     }
     *value = parsed;
-    return minic_parser_advance(parser);
+    return true;
+}
+
+bool minic_parser_parse_unsigned_integer_value64(MinicParser *parser, uint64_t *value) {
+    if (value == NULL || parser->current.kind != MINIC_TOKEN_INTEGER_CONSTANT) {
+        minic_parser_error(parser, "expected integer constant");
+        return false;
+    }
+    return parse_integer_literal_digits(
+               parser, UINT64_MAX,
+               "integer constant exceeds unsigned 64-bit literal range", value) &&
+           minic_parser_advance(parser);
 }
 
 bool minic_parser_parse_integer_value(MinicParser *parser, int *value) {
-    MinicSourceSpan span;
-    size_t digit_end;
-    size_t offset;
-    unsigned long parsed;
-    unsigned long base;
-    bool constant_kind;
-
-    constant_kind = parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
-                    parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT;
+    uint64_t parsed;
+    bool constant_kind = parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT ||
+                         parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT;
     if (value == NULL || !constant_kind) {
         minic_parser_error(parser, "expected integer or character constant");
         return false;
     }
-    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT) {
+    if (parser->current.kind == MINIC_TOKEN_CHARACTER_CONSTANT)
         return parse_character_value(parser, value);
-    }
-
-    span = parser->current.span;
-    digit_end = integer_digit_end(parser, span);
-    offset = span.begin.offset;
-    base = 10UL;
-    if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
-        (parser->source[offset + 1U] == 'x' || parser->source[offset + 1U] == 'X')) {
-        base = 16UL;
-        offset += 2U;
-    } else if (digit_end - span.begin.offset >= 2U && parser->source[offset] == '0' &&
-               (parser->source[offset + 1U] == 'b' || parser->source[offset + 1U] == 'B')) {
-        base = 2UL;
-        offset += 2U;
-    } else if (digit_end - span.begin.offset > 1U && parser->source[offset] == '0') {
-        base = 8UL;
-    }
-
-    parsed = 0UL;
-    for (; offset < digit_end; ++offset) {
-        int digit_value;
-        unsigned long digit;
-
-        digit_value = minic_parser_hex_digit_value(parser->source[offset]);
-        if (digit_value < 0 || (unsigned long)digit_value >= base) {
-            minic_parser_error(parser, "invalid integer constant digit");
-            return false;
-        }
-        digit = (unsigned long)digit_value;
-        if (parsed > ((unsigned long)INT_MAX - digit) / base) {
-            minic_parser_error(parser, "integer constant exceeds current literal range");
-            return false;
-        }
-        parsed = parsed * base + digit;
-    }
-
+    if (!parse_integer_literal_digits(parser, (uint64_t)INT_MAX,
+                                      "integer constant exceeds current literal range",
+                                      &parsed))
+        return false;
     *value = (int)parsed;
     return minic_parser_advance(parser);
 }

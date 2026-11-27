@@ -41,7 +41,7 @@ bool minic_c0_inline_asm_output_value_supported(
     if (expression == NULL || constraint == NULL || length == 0U)
         return false;
     if (expression->value_category == MINIC_VALUE_LVALUE)
-        return true;
+        return !minic_type_is_const(expression->type);
     if (program == NULL || target == NULL ||
         expression->value_category != MINIC_VALUE_RVALUE ||
         expression->kind != MINIC_EXPRESSION_FIXED_REGISTER)
@@ -77,6 +77,52 @@ bool minic_c0_pointer_arithmetic_element_size(const MinicC0Program *program,
        must not be reinterpreted here as an unsupported type. Incomplete types
        still fail because DataLayout cannot size them. */
     return minic_data_layout_type(invocation, program, pointee, element_size, &alignment);
+}
+
+bool minic_c0_integer_builtin_signature(MinicBuiltinUnaryOperator operator_kind,
+                                        MinicType *argument_type,
+                                        MinicType *result_type) {
+    if (argument_type == NULL || result_type == NULL)
+        return false;
+    switch (operator_kind) {
+    case MINIC_BUILTIN_UNARY_CLZ:
+    case MINIC_BUILTIN_UNARY_CTZ:
+    case MINIC_BUILTIN_UNARY_POPCOUNT:
+        *argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_CLZL:
+    case MINIC_BUILTIN_UNARY_CTZL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTL:
+        *argument_type = minic_type_unsigned_long();
+        break;
+    case MINIC_BUILTIN_UNARY_CLZLL:
+    case MINIC_BUILTIN_UNARY_CTZLL:
+    case MINIC_BUILTIN_UNARY_POPCOUNTLL:
+        *argument_type = minic_type_unsigned_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_FFSLL:
+        *argument_type = minic_type_long_long();
+        break;
+    case MINIC_BUILTIN_UNARY_ISDIGIT:
+        *argument_type = minic_type_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP16:
+        *argument_type = minic_type_unsigned_short();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP32:
+        *argument_type = minic_type_unsigned_int();
+        break;
+    case MINIC_BUILTIN_UNARY_BSWAP64:
+        *argument_type = minic_type_unsigned_long_long();
+        break;
+    default:
+        return false;
+    }
+    *result_type = operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
+                   operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
+                   operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
+                       ? *argument_type : minic_type_int();
+    return true;
 }
 
 bool minic_c0_integer_type_is_signed(const MinicC0Program *program, MinicType type) {
@@ -199,7 +245,7 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
         return false;
     }
     if (minic_type_is_bool_integer(source_type)) {
-        return destination_bits >= 1U;
+        return true;
     }
     source_signed = minic_c0_integer_type_is_signed(program, source_type);
     destination_signed = minic_c0_integer_type_is_signed(program, destination_type);

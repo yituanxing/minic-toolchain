@@ -1080,7 +1080,8 @@ static bool x86_no_sse_fp_type(const MinicCoreFunction *fn,
  * reachable floating ABI/operations until x86 has a genuine soft-FP path.
  * Do not reject unused floating declarations or unreachable lexical arms. */
 static bool x86_no_sse_function_safe(
-    const MinicCoreFunction *fn, const bool *reachable) {
+    const MinicCoreFunction *fn, const bool *reachable,
+    const MinicCoreCallIndex *calls) {
     size_t i, j;
     if (fn == NULL || fn->type_context == NULL ||
         (minic_core_function_parameter_count(fn) != 0U && minic_core_function_parameter_types(fn) == NULL))
@@ -1104,16 +1105,17 @@ static bool x86_no_sse_function_safe(
                 return false;
             if (ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-                MinicCoreCallView call;
-                size_t k;
-                if (!minic_core_call_view_build(fn, ins, &call) ||
-                    (call.parameter_count != 0U &&
-                     call.core_parameter_type_ids == NULL) ||
-                    x86_no_sse_fp_type(fn, call.core_return_type_id))
+                const MinicCoreCallView *call;
+                size_t k, ordinal;
+                call = minic_core_call_index_find(calls, id, &ordinal);
+                if (call == NULL ||
+                    (call->parameter_count != 0U &&
+                     call->core_parameter_type_ids == NULL) ||
+                    x86_no_sse_fp_type(fn, call->core_return_type_id))
                     return false;
-                for (k = 0U; k < call.parameter_count; ++k)
+                for (k = 0U; k < call->parameter_count; ++k)
                     if (x86_no_sse_fp_type(fn,
-                            call.core_parameter_type_ids[k]))
+                            call->core_parameter_type_ids[k]))
                         return false;
             }
         }
@@ -1143,18 +1145,14 @@ static bool x86_emit_function(FILE *out,
     const bool is_weak = module_decl->is_weak;
     const bool is_constructor = module_decl->is_constructor;
     const bool *reachable = NULL;
-    bool *owned_reachable = NULL;
     bool *head_direct_data_globals = NULL;
     MinicCoreGlobalId *head_vma_cast_globals = NULL;
     MinicCoreGlobalId *head_memory_rebase_globals = NULL;
     const size_t *function_value_use_counts = NULL;
-    size_t *owned_value_use_counts = NULL;
     bool success = false;
     {
         const bool named = name != NULL && name[0] != '\0';
-        const bool verified = named &&
-            (minic_core_function_facts_verified(facts, fn) ||
-             minic_core_function_verify(fn));
+        const bool verified = named && minic_core_function_facts_verified(facts, fn);
         const bool planned = verified &&
             minic_x86_64_frame_init_with_storage(
                 target, fn, facts, storage, &frame);
@@ -1177,43 +1175,25 @@ static bool x86_emit_function(FILE *out,
         }
     }
     frame.module = module;
-    if (minic_core_function_facts_verified(facts, fn)) {
-        reachable = facts->reachable_blocks;
-        function_value_use_counts = facts->value_use_counts;
-    } else {
-        owned_reachable = calloc(fn->block_count == 0U ? 1U : fn->block_count,
-                                 sizeof(*owned_reachable));
-        if (owned_reachable != NULL &&
-            minic_core_function_mark_reachable_blocks(
-                fn, owned_reachable, fn->block_count))
-            reachable = owned_reachable;
-    }
+    /* Production always arrives through the prepared Program Visitor.
+     * Borrow its verified CFG and SSA census, never rebuild a parallel copy. */
+    reachable = facts->reachable_blocks;
+    function_value_use_counts = facts->value_use_counts;
     if (reachable == NULL) {
         x86_error(diag, path, "x86-64 cannot discover reachable Core blocks");
         goto done;
     }
     if ((minic_x86_64_target_codegen_options(target) & MINIC_X86_CODEGEN_NO_SSE) != 0U &&
-        !x86_no_sse_function_safe(fn, reachable)) {
+        !x86_no_sse_function_safe(fn, reachable, facts->call_index)) {
         x86_error(diag, path,
                   "x86-64 -mno-sse rejects reachable floating ABI or operation");
         goto done;
     }
     if (function_value_use_counts == NULL) {
-        if (fn->value_count > SIZE_MAX / sizeof(*owned_value_use_counts) ||
-            (owned_value_use_counts = calloc(
-                fn->value_count == 0U ? 1U : fn->value_count,
-                sizeof(*owned_value_use_counts))) == NULL) {
-            x86_error(diag, path, "x86-64 cannot allocate Core value-use census");
-            goto done;
-        }
-        /* Standalone function entry is not owned by ProgramVisitor. */
-        if (!minic_core_function_value_use_counts(
-                fn, owned_value_use_counts, fn->value_count)) {
-            x86_error(diag, path, "x86-64 cannot count Core function SSA uses");
-            goto done;
-        }
-        function_value_use_counts = owned_value_use_counts;
+        x86_error(diag, path, "x86-64 prepared Core value-use census missing");
+        goto done;
     }
+    frame.reachable_blocks = reachable;
     frame.function_value_use_counts = function_value_use_counts;
     frame.kernel_head_link_addresses = !target->position_independent &&
         (inherited_head_address_context ||
@@ -1340,8 +1320,6 @@ done:
     free(head_direct_data_globals);
     free(head_vma_cast_globals);
     free(head_memory_rebase_globals);
-    free(owned_value_use_counts);
-    free(owned_reachable);
     minic_x86_64_frame_destroy(&frame);
     return success;
 }
@@ -1481,11 +1459,6 @@ static bool x86_visit_module_global(
     }
     if (minic_x86_64_emit_module_global(out, target, module, index))
         return true;
-    if (getenv("MINIC_X86_GLOBAL_TRACE") != NULL)
-        (void)fprintf(stderr,
-            "MINIC_X86_MODULE_GLOBAL_REJECT object=%s index=%zu fragments=%zu\n",
-            global->name != NULL ? global->name : "<unnamed>",
-            index, global->fragment_count);
     x86_error(ctx->diagnostic, ctx->path,
               "x86-64 cannot emit Core module global");
     return false;

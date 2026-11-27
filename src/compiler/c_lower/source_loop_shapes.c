@@ -28,25 +28,18 @@ bool minic_core_loop_cleanup_edge_is_empty(const MinicStatement *statement) {
    `do BODY while (0)` into a synthetic while(1) tail. Preserve the historical
    flattening path when BODY has no control transfer to this loop; only build a
    real exit block when a source break/continue actually needs loop ownership. */
-bool minic_core_loop_normalized_do_while_zero_body(const MinicCoreLowerContext *context,
-                                          const MinicStatement *loop,
-                                          const MinicBlock *body,
-                                          MinicBlock *single_iteration_body,
-                                          MinicStatementId *continue_label_statement) {
-    const MinicExpression *loop_condition;
-    const MinicExpression *negated_condition;
-    const MinicExpression *source_condition;
-    const MinicStatement *continue_label;
-    const MinicStatement *condition_check;
-    const MinicStatement *break_statement;
+static bool normalized_do_while_tail(const MinicCoreLowerContext *context,
+                                     const MinicStatement *loop, const MinicBlock *body,
+                                     MinicExpressionId *condition_id,
+                                     MinicStatementId *continue_label_statement) {
+    const MinicExpression *loop_condition, *negated_condition, *source_condition;
+    const MinicStatement *continue_label, *condition_check, *break_statement;
     const MinicBlock *break_block;
     MinicStatementId continue_id;
 
     if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        loop == NULL || body == NULL || single_iteration_body == NULL ||
-        continue_label_statement == NULL || body->statement_count < 2U) {
+        loop == NULL || body == NULL || body->statement_count < 2U)
         return false;
-    }
     loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
     continue_id = body->statements[body->statement_count - 2U];
     continue_label = minic_c0_program_statement(context->body->program, continue_id);
@@ -72,12 +65,10 @@ bool minic_core_loop_normalized_do_while_zero_body(const MinicCoreLowerContext *
         negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
         return false;
     }
-    source_condition = minic_c0_program_expression(
-        context->body->program, negated_condition->value.unary.operand);
-    if (source_condition == NULL || source_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(source_condition->type) || source_condition->value.integer_value != 0) {
+    *condition_id = negated_condition->value.unary.operand;
+    source_condition = minic_c0_program_expression(context->body->program, *condition_id);
+    if (source_condition == NULL || !minic_type_is_integer(source_condition->type))
         return false;
-    }
     break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
     if (break_block == NULL || break_block->statement_count != 1U) {
         return false;
@@ -89,6 +80,24 @@ bool minic_core_loop_normalized_do_while_zero_body(const MinicCoreLowerContext *
         return false;
     }
 
+    *continue_label_statement = continue_id;
+    return true;
+}
+
+bool minic_core_loop_normalized_do_while_zero_body(const MinicCoreLowerContext *context,
+                                          const MinicStatement *loop,
+                                          const MinicBlock *body,
+                                          MinicBlock *single_iteration_body,
+                                          MinicStatementId *continue_label_statement) {
+    MinicExpressionId condition_id;
+    MinicStatementId continue_id;
+    const MinicExpression *condition;
+    if (single_iteration_body == NULL || continue_label_statement == NULL ||
+        !normalized_do_while_tail(context, loop, body, &condition_id, &continue_id))
+        return false;
+    condition = minic_c0_program_expression(context->body->program, condition_id);
+    if (condition->kind != MINIC_EXPRESSION_INTEGER || condition->value.integer_value != 0)
+        return false;
     *single_iteration_body = *body;
     single_iteration_body->statement_count -= 2U;
     *continue_label_statement = continue_id;
@@ -171,77 +180,20 @@ bool minic_core_loop_normalized_do_while_true_body(const MinicCoreLowerContext *
                                           const MinicBlock *body,
                                           MinicBlock *iteration_body,
                                           MinicStatementId *continue_label_statement) {
-    const MinicExpression *loop_condition;
-    const MinicExpression *negated_condition;
-    const MinicExpression *source_condition;
-    const MinicStatement *continue_label;
-    const MinicStatement *condition_check;
-    const MinicStatement *break_statement;
-    const MinicBlock *break_block;
-    MinicConstValue condition_value;
+    MinicExpressionId condition_id;
     MinicStatementId continue_id;
+    MinicConstValue condition_value;
     bool is_zero;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->target == NULL || loop == NULL || body == NULL || iteration_body == NULL ||
-        continue_label_statement == NULL || body->statement_count < 2U) {
+    if (context == NULL || context->target == NULL || iteration_body == NULL ||
+        continue_label_statement == NULL ||
+        !normalized_do_while_tail(context, loop, body, &condition_id, &continue_id) ||
+        !minic_const_eval_integer(context->body->program, context->target,
+                                  condition_id, &condition_value) ||
+        !minic_const_value_is_zero(context->body->program, context->target,
+                                   &condition_value, &is_zero) || is_zero)
         return false;
-    }
-    loop_condition = minic_c0_program_expression(context->body->program, loop->expression);
-    continue_id = body->statements[body->statement_count - 2U];
-    continue_label = minic_c0_program_statement(context->body->program, continue_id);
-    condition_check = minic_c0_program_statement(
-        context->body->program, body->statements[body->statement_count - 1U]);
-    if (loop_condition == NULL || loop_condition->kind != MINIC_EXPRESSION_INTEGER ||
-        !minic_type_is_integer(loop_condition->type) || loop_condition->value.integer_value != 1 ||
-        continue_label == NULL || continue_label->kind != MINIC_STATEMENT_LABEL ||
-        continue_label->target_expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->expression != MINIC_EXPRESSION_INVALID ||
-        continue_label->target_statement != MINIC_STATEMENT_INVALID ||
-        !source_position_equal(continue_label->span.begin, loop->span.begin) ||
-        condition_check == NULL || condition_check->kind != MINIC_STATEMENT_IF ||
-        condition_check->expression == MINIC_EXPRESSION_INVALID ||
-        condition_check->then_block == MINIC_BLOCK_INVALID ||
-        condition_check->else_block != MINIC_BLOCK_INVALID ||
-        !source_position_equal(condition_check->span.begin, loop->span.begin)) {
-        return false;
-    }
-    negated_condition =
-        minic_c0_program_expression(context->body->program, condition_check->expression);
-    if (negated_condition == NULL || negated_condition->kind != MINIC_EXPRESSION_UNARY ||
-        negated_condition->value.unary.operator_kind != MINIC_UNARY_LOGICAL_NOT) {
-        return false;
-    }
-    source_condition = minic_c0_program_expression(
-        context->body->program, negated_condition->value.unary.operand);
-    if (source_condition == NULL || !minic_type_is_integer(source_condition->type) ||
-        !minic_const_eval_integer(context->body->program,
-                                 context->target,
-                                 negated_condition->value.unary.operand,
-                                 &condition_value) ||
-        !minic_const_value_is_zero(context->body->program,
-                                   context->target,
-                                   &condition_value,
-                                   &is_zero) ||
-        is_zero) {
-        return false;
-    }
-    break_block = minic_c0_program_block(context->body->program, condition_check->then_block);
-    if (break_block == NULL || break_block->statement_count != 1U) {
-        return false;
-    }
-    break_statement = minic_c0_program_statement(context->body->program, break_block->statements[0]);
-    if (break_statement == NULL || break_statement->kind != MINIC_STATEMENT_BREAK ||
-        !minic_core_loop_cleanup_edge_is_empty(break_statement) ||
-        !source_position_equal(break_statement->span.begin, loop->span.begin)) {
-        return false;
-    }
-
-    /* The source condition is proven nonzero, so the parser's trailing
-       `if (!condition) break` is unreachable. Preserve source continue
-       semantics by binding the synthetic continue label to the real loop
-       condition block instead of retaining the synthetic tail. Source break
-       statements remain ordinary loop-owned edges to exit_block. */
+    /* A proven true condition removes the synthetic exit; continue still
+       targets the actual loop condition. */
     *iteration_body = *body;
     iteration_body->statement_count -= 2U;
     *continue_label_statement = continue_id;

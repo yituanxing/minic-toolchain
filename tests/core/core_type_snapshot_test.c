@@ -636,6 +636,11 @@ int main(void) {
     CHECK(minic_core_function_attach_type_context(function, &context));
     CHECK(minic_core_function_object_layout(function, 0U, &extent, &alignment));
     CHECK(extent == 8U && alignment == 4U);
+    function->objects[0].explicit_alignment = 3U;
+    CHECK(!minic_core_function_object_layout(function, 0U, &extent, &alignment));
+    CHECK(!minic_core_function_verify_core_type_snapshot(function));
+    function->objects[0].explicit_alignment = 0U;
+    CHECK(minic_core_function_object_layout(function, 0U, &extent, &alignment));
     /* A mismatched/overflowing array layout must be rejected by CoreType
      * registration, not by a second object-level count multiplier. */
     {

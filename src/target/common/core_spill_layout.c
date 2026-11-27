@@ -74,12 +74,27 @@ typedef struct CoreSpillConsumeContext {
     size_t unit_count;
 } CoreSpillConsumeContext;
 
+static bool core_spill_release(CoreSpillConsumeContext *context,
+    MinicCoreValueId value_id, size_t slot_size) {
+    size_t units, start, i;
+    units = slot_size / context->unit_bytes;
+    start = context->active_units[value_id];
+    if (start > context->unit_count || units > context->unit_count - start) {
+        return false;
+    }
+    for (i = 0U; i < units; ++i) {
+        if (!context->occupied_units[start + i]) {
+            return false;
+        }
+        context->occupied_units[start + i] = false;
+    }
+    context->active_units[value_id] = SIZE_MAX;
+    return true;
+}
+
 static bool core_spill_consume_use(MinicCoreValueId value_id, void *opaque) {
     CoreSpillConsumeContext *context = (CoreSpillConsumeContext *)opaque;
     size_t slot_size;
-    size_t units;
-    size_t start;
-    size_t i;
 
     if (context == NULL || context->function == NULL ||
         context->remaining_uses == NULL || context->active_units == NULL ||
@@ -98,19 +113,7 @@ static bool core_spill_consume_use(MinicCoreValueId value_id, void *opaque) {
     if (context->remaining_uses[value_id] != 0U) {
         return true;
     }
-    units = slot_size / context->unit_bytes;
-    start = context->active_units[value_id];
-    if (start > context->unit_count || units > context->unit_count - start) {
-        return false;
-    }
-    for (i = 0U; i < units; ++i) {
-        if (!context->occupied_units[start + i]) {
-            return false;
-        }
-        context->occupied_units[start + i] = false;
-    }
-    context->active_units[value_id] = SIZE_MAX;
-    return true;
+    return core_spill_release(context, value_id, slot_size);
 }
 
 static bool core_spill_find_units(const bool *occupied_units,
@@ -295,27 +298,14 @@ static bool core_block_reused_spill_layout(const MinicCoreFunction *function,
             remaining_uses[instruction->result] == 0U) {
             MinicCoreValueId result = instruction->result;
             size_t slot_size;
-            size_t units;
-            size_t start = active_units[result];
-            size_t i;
-            if (start == SIZE_MAX ||
+            if (active_units[result] == SIZE_MAX ||
                 !core_value_spill_slot_size(function, unit_bytes,
                                             result, workspace->cached_slot_sizes,
                                             &slot_size) ||
-                (slot_size != unit_bytes && slot_size != 2U * unit_bytes)) {
+                (slot_size != unit_bytes && slot_size != 2U * unit_bytes) ||
+                !core_spill_release(&consume_context, result, slot_size)) {
                 goto done;
             }
-            units = slot_size / unit_bytes;
-            if (start > total_units || units > total_units - start) {
-                goto done;
-            }
-            for (i = 0U; i < units; ++i) {
-                if (!occupied_units[start + i]) {
-                    goto done;
-                }
-                occupied_units[start + i] = false;
-            }
-            active_units[result] = SIZE_MAX;
         }
     }
     if (!minic_core_visit_terminator_value_uses(

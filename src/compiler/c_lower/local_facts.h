@@ -11,8 +11,6 @@ bool minic_core_local_fact_index(const MinicCoreLowerContext *context,
                                       MinicLocalId local_id,
                                       size_t *index);
 
-bool minic_core_inline_spec_fact_trace_enabled(const MinicCoreLowerContext *context);
-
 MinicCoreLocalIntegerConstant *minic_core_local_facts_snapshot(
     const MinicCoreLowerContext *context);
 
@@ -23,12 +21,18 @@ void minic_core_local_facts_restore(
 /* Meet two reachable source-expression CFG paths. Preserve a known value
  * only when both paths agree; carry escape/specialization effects from either
  * path. The caller owns both snapshots and must check allocation success. */
+MinicCoreLocalIntegerConstant minic_core_local_fact_meet(
+    const MinicCoreLocalIntegerConstant *lhs,
+    const MinicCoreLocalIntegerConstant *rhs);
+
 bool minic_core_local_facts_meet(
     MinicCoreLowerContext *context,
     const MinicCoreLocalIntegerConstant *left,
     const MinicCoreLocalIntegerConstant *right);
 
 void minic_core_local_facts_clear_known(MinicCoreLowerContext *context);
+/* Detached entry has no dominating lexical specialization facts. */
+void minic_core_local_facts_forget_reentry(MinicCoreLowerContext *context);
 
 /* A bounded write may retain current-value/range information, but every
  * write invalidates the *entry* facts of an inline specialization. */

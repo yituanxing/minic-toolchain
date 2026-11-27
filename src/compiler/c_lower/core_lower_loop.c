@@ -62,7 +62,7 @@ static bool core_loop_condition_is_constant_true(const MinicCoreLowerContext *co
     return !is_zero;
 }
 
-MinicCoreLowerStatus
+static MinicCoreLowerStatus
 minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
             const MinicStatement *statement,
             MinicStatementId continue_label_statement,
@@ -312,48 +312,27 @@ minic_core_lower_loop_cfg(MinicCoreLowerContext *context,
                       statement->span.begin.column);
         return status;
     }
+    /* Both fallthrough and continue converge at the explicit update block
+       when one exists. Lower the update once, then emit the backedge. */
     if (for_update != NULL && update_block != MINIC_CORE_BLOCK_INVALID) {
-        /* M148_NORMALIZED_FOR_UPDATE_CONTINUE_CFG_OWNER: converge both natural
-           body fallthrough and every continue edge at one update owner, then
-           evaluate the update exactly once before the condition backedge. */
         if (!body_terminated) {
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, update_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
+            status = minic_core_lower_internal_set_branch(context, context->block_id,
+                                                          statement->span, update_block);
+            if (status != MINIC_CORE_LOWER_OK) return status;
         }
         context->block_id = update_block;
+        body_terminated = false;
+    }
+    if (!body_terminated && for_update != NULL) {
         status = minic_core_lower_internal_lower_expression_statement(context, for_update);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (context->block_id < context->function->block_count &&
-            context->function->blocks[context->block_id].has_terminator) {
-            body_terminated = true;
-        } else {
-            body_terminated = false;
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-        }
-    } else {
-        if (!body_terminated && for_update != NULL) {
-            status = minic_core_lower_internal_lower_expression_statement(context, for_update);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-            if (context->block_id < context->function->block_count &&
-                context->function->blocks[context->block_id].has_terminator) {
-                body_terminated = true;
-            }
-        }
-        if (!body_terminated) {
-            status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, condition_block);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-        }
+        if (status != MINIC_CORE_LOWER_OK) return status;
+        body_terminated = context->block_id < context->function->block_count &&
+                          context->function->blocks[context->block_id].has_terminator;
+    }
+    if (!body_terminated) {
+        status = minic_core_lower_internal_set_branch(context, context->block_id,
+                                                      statement->span, condition_block);
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
     context->block_id = exit_block;
     /* M133_CONSTANT_TRUE_LOOP_REACHABILITY: reachability, not syntax spelling,
@@ -414,13 +393,6 @@ static void core_invalidate_loop_mutated_specialization_facts(
         may_mutate = modified == NULL || modified[index] != 0U;
         if (may_mutate) {
             minic_core_local_fact_invalidate(context, local_id);
-            if (getenv("MINIC_LOOP_MUTATED_FACT_TRACE") != NULL) {
-                (void)fprintf(stderr,
-                              "LOOP_SPECIALIZATION_FACT_KILL function=%s local=%zu\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name : "?",
-                              (size_t)local_id);
-            }
         }
     }
 }
@@ -473,11 +445,11 @@ static unsigned char *core_collect_loop_modified_locals(
     return modified;
 }
 
-/* One owner for normal loop facts. Parser-created while/for label pairs use
- * minic_core_lower_loop_cfg directly because their fact snapshots are owned
- * by the normalized source path. */
+/* All source loop entrances share the same fact barrier; detached reentry
+ * never inherits speculative values from the unrelated lexical predecessor. */
 MinicCoreLowerStatus minic_core_lower_loop_statement(
     MinicCoreLowerContext *context, const MinicStatement *statement,
+    MinicStatementId continue_label_statement, bool detached_reentry,
     bool *terminated) {
     MinicCoreLowerStatus status;
     if (context == NULL || statement == NULL || terminated == NULL)
@@ -489,6 +461,13 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
     unsigned char *loop_modified_locals = NULL;
     bool local_fact_single_pass;
 
+    if (detached_reentry) {
+        if (context->source_function == NULL) return MINIC_CORE_LOWER_ERROR;
+        minic_core_local_facts_forget_reentry(context);
+        status = minic_core_lower_loop_cfg(context, statement, continue_label_statement, terminated);
+        minic_core_local_facts_clear_known(context);
+        return status;
+    }
     loop_incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U &&
@@ -522,7 +501,7 @@ MinicCoreLowerStatus minic_core_lower_loop_statement(
             context, loop_incoming_facts, statement, loop_modified_locals);
     }
     status = minic_core_lower_loop_cfg(
-        context, statement, MINIC_STATEMENT_INVALID, terminated);
+        context, statement, continue_label_statement, terminated);
     if (!local_fact_single_pass) {
         minic_core_local_facts_clear_known(context);
         core_restore_loop_invariant_facts(

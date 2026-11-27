@@ -9,10 +9,6 @@
 
 enum { PTE_T0 = 12U, PTE_T1 = 13U, PTE_T4 = 16U };
 
-static MinicMachineOperand pte_memory(unsigned base) {
-    return minic_loong_machine_address(base, 0, MINIC_LOONG_ADDRESS_IMM12,
-                                      "+m", "buddy");
-}
 
 static bool pte_unsigned_word(const MinicCoreFunction *fn,
     MinicCoreValueId value, bool address) {
@@ -101,7 +97,8 @@ bool minic_loongarch64_machine_select_pte(
     if (!load(opaque, roles[2].value, PTE_T0, false) ||
         !load(opaque, roles[0].value, PTE_T1, true))
         return false;
-    bindings[0] = pte_memory(PTE_T1);
+    bindings[0] = minic_loong_machine_address(PTE_T1, 0, MINIC_LOONG_ADDRESS_IMM12,
+        "+m", "buddy");
     bindings[1] = minic_loong_machine_gp(PTE_T4, MINIC_MACHINE_REGISTER_WRITE,
         "=&r", "tmp");
     bindings[2] = minic_loong_machine_gp(PTE_T0, MINIC_MACHINE_REGISTER_READ,

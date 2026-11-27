@@ -175,8 +175,7 @@ bool minic_core_cfg_nonnegative_range(const MinicCoreLowerContext *,
                                       MinicExpressionId, uint64_t *, uint64_t *);
 bool minic_core_cfg_bounded_comparison_is_false(const MinicCoreLowerContext *,
                                                 MinicExpressionId);
-bool core_const_signed_value(const MinicCoreLowerContext *,
-                             const MinicConstValue *, int64_t *);
+
 
 /* Conservatively shared between fact oracle and source-to-Core lowering. */
 bool minic_core_lower_direct_local_read(const MinicCoreLowerContext *,
@@ -206,9 +205,9 @@ void core_source_subtree_membership_destroy(CoreSourceSubtreeMembership *);
 
 bool core_capture_enum_metadata(MinicCoreLowerContext *context);
 /* Source-wide fail-closed _Bool==0 fact used only by Core CFG lowering. */
-bool core_bool_has_entry_zero_initializer(
-    const MinicCoreLowerContext *, MinicLocalId,
-    bool (*is_zero)(const MinicCoreLowerContext *, MinicExpressionId));
+bool core_source_constant_is_zero(const MinicCoreLowerContext *, MinicExpressionId);
+bool core_zero_bool_is_immutable(const MinicCoreLowerContext *, MinicLocalId,
+                                 bool allow_dead_assignments);
 bool core_zero_bool_cfg_condition(const MinicCoreLowerContext *context,
                                   MinicExpressionId id,
                                   unsigned int depth,
@@ -361,13 +360,10 @@ void core_expression_collect_modified_and_condition_locals(
 void core_block_collect_modified_locals(
     const MinicCoreLowerContext *context, const MinicBlock *block,
     unsigned char *modified, unsigned int depth);
-/* Loop owns normalized source CFG and while-specific fact barriers.
- * The split entry preserves parser-created while/for label pairs. */
-MinicCoreLowerStatus minic_core_lower_loop_cfg(
-    MinicCoreLowerContext *context, const MinicStatement *statement,
-    MinicStatementId continue_label_statement, bool *terminated);
+/* Loop owns normalized source CFG and fact barriers for all entry paths. */
 MinicCoreLowerStatus minic_core_lower_loop_statement(
     MinicCoreLowerContext *context, const MinicStatement *statement,
+    MinicStatementId continue_label_statement, bool detached_reentry,
     bool *terminated);
 
 /* Structured CFG: if owns source guards/fact joins, switch owns case dispatch;

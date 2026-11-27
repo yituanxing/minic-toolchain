@@ -154,62 +154,76 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
     unsigned int pointer_const_qualifiers;
     unsigned int pointer_volatile_qualifiers;
     bool is_array;
+    const bool abstract = name_span == NULL;
 
-    if (parser == NULL || name_span == NULL || declarator_type == NULL ||
-        name_is_array == NULL || name_array_inferred == NULL || name_array_count == NULL ||
+    if (parser == NULL || declarator_type == NULL ||
+        (!abstract && (name_is_array == NULL || name_array_inferred == NULL ||
+                       name_array_count == NULL)) ||
+        (abstract && (name_is_array != NULL || name_array_inferred != NULL ||
+                      name_array_count != NULL)) ||
         !minic_parser_expect(
-            parser, MINIC_TOKEN_LPAREN, "expected '(' before parenthesized pointer declarator")) {
+            parser, MINIC_TOKEN_LPAREN,
+            abstract ? "expected '(' before abstract array pointer"
+                     : "expected '(' before parenthesized pointer declarator")) {
         return false;
     }
-    *name_is_array = false;
-    *name_array_inferred = false;
-    *name_array_count = 0U;
+    if (!abstract) {
+        *name_is_array = false;
+        *name_array_inferred = false;
+        *name_array_count = 0U;
+    }
     pointer_depth = 0U;
     pointer_const_qualifiers = 0U;
     pointer_volatile_qualifiers = 0U;
     while (parser->current.kind == MINIC_TOKEN_STAR) {
         pointer_depth += 1U;
-        if (!minic_parser_advance(parser) ||
+        if ((abstract && pointer_depth > 31U) || !minic_parser_advance(parser) ||
             !minic_parser_parse_pointer_qualifier_sequence(
                 parser, pointer_depth, &pointer_const_qualifiers, &pointer_volatile_qualifiers)) {
+            if (abstract)
+                minic_parser_error(parser, "abstract array pointer depth is unsupported");
             return false;
         }
     }
-    if (pointer_depth == 0U || parser->current.kind != MINIC_TOKEN_IDENTIFIER) {
-        minic_parser_error(parser, "pointer-to-array declarator requires a named pointer");
+    if (pointer_depth == 0U ||
+        parser->current.kind != (abstract ? MINIC_TOKEN_RPAREN : MINIC_TOKEN_IDENTIFIER)) {
+        minic_parser_error(parser, abstract
+            ? "abstract array pointer requires a parenthesized '*'"
+            : "pointer-to-array declarator requires a named pointer");
         return false;
     }
-    *name_span = parser->current.span;
-    if (!minic_parser_advance(parser)) {
-        return false;
-    }
-    if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-        *name_is_array = true;
-        if (!minic_parser_advance(parser)) {
+    if (!abstract) {
+        *name_span = parser->current.span;
+        if (!minic_parser_advance(parser))
             return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
-            *name_array_inferred = true;
-            if (!minic_parser_advance(parser)) {
+        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+            *name_is_array = true;
+            if (!minic_parser_advance(parser))
+                return false;
+            if (parser->current.kind == MINIC_TOKEN_RBRACKET) {
+                *name_array_inferred = true;
+                if (!minic_parser_advance(parser))
+                    return false;
+            } else if (!minic_parser_parse_fixed_array_bound(parser, name_array_count)) {
                 return false;
             }
-        } else if (!minic_parser_parse_fixed_array_bound(parser, name_array_count)) {
-            return false;
-        }
-        if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
-            minic_parser_error(
-                parser,
-                "parenthesized pointer declarator supports one outer name array dimension");
-            return false;
+            if (parser->current.kind == MINIC_TOKEN_LBRACKET) {
+                minic_parser_error(parser,
+                    "parenthesized pointer declarator supports one outer name array dimension");
+                return false;
+            }
         }
     }
     if (!minic_parser_expect(
-            parser, MINIC_TOKEN_RPAREN, "expected ')' after parenthesized pointer declarator") ||
+            parser, MINIC_TOKEN_RPAREN,
+            abstract ? "expected ')' after abstract array pointer"
+                     : "expected ')' after parenthesized pointer declarator") ||
         /* The pointer being declared is a complete object even when its
          * array pointee has an incomplete outermost bound: T (*name)[].
          * Only direct incomplete array OBJECT definitions need completion. */
         !minic_parser_parse_array_declarator_suffix(
-            parser, element_type, true, &type, &is_array)) {
+            parser, element_type, !abstract, &type, &is_array) ||
+        (abstract && !is_array)) {
         return false;
     }
     /* `T (*name)` is a valid pointer-to-T object declarator without an array
@@ -220,14 +234,15 @@ bool minic_parser_parse_parenthesized_pointer_to_array_declarator(
         unsigned int bit;
 
         if (!minic_type_pointer_to(type, &type)) {
-            minic_parser_error(parser, "pointer-to-array declarator depth is unsupported");
+            minic_parser_error(parser, abstract ? "cannot form pointer to array type"
+                                               : "pointer-to-array declarator depth is unsupported");
             return false;
         }
         bit = 1U << level;
-        if ((pointer_const_qualifiers & bit) != 0U && !minic_type_add_const(type, &type)) {
-            return false;
-        }
-        if ((pointer_volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(type, &type)) {
+        if (((pointer_const_qualifiers & bit) != 0U && !minic_type_add_const(type, &type)) ||
+            ((pointer_volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(type, &type))) {
+            if (abstract)
+                minic_parser_error(parser, "cannot qualify abstract array pointer");
             return false;
         }
     }
@@ -546,4 +561,47 @@ bool minic_parser_build_function_declarator_type(MinicParser *parser,
                                                  declarator->pointer_volatile_qualifiers,
                                                  &array_suffix,
                                                  declarator_type);
+}
+
+/* Use one parse/build path for parameter, record-field and extern
+ * function-pointer objects, preserving each context's admission rules. */
+bool minic_parser_parse_function_pointer_object(
+    MinicParser *parser, MinicType return_type,
+    MinicSourceSpan *name_span, bool *has_name, MinicType *type,
+    MinicFunctionPointerObjectRole role, bool require_parameter_name) {
+    MinicParsedFunctionDeclarator declarator;
+    const bool parameter = role == MINIC_POINTER_OBJECT_PARAMETER;
+    const bool field = role == MINIC_POINTER_OBJECT_RECORD_FIELD;
+    const bool external = role == MINIC_POINTER_OBJECT_EXTERN;
+
+    if (parser == NULL || name_span == NULL || type == NULL ||
+        (!parameter && !field && !external) ||
+        (parameter && has_name == NULL) ||
+        !minic_parser_parse_parenthesized_function_declarator(
+            parser, !parameter || require_parameter_name, !parameter,
+            &declarator, false))
+        return false;
+    if (external && declarator.is_variadic) {
+        minic_parser_error(parser,
+            "variadic extern function pointer objects are not supported yet");
+        return false;
+    }
+    if (!minic_parser_build_function_declarator_type(
+            parser, return_type, &declarator, type)) {
+        minic_parser_error(parser, parameter
+            ? "cannot build function pointer parameter type"
+            : field ? "cannot build function pointer field type"
+                    : "cannot build extern function pointer object type");
+        return false;
+    }
+    if (!external &&
+        !minic_parser_apply_function_pointer_declarator_attributes(
+            parser, &declarator.attributes, type,
+            parameter ? "unsupported GNU ABI attribute on function pointer parameter"
+                      : "unsupported GNU attribute in function-pointer record declarator"))
+        return false;
+    *name_span = declarator.name_span;
+    if (has_name != NULL)
+        *has_name = declarator.has_name;
+    return true;
 }

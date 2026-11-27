@@ -1,4 +1,4 @@
-#include "frontend/token.h"
+#include "token_names.h"
 
 #include <stdio.h>
 #include <string.h>

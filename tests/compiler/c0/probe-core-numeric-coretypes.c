@@ -53,7 +53,6 @@ int main(void) {
     MinicCoreFunction fn = {0};
     MinicCoreInstruction ins = {0};
     MinicCoreIntegerOverflowNarrowShape narrow;
-    MinicDirectMachineInstructionShape machine_shape;
     size_t width, lw, rw;
     bool sign, ls, rs, pointer, ptr_to_int, source_pointer, left_signed;
     bool wide_left, right_signed, result_signed;
@@ -234,8 +233,7 @@ int main(void) {
         &fn, &ins, &width, &sign, &pointer));
     values[2].core_type_id = p_i32;
 
-    /* The Direct LP64 machine family uses the same exclusive Core execution
-     * view across scalar ALU, compare, pointer offsets and dispatch. */
+    /* Direct LP64 numeric shapes share an attached Core execution view. */
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
     ins.core_type_id = i32;
     ins.result = 0U;
@@ -244,9 +242,6 @@ int main(void) {
     REQUIRE(minic_multi_direct_integer_binary_shape(
         &fn, &ins, &lw, &rw, &ls, &rs));
     REQUIRE(lw == 4U && rw == 4U && ls && rs);
-    REQUIRE(minic_multi_direct_machine_instruction_shape(
-        &fn, &ins, false, &machine_shape));
-    REQUIRE(machine_shape.family == MINIC_DIRECT_MACHINE_INTEGER);
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
     REQUIRE(minic_multi_direct_integer_compare_shape(
         &fn, &ins, &lw, &rw, &ls, &rs));
@@ -273,11 +268,7 @@ int main(void) {
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_ADD;
     REQUIRE(!minic_multi_direct_integer_binary_shape(
         &fn, &ins, &lw, &rw, &ls, &rs));
-    REQUIRE(!minic_multi_direct_machine_instruction_shape(
-        &fn, &ins, false, &machine_shape));
     ins.kind = MINIC_CORE_INSTRUCTION_RECORD_LOAD;
-    REQUIRE(!minic_multi_direct_machine_instruction_shape(
-        &fn, &ins, false, &machine_shape));
     ins.kind = MINIC_CORE_INSTRUCTION_INTEGER_LESS;
     REQUIRE(!minic_multi_direct_integer_compare_shape(
         &fn, &ins, &lw, &rw, &ls, &rs));

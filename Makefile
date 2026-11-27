@@ -166,7 +166,6 @@ MINIC_SOURCES := \
 	src/frontend/parser_string.c \
 	src/frontend/parser_type.c \
 	src/frontend/parser_typedef.c \
-	src/frontend/token.c \
 	src/frontend/type.c \
 	src/target/data_layout.c \
 	src/target/target_info.c \
@@ -179,7 +178,6 @@ MINIC_SOURCES := \
 	$(TARGET_MACHINE_REGISTER_SOURCES) \
 	src/target/backend.c \
 	src/target/backend_source.c \
-	src/target/backend_core_usage.c \
 	src/target/common/module_global_emit.c \
 	src/target/common/elf_module_symbol_info.c \
 	src/target/common/program_visit.c \

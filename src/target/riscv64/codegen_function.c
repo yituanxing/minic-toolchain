@@ -76,7 +76,7 @@ static bool rv64_emit_typed_function(
                 source->template_text, source->template_length)) goto done;
     }
     if (!minic_riscv64_core_function_admit_profile(
-            true, function, &abi, lp64_soft_float, facts, storage) ||
+            function, &abi, lp64_soft_float, facts, storage) ||
         !minic_riscv64_asm_function_plan_build(
             function, &old_frame.asm_plan) ||
         !minic_riscv64_core_frame_initialize_with_storage(
@@ -84,8 +84,7 @@ static bool rv64_emit_typed_function(
             minic_riscv64_needs_machine_runtime_call(isa, function),
             facts, storage)) goto done;
     frame_ready = true;
-    if (!minic_riscv64_core_frame_mark_reachable_blocks(
-            function, facts, &old_frame) ||
+    if (facts->reachable_blocks == NULL ||
         !minic_riscv64_machine_physical_frame(&old_frame,
             &physical, callee_saved, 12U)) goto done;
     bridge.target = target;
@@ -102,11 +101,11 @@ static bool rv64_emit_typed_function(
     bridge.abi64 = &bridge.abi64_view;
     {
         const MinicMachineProductionSource source = {
-            .core = function, .reachable_blocks = old_frame.reachable_blocks,
+            .core = function, .reachable_blocks = facts->reachable_blocks,
             .target = target, .symbol = symbol->symbol_name
         };
         if (!minic_riscv_machine_select_core_for_production(
-                &machine, &bridge) ||
+                &machine, &bridge, facts) ||
             !minic_riscv_machine_gnu_asm_policy(target, &policy) ||
             !minic_machine_production_preflight_prepare(
                 &source, &machine, &policy, &prepared_body))

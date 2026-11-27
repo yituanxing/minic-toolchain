@@ -43,6 +43,21 @@ static bool loongarch64_core_executed_fp_type(
     return type == NULL || type->kind == MINIC_CORE_TYPE_FLOAT;
 }
 
+static bool loongarch64_lp64s_signature_supported(
+    const MinicCoreTypeContext *types, MinicCoreTypeId id) {
+    const MinicCoreType *signature = minic_core_type_base(types, id);
+    size_t j;
+    if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
+        (signature->value.function.parameter_count != 0U &&
+         signature->value.function.parameters == NULL) ||
+        loongarch64_core_executed_fp_type(types, signature->value.function.return_type))
+        return false;
+    for (j = 0U; j < signature->value.function.parameter_count; ++j)
+        if (loongarch64_core_executed_fp_type(types,
+                signature->value.function.parameters[j])) return false;
+    return true;
+}
+
 /* LP64S passes floating arguments in GPRs and forbids compiler-generated FPU
  * instructions in the kernel. The integer ABI remains compatible with LP64D,
  * but we must not miscompile a future float operation or FP-valued call while
@@ -52,7 +67,7 @@ static bool loongarch64_lp64s_executable_supported(
     const MinicTargetInfo *target,
     const MinicCoreFunction *fn) {
     size_t i;
-    size_t count, width, j;
+    size_t count, width;
     if (fn == NULL || target == NULL ||
         fn->type_context == NULL ||
         loongarch64_core_executed_fp_type(fn->type_context,
@@ -65,32 +80,12 @@ static bool loongarch64_lp64s_executable_supported(
     /* Validate actual Core call signatures, not every source declaration.
      * An FP formal type can exist even when argument conversion was folded
      * or no FP-typed SSA operand survives in the call lowering. */
-    for (i = 0U; i < fn->callee_count; ++i) {
-        const MinicCoreCallee *call = &fn->callees[i];
-        const MinicCoreType *signature = minic_core_type_base(fn->type_context, call->core_function_type_id);
-        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-            (signature->value.function.parameter_count != 0U &&
-             signature->value.function.parameters == NULL)) return false;
-        if (loongarch64_core_executed_fp_type(fn->type_context,
-                signature->value.function.return_type)) return false;
-        for (j = 0U; j < signature->value.function.parameter_count; ++j)
-            if (loongarch64_core_executed_fp_type(fn->type_context,
-                    signature->value.function.parameters[j]))
-                return false;
-    }
-    for (i = 0U; i < fn->call_signature_count; ++i) {
-        const MinicCoreCallSignature *call = &fn->call_signatures[i];
-        const MinicCoreType *signature = minic_core_type_base(fn->type_context, call->core_function_type_id);
-        if (signature == NULL || signature->kind != MINIC_CORE_TYPE_FUNCTION ||
-            (signature->value.function.parameter_count != 0U &&
-             signature->value.function.parameters == NULL)) return false;
-        if (loongarch64_core_executed_fp_type(fn->type_context,
-                signature->value.function.return_type)) return false;
-        for (j = 0U; j < signature->value.function.parameter_count; ++j)
-            if (loongarch64_core_executed_fp_type(fn->type_context,
-                    signature->value.function.parameters[j]))
-                return false;
-    }
+    for (i = 0U; i < fn->callee_count; ++i)
+        if (!loongarch64_lp64s_signature_supported(fn->type_context,
+                fn->callees[i].core_function_type_id)) return false;
+    for (i = 0U; i < fn->call_signature_count; ++i)
+        if (!loongarch64_lp64s_signature_supported(fn->type_context,
+                fn->call_signatures[i].core_function_type_id)) return false;
     for (i = 0U; i < fn->value_count; ++i)
         if (loongarch64_core_executed_fp_type(fn->type_context,
                 fn->values[i].core_type_id)) return false;

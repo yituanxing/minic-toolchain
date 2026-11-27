@@ -17,26 +17,23 @@ typedef struct MinicModuleFragmentSinkContext {
 /* File-level GNU ASM is always emitted. Capture only its assembler-token
  * references in the sealed Module; function-body ASM roots instead belong to
  * reachable Core ASM instructions, never an all-Source declaration scan. */
+static bool module_file_asm_names_symbol(const MinicCoreModule *module, const char *name) {
+    size_t index;
+    for (index = 0U; index < module->file_asm_count; ++index)
+        if (minic_core_asm_names_symbol(module->file_asms[index].text,
+                module->file_asms[index].length, name))
+            return true;
+    return false;
+}
+
 static void module_capture_file_asm_roots(MinicCoreModule *module) {
-    size_t symbol_index, asm_index;
-    for (symbol_index = 0U; symbol_index < module->global_count; ++symbol_index) {
-        MinicCoreModuleGlobal *symbol = &module->globals[symbol_index];
-        for (asm_index = 0U; asm_index < module->file_asm_count; ++asm_index)
-            if (minic_core_asm_names_symbol(module->file_asms[asm_index].text,
-                    module->file_asms[asm_index].length, symbol->name)) {
-                symbol->is_file_asm_root = true;
-                break;
-            }
-    }
-    for (symbol_index = 0U; symbol_index < module->function_count; ++symbol_index) {
-        MinicCoreModuleFunctionSymbol *symbol = &module->function_symbols[symbol_index];
-        for (asm_index = 0U; asm_index < module->file_asm_count; ++asm_index)
-            if (minic_core_asm_names_symbol(module->file_asms[asm_index].text,
-                    module->file_asms[asm_index].length, symbol->name)) {
-                symbol->is_file_asm_root = true;
-                break;
-            }
-    }
+    size_t index;
+    for (index = 0U; index < module->global_count; ++index)
+        if (module_file_asm_names_symbol(module, module->globals[index].name))
+            module->globals[index].is_file_asm_root = true;
+    for (index = 0U; index < module->function_count; ++index)
+        if (module_file_asm_names_symbol(module, module->function_symbols[index].name))
+            module->function_symbols[index].is_file_asm_root = true;
 }
 
 static char *module_owned_string(const char *text, size_t length) {

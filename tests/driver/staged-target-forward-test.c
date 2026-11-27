@@ -8,8 +8,7 @@
 static const MinicTargetCatalogEntry mock_x86_staged_target = {
     MINIC_TARGET_ARCH_X86_64, "x86_64-linux",
     MINIC_TARGET_STAGE_ASSEMBLY_FROM_PREPROCESSED_C |
-        MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER,
-    MINIC_TARGET_ISA_FAMILY_NONE
+        MINIC_TARGET_STAGE_STAGED_ASSEMBLER_AND_LINKER
 };
 
 const MinicTargetCatalogEntry *minic_target_catalog_find(const char *name) {

@@ -18,6 +18,7 @@
 
 typedef struct MinicCoreSwitchLabel {
     size_t source_index;
+    MinicStatementId statement_id;
     const MinicStatement *statement;
     MinicCoreBlockId body_block;
     MinicCoreBlockId test_block;
@@ -310,13 +311,6 @@ static bool core_switch_block_has_outer_break(const MinicCoreLowerContext *conte
 }
 
 
-typedef struct MinicCoreNestedSwitchLabel {
-    MinicStatementId statement_id;
-    const MinicStatement *statement;
-    MinicCoreBlockId body_block;
-    MinicCoreBlockId test_block;
-} MinicCoreNestedSwitchLabel;
-
 /* C case/default labels may appear inside an arbitrary statement nested within
    the selected switch body. They still belong to the nearest enclosing switch;
    labels below a nested switch belong to that inner switch and must not leak
@@ -328,7 +322,7 @@ static MinicCoreLowerStatus core_collect_nested_switch_labels(
     MinicBlockId block_id,
     bool root_block,
     bool *visited_blocks,
-    MinicCoreNestedSwitchLabel *labels,
+    MinicCoreSwitchLabel *labels,
     size_t *label_count,
     bool *has_nested_label) {
     const MinicBlock *block;
@@ -365,6 +359,7 @@ static MinicCoreLowerStatus core_collect_nested_switch_labels(
             if (*label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
                 return MINIC_CORE_LOWER_UNSUPPORTED;
             }
+            labels[*label_count].source_index = index;
             labels[*label_count].statement_id = statement_id;
             labels[*label_count].statement = source_statement;
             labels[*label_count].body_block = MINIC_CORE_BLOCK_INVALID;
@@ -408,156 +403,16 @@ static MinicCoreLowerStatus core_collect_nested_switch_labels(
     return MINIC_CORE_LOWER_OK;
 }
 
-static MinicCoreLowerStatus lower_nested_case_switch(
+static MinicCoreLowerStatus lower_nested_case_switch_body(
     MinicCoreLowerContext *context,
     const MinicStatement *statement,
     const MinicBlock *body,
-    MinicType selector_type,
+    MinicCoreBlockId body_entry,
+    MinicCoreBlockId exit_block,
     bool *terminated) {
-    MinicCoreNestedSwitchLabel labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
-    bool *visited_blocks;
-    MinicCoreBlockId body_entry;
-    MinicCoreBlockId default_target;
-    MinicCoreBlockId dispatch_target;
-    MinicCoreBlockId exit_block;
     MinicCoreBlockId saved_break_target;
-    MinicCoreObjectId selector_object;
-    MinicCoreValueId selector_normalized;
-    MinicCoreValueId selector_source;
     MinicCoreLowerStatus status;
-    size_t case_count;
-    size_t default_label;
-    size_t first_case_label;
-    size_t label_count;
-    size_t label_index;
     bool body_terminated;
-    bool has_nested_label;
-
-    if (context == NULL || context->body == NULL || context->body->program == NULL ||
-        context->function == NULL || statement == NULL || body == NULL ||
-        terminated == NULL || context->target == NULL) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-
-    visited_blocks =
-        (bool *)calloc(context->body->program->block_count, sizeof(*visited_blocks));
-    if (visited_blocks == NULL && context->body->program->block_count != 0U) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    label_count = 0U;
-    has_nested_label = false;
-    status = core_collect_nested_switch_labels(context,
-                                               statement->then_block,
-                                               true,
-                                               visited_blocks,
-                                               labels,
-                                               &label_count,
-                                               &has_nested_label);
-    free(visited_blocks);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-    if (!has_nested_label || label_count == 0U) {
-        return MINIC_CORE_LOWER_UNSUPPORTED;
-    }
-
-    case_count = 0U;
-    default_label = SIZE_MAX;
-    first_case_label = SIZE_MAX;
-    for (label_index = 0U; label_index < label_count; ++label_index) {
-        const MinicStatement *label_statement = labels[label_index].statement;
-
-        if (!minic_core_loop_cleanup_edge_is_empty(label_statement) ||
-            label_statement->then_block != MINIC_BLOCK_INVALID ||
-            label_statement->else_block != MINIC_BLOCK_INVALID) {
-            return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        if (label_statement->kind == MINIC_STATEMENT_CASE) {
-            if (label_statement->expression == MINIC_EXPRESSION_INVALID) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            if (first_case_label == SIZE_MAX) {
-                first_case_label = label_index;
-            }
-            case_count += 1U;
-        } else {
-            if (default_label != SIZE_MAX ||
-                label_statement->expression != MINIC_EXPRESSION_INVALID ||
-                label_statement->target_expression != MINIC_EXPRESSION_INVALID) {
-                return MINIC_CORE_LOWER_ERROR;
-            }
-            default_label = label_index;
-        }
-    }
-
-    status = lower_expression(context, statement->expression, &selector_source);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-    status = minic_core_lower_internal_append_integer_conversion(
-        context, statement->span, selector_type, selector_source, &selector_normalized);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-    status = minic_core_lower_internal_spill_scalar_value(
-        context, statement->span, selector_type, selector_normalized, &selector_object);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-
-    if (!minic_core_function_add_block(context->function, &exit_block) ||
-        !minic_core_function_add_block(context->function, &body_entry)) {
-        return MINIC_CORE_LOWER_ERROR;
-    }
-    for (label_index = 0U; label_index < label_count; ++label_index) {
-        status = ensure_statement_block(
-            context, labels[label_index].statement_id, &labels[label_index].body_block);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (labels[label_index].statement->kind == MINIC_STATEMENT_CASE &&
-            !minic_core_function_add_block(
-                context->function, &labels[label_index].test_block)) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-    }
-
-    default_target =
-        default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
-    dispatch_target =
-        first_case_label == SIZE_MAX ? default_target : labels[first_case_label].test_block;
-    status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
-    if (status != MINIC_CORE_LOWER_OK) {
-        return status;
-    }
-
-    if (case_count != 0U) {
-        for (label_index = 0U; label_index < label_count; ++label_index) {
-            size_t next_label;
-            MinicCoreBlockId next_target;
-
-            if (labels[label_index].statement->kind != MINIC_STATEMENT_CASE) {
-                continue;
-            }
-            next_target = default_target;
-            for (next_label = label_index + 1U; next_label < label_count; ++next_label) {
-                if (labels[next_label].statement->kind == MINIC_STATEMENT_CASE) {
-                    next_target = labels[next_label].test_block;
-                    break;
-                }
-            }
-            context->block_id = labels[label_index].test_block;
-            status = lower_switch_case_dispatch(context,
-                                                labels[label_index].statement,
-                                                selector_type,
-                                                selector_object,
-                                                labels[label_index].body_block,
-                                                next_target);
-            if (status != MINIC_CORE_LOWER_OK) {
-                return status;
-            }
-        }
-    }
 
     /* Lower the source body exactly once. body_entry is deliberately not
        reachable from the selector dispatch: it owns only source statements
@@ -650,12 +505,12 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     MinicCoreBlockId default_target;
     MinicCoreBlockId dispatch_target;
     MinicCoreBlockId exit_block;
+    MinicCoreBlockId body_entry = MINIC_CORE_BLOCK_INVALID;
     MinicCoreObjectId selector_object;
     MinicCoreValueId selector_normalized;
     MinicCoreValueId selector_source;
     MinicCoreLowerStatus status;
     MinicType selector_type;
-    size_t case_count;
     size_t default_label;
     size_t first_case_label;
     size_t label_count;
@@ -666,6 +521,10 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
     bool prune_constant_prefix;
     bool prune_constant_suffix;
     bool all_segments_terminate;
+    bool has_nested_label = false;
+    bool has_named_reentry = false;
+    bool selector_known = false;
+    MinicConstValue selector_converted;
     bool segment_breaks[MINIC_CORE_SWITCH_LABEL_LIMIT];
     bool segment_terminates[MINIC_CORE_SWITCH_LABEL_LIMIT];
     MinicCoreLocalIntegerConstant *entry_facts;
@@ -703,122 +562,71 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
+    /* Collect the nearest switch's labels once, including nested cases.
+     * Both body strategies consume the same validated dispatch table. */
     {
-        MinicCoreNestedSwitchLabel nested_labels[MINIC_CORE_SWITCH_LABEL_LIMIT];
-        bool *visited_blocks;
-        bool has_nested_label;
-        size_t nested_label_count;
-
-        visited_blocks =
-            (bool *)calloc(context->body->program->block_count, sizeof(*visited_blocks));
-        if (visited_blocks == NULL && context->body->program->block_count != 0U) {
+        bool *visited_blocks = (bool *)calloc(
+            context->body->program->block_count, sizeof(*visited_blocks));
+        if (visited_blocks == NULL && context->body->program->block_count != 0U)
             return MINIC_CORE_LOWER_ERROR;
-        }
-        nested_label_count = 0U;
-        has_nested_label = false;
-        status = core_collect_nested_switch_labels(context,
-                                                   statement->then_block,
-                                                   true,
-                                                   visited_blocks,
-                                                   nested_labels,
-                                                   &nested_label_count,
-                                                   &has_nested_label);
+        label_count = 0U;
+        status = core_collect_nested_switch_labels(context, statement->then_block,
+            true, visited_blocks, labels, &label_count, &has_nested_label);
         free(visited_blocks);
-        if (status != MINIC_CORE_LOWER_OK) {
-            return status;
-        }
-        if (has_nested_label) {
-            return lower_nested_case_switch(
-                context, statement, body, selector_type, terminated);
-        }
+        if (status != MINIC_CORE_LOWER_OK) return status;
     }
 
     constant_entry_label = SIZE_MAX;
     prune_constant_prefix = false;
     prune_constant_suffix = false;
-    case_count = 0U;
     default_label = SIZE_MAX;
     first_case_label = SIZE_MAX;
-    label_count = 0U;
     pre_case_label_count = 0U;
     first_pre_case_index = SIZE_MAX;
-    for (source_index = 0U; source_index < body->statement_count; ++source_index) {
-        const MinicStatement *source_statement;
-
-        source_statement =
-            minic_c0_program_statement(context->body->program, body->statements[source_index]);
-        if (source_statement == NULL) {
-            return MINIC_CORE_LOWER_ERROR;
-        }
-        if (source_statement->kind != MINIC_STATEMENT_CASE &&
-            source_statement->kind != MINIC_STATEMENT_DEFAULT) {
-            if (label_count == 0U) {
-                const MinicStatementId prefix_id = body->statements[source_index];
-                /* The only entry to this part of a switch is a real
-                 * function-level goto/asm-goto. Preserve these labels. */
-                if (source_statement->kind == MINIC_STATEMENT_LABEL &&
-                    core_switch_label_has_function_reentry(context, prefix_id)) {
-                    if (source_statement->target_expression != MINIC_EXPRESSION_INVALID ||
-                        source_statement->expression != MINIC_EXPRESSION_INVALID ||
-                        source_statement->target_statement != MINIC_STATEMENT_INVALID ||
-                        pre_case_label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT)
-                        return MINIC_CORE_LOWER_UNSUPPORTED;
-                    if (first_pre_case_index == SIZE_MAX)
-                        first_pre_case_index = source_index;
-                    ++pre_case_label_count;
-                    continue;
-                }
-                /* A bare statement preceding the first case/default is
-                 * unreachable from switch dispatch. TinyCC's original
-                 * ARM64 prepare_dynamic_rel has assignment/break/if nodes
-                 * here after target-conditioned case labels disappear.
-                 * Ignore such dead statements, but reject any descendant
-                 * with a genuine function-goto reentry path. */
-                if (core_switch_dead_prefix_has_reentry(
-                        context, prefix_id, 0U))
-                    return MINIC_CORE_LOWER_UNSUPPORTED;
-                continue;
-            }
-            continue;
-        }
-        if (!minic_core_loop_cleanup_edge_is_empty(source_statement) ||
-            source_statement->then_block != MINIC_BLOCK_INVALID ||
-            source_statement->else_block != MINIC_BLOCK_INVALID ||
-            label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT) {
-            (void)fprintf(stderr,
-                          "CORE_SWITCH_DETAIL function=%s gate=label source_index=%zu kind=%d "
-                          "cleanup=%llu stop=%llu then=%u else=%u labels=%zu\n",
-                          context->source_function->name,
-                          source_index,
-                          (int)source_statement->kind,
-                          (unsigned long long)source_statement->cleanup_context,
-                          (unsigned long long)source_statement->cleanup_stop_context,
-                          (unsigned)source_statement->then_block,
-                          (unsigned)source_statement->else_block,
-                          label_count);
+    for (source_index = 0U; source_index < label_count; ++source_index) {
+        const MinicStatement *label = labels[source_index].statement;
+        if (!minic_core_loop_cleanup_edge_is_empty(label) ||
+            label->then_block != MINIC_BLOCK_INVALID ||
+            label->else_block != MINIC_BLOCK_INVALID)
             return MINIC_CORE_LOWER_UNSUPPORTED;
-        }
-        labels[label_count].source_index = source_index;
-        labels[label_count].statement = source_statement;
-        labels[label_count].body_block = MINIC_CORE_BLOCK_INVALID;
-        labels[label_count].test_block = MINIC_CORE_BLOCK_INVALID;
-        if (source_statement->kind == MINIC_STATEMENT_CASE) {
-            if (source_statement->expression == MINIC_EXPRESSION_INVALID) {
+        if (label->kind == MINIC_STATEMENT_CASE) {
+            if (label->expression == MINIC_EXPRESSION_INVALID)
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            if (first_case_label == SIZE_MAX) {
-                first_case_label = label_count;
-            }
-            case_count += 1U;
+            if (first_case_label == SIZE_MAX)
+                first_case_label = source_index;
         } else {
             if (default_label != SIZE_MAX ||
-                source_statement->expression != MINIC_EXPRESSION_INVALID ||
-                source_statement->target_expression != MINIC_EXPRESSION_INVALID) {
+                label->expression != MINIC_EXPRESSION_INVALID ||
+                label->target_expression != MINIC_EXPRESSION_INVALID)
                 return MINIC_CORE_LOWER_ERROR;
-            }
-            default_label = label_count;
+            default_label = source_index;
         }
-        label_count += 1U;
+    }
+    /* Only the root-case body strategy splits off a pre-case goto region. */
+    if (!has_nested_label) {
+        const size_t prefix_end = label_count == 0U
+            ? body->statement_count : labels[0].source_index;
+        for (source_index = 0U; source_index < prefix_end; ++source_index) {
+            const MinicStatementId prefix_id = body->statements[source_index];
+            const MinicStatement *prefix =
+                minic_c0_program_statement(context->body->program, prefix_id);
+            if (prefix == NULL) return MINIC_CORE_LOWER_ERROR;
+            if (prefix->kind == MINIC_STATEMENT_LABEL &&
+                core_switch_label_has_function_reentry(context, prefix_id)) {
+                if (prefix->target_expression != MINIC_EXPRESSION_INVALID ||
+                    prefix->expression != MINIC_EXPRESSION_INVALID ||
+                    prefix->target_statement != MINIC_STATEMENT_INVALID ||
+                    pre_case_label_count >= MINIC_CORE_SWITCH_LABEL_LIMIT)
+                    return MINIC_CORE_LOWER_UNSUPPORTED;
+                if (first_pre_case_index == SIZE_MAX)
+                    first_pre_case_index = source_index;
+                ++pre_case_label_count;
+            } else if (core_switch_dead_prefix_has_reentry(context, prefix_id, 0U)) {
+                return MINIC_CORE_LOWER_UNSUPPORTED;
+            }
+        }
+        if (pre_case_label_count != 0U && label_count == 0U)
+            return MINIC_CORE_LOWER_UNSUPPORTED;
     }
 
     /* A proven pure constant-return inline helper has no selector-side
@@ -827,18 +635,20 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
      * Non-pure selectors always retain their ordinary evaluation path. */
     {
         MinicConstValue constant;
-        MinicConstValue converted;
-        if (minic_core_cfg_pure_call_argument(
+        if (!has_nested_label && minic_core_cfg_pure_call_argument(
                 context, statement->expression, 0U) &&
             core_const_eval_integer_with_locals(context, statement->expression, &constant) &&
             minic_const_value_convert_integer(context->body->program,
                                               context->target,
                                               &constant,
                                               selector_type,
-                                              &converted)) {
+                                              &selector_converted)) {
+            int64_t bits;
+            (void)memcpy(&bits, &selector_converted.bits, sizeof(bits));
+            selector_known = true;
             status = append_switch_integer_constant(
                 context, selector_expression->span, selector_type,
-                (int64_t)converted.bits, &selector_source);
+                bits, &selector_source);
         } else {
             status = lower_expression(context, statement->expression, &selector_source);
         }
@@ -857,11 +667,16 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         return status;
     }
 
-    if (!minic_core_function_add_block(context->function, &exit_block)) {
+    if (!minic_core_function_add_block(context->function, &exit_block) ||
+        (has_nested_label && !minic_core_function_add_block(context->function, &body_entry))) {
         return MINIC_CORE_LOWER_ERROR;
     }
     for (source_index = 0U; source_index < label_count; ++source_index) {
-        if (!minic_core_function_add_block(context->function, &labels[source_index].body_block)) {
+        if (has_nested_label) {
+            status = ensure_statement_block(context, labels[source_index].statement_id,
+                                            &labels[source_index].body_block);
+            if (status != MINIC_CORE_LOWER_OK) return status;
+        } else if (!minic_core_function_add_block(context->function, &labels[source_index].body_block)) {
             return MINIC_CORE_LOWER_ERROR;
         }
         if (labels[source_index].statement->kind == MINIC_STATEMENT_CASE &&
@@ -869,9 +684,6 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
             return MINIC_CORE_LOWER_ERROR;
         }
     }
-
-    if (pre_case_label_count != 0U && label_count == 0U)
-        return MINIC_CORE_LOWER_UNSUPPORTED;
 
     default_target = default_label == SIZE_MAX ? exit_block : labels[default_label].body_block;
     dispatch_target =
@@ -881,61 +693,45 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
        has exactly one switch-entry edge. Keep case-segment fallthrough intact,
        but bypass the synthetic comparison chain when every case is a simple
        scalar case. Range cases stay on the established generic dispatch path. */
-    {
-        MinicConstValue selector_constant;
-        MinicConstValue selector_converted;
+    if (selector_known) {
+        /* Reuse the exact selector value captured before lowering. */
+        size_t constant_target = SIZE_MAX;
+        size_t dispatch_index;
+        bool simple_cases = true;
 
-        /* The selector above has already been evaluated into its snapshot.
-         * Re-evaluating a mutable-local fact after that evaluation can give
-         * a different value from the one captured by this very switch. */
-        if (minic_core_cfg_pure_call_argument(
-                context, statement->expression, 0U) &&
-            core_const_eval_integer_with_locals(context,
-                                                statement->expression,
-                                                &selector_constant) &&
-            minic_const_value_convert_integer(context->body->program,
-                                              context->target,
-                                              &selector_constant,
-                                              selector_type,
-                                              &selector_converted)) {
-            size_t constant_target = SIZE_MAX;
-            size_t dispatch_index;
-            bool simple_cases = true;
+        for (dispatch_index = 0U; dispatch_index < label_count; ++dispatch_index) {
+            const MinicStatement *case_statement = labels[dispatch_index].statement;
+            MinicConstValue case_constant;
+            MinicConstValue case_converted;
 
-            for (dispatch_index = 0U; dispatch_index < label_count; ++dispatch_index) {
-                const MinicStatement *case_statement = labels[dispatch_index].statement;
-                MinicConstValue case_constant;
-                MinicConstValue case_converted;
-
-                if (case_statement->kind != MINIC_STATEMENT_CASE) {
-                    continue;
-                }
-                if (case_statement->target_expression != MINIC_EXPRESSION_INVALID ||
-                    !minic_const_eval_integer(context->body->program,
-                                              context->target,
-                                              case_statement->expression,
-                                              &case_constant) ||
-                    !minic_const_value_convert_integer(context->body->program,
-                                                       context->target,
-                                                       &case_constant,
-                                                       selector_type,
-                                                       &case_converted)) {
-                    simple_cases = false;
-                    break;
-                }
-                if (constant_target == SIZE_MAX &&
-                    case_converted.bits == selector_converted.bits) {
-                    constant_target = dispatch_index;
-                }
+            if (case_statement->kind != MINIC_STATEMENT_CASE) {
+                continue;
             }
-            if (simple_cases) {
-                dispatch_target = constant_target == SIZE_MAX
-                                      ? default_target
-                                      : labels[constant_target].body_block;
-                /* C fallthrough only goes forward; retain selected label
-                 * for a safe shared CFG reachability preflight below. */
-                constant_entry_label = constant_target;
+            if (case_statement->target_expression != MINIC_EXPRESSION_INVALID ||
+                !minic_const_eval_integer(context->body->program,
+                                          context->target,
+                                          case_statement->expression,
+                                          &case_constant) ||
+                !minic_const_value_convert_integer(context->body->program,
+                                                   context->target,
+                                                   &case_constant,
+                                                   selector_type,
+                                                   &case_converted)) {
+                simple_cases = false;
+                break;
             }
+            if (constant_target == SIZE_MAX &&
+                case_converted.bits == selector_converted.bits) {
+                constant_target = dispatch_index;
+            }
+        }
+        if (simple_cases) {
+            dispatch_target = constant_target == SIZE_MAX
+                                  ? default_target
+                                  : labels[constant_target].body_block;
+            /* C fallthrough only goes forward; retain selected label
+             * for a safe shared CFG reachability preflight below. */
+            constant_entry_label = constant_target;
         }
     }
     status = minic_core_lower_internal_set_branch(context, context->block_id, statement->span, dispatch_target);
@@ -970,7 +766,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         }
     }
 
-    if (case_count != 0U) {
+    {
         size_t label_index;
 
         for (label_index = 0U; label_index < label_count; ++label_index) {
@@ -1000,12 +796,17 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         }
     }
 
+    if (has_nested_label)
+        return lower_nested_case_switch_body(context, statement, body, body_entry,
+                                             exit_block, terminated);
+
     /* A function-level goto may enter a label before the first case.
      * The ordinary switch dispatch never enters this prefix, but the goto
      * must execute every subsequent source statement, including a break,
      * rather than teleporting directly to the first case body. Lower the
-     * reachable suffix in a detached CFG block. Restore local facts because
-     * the switch dispatch and case segments do not execute that suffix. */
+     * reachable suffix in a detached CFG block. A continuing prefix is
+     * another predecessor of the first case, so meet rather than discard
+     * its effects. */
     if (pre_case_label_count != 0U) {
         MinicCoreLocalIntegerConstant *saved_facts;
         MinicCoreBlockId saved_block;
@@ -1034,6 +835,7 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
         saved_block = context->block_id;
         saved_break_target = context->break_target;
         context->block_id = prefix_entry;
+        minic_core_local_facts_forget_reentry(context);
         context->break_target = exit_block;
         prefix_terminated = false;
         status = minic_core_lower_internal_lower_block(
@@ -1044,7 +846,13 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 context, context->block_id, statement->span,
                 labels[0].body_block);
         context->block_id = saved_block;
-        minic_core_local_facts_restore(context, saved_facts);
+        if (status == MINIC_CORE_LOWER_OK && !prefix_terminated) {
+            if (!minic_core_local_facts_meet(context, saved_facts,
+                                             context->local_integer_constants))
+                status = MINIC_CORE_LOWER_ERROR;
+        } else {
+            minic_core_local_facts_restore(context, saved_facts);
+        }
         free(saved_facts);
         if (status != MINIC_CORE_LOWER_OK) return status;
     }
@@ -1266,6 +1074,8 @@ minic_core_lower_switch(MinicCoreLowerContext *context, const MinicStatement *st
                 goto switch_case_facts_cleanup;
             }
             context->block_id = reentry_block;
+            has_named_reentry = true;
+            minic_core_local_facts_forget_reentry(context);
             reentry_terminated = false;
             reentry_segment = *body;
             reentry_segment.statements = body->statements + reentry_index + 1U;
@@ -1313,7 +1123,8 @@ switch_case_facts_cleanup:
     free(fallthrough_facts);
     if (status != MINIC_CORE_LOWER_OK) return status;
 
-    all_segments_terminate = default_label != SIZE_MAX && label_count != 0U;
+    all_segments_terminate = default_label != SIZE_MAX && label_count != 0U &&
+        pre_case_label_count == 0U && !has_named_reentry;
     if (all_segments_terminate) {
         bool next_path_terminates = false;
 

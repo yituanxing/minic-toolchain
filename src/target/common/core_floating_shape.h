@@ -11,8 +11,6 @@ typedef struct MinicCoreFloatingShape {
     MinicCoreTypeId source_id;
     size_t integer_bytes;
     bool integer_signed;
-    MinicCoreFloatFormat result_format;
-    MinicCoreFloatFormat source_format;
 } MinicCoreFloatingShape;
 
 static inline bool minic_core_floating_format(
@@ -135,10 +133,6 @@ static inline bool minic_core_floating_shape(
         .result_id = instruction->core_type_id,
         .source_id = operand == MINIC_CORE_VALUE_INVALID
             ? MINIC_CORE_TYPE_INVALID : function->values[operand].core_type_id,
-        .result_format = result->kind == MINIC_CORE_TYPE_FLOAT
-            ? result->value.floating.format : MINIC_CORE_FLOAT_BINARY64,
-        .source_format = source != NULL && source->kind == MINIC_CORE_TYPE_FLOAT
-            ? source->value.floating.format : MINIC_CORE_FLOAT_BINARY64,
     };
     if (input_integer)
         return minic_core_floating_integer(source, &shape->integer_bytes,

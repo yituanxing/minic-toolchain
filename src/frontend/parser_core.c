@@ -530,26 +530,24 @@ MinicLocalId minic_parser_find_local_in_current_scope(const MinicParser *parser,
     return MINIC_LOCAL_INVALID;
 }
 
+static MinicGlobalObjectId find_scoped_global_object_from(
+    const MinicParser *parser, MinicSourceSpan name_span, size_t begin) {
+    size_t index;
+    for (index = parser->local_binding_count; index > begin; --index) {
+        const MinicParserLocalBinding *binding = &parser->local_bindings[index - 1U];
+        if (binding->global_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
+            minic_parser_span_equals(parser, name_span, binding->name_span))
+            return binding->global_object_id;
+    }
+    return MINIC_GLOBAL_OBJECT_INVALID;
+}
+
 MinicGlobalObjectId
 minic_parser_find_scoped_global_object_in_current_scope(const MinicParser *parser,
                                                         MinicSourceSpan name_span) {
-    size_t scope_begin;
-    size_t index;
-
-    if (parser == NULL || parser->scope_count == 0U) {
-        return MINIC_GLOBAL_OBJECT_INVALID;
-    }
-    scope_begin = parser->scopes[parser->scope_count - 1U].binding_begin;
-    for (index = parser->local_binding_count; index > scope_begin; --index) {
-        const MinicParserLocalBinding *binding;
-
-        binding = &parser->local_bindings[index - 1U];
-        if (binding->global_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
-            minic_parser_span_equals(parser, name_span, binding->name_span)) {
-            return binding->global_object_id;
-        }
-    }
-    return MINIC_GLOBAL_OBJECT_INVALID;
+    if (parser == NULL || parser->scope_count == 0U) return MINIC_GLOBAL_OBJECT_INVALID;
+    return find_scoped_global_object_from(parser, name_span,
+        parser->scopes[parser->scope_count - 1U].binding_begin);
 }
 
 void minic_parser_destroy_scopes(MinicParser *parser) {
@@ -650,18 +648,7 @@ MinicLocalId minic_parser_find_local(const MinicParser *parser, MinicSourceSpan 
 
 MinicGlobalObjectId minic_parser_find_scoped_global_object(const MinicParser *parser,
                                                            MinicSourceSpan name_span) {
-    size_t index;
-
-    for (index = parser->local_binding_count; index > 0U; --index) {
-        const MinicParserLocalBinding *binding;
-
-        binding = &parser->local_bindings[index - 1U];
-        if (binding->global_object_id != MINIC_GLOBAL_OBJECT_INVALID &&
-            minic_parser_span_equals(parser, name_span, binding->name_span)) {
-            return binding->global_object_id;
-        }
-    }
-    return MINIC_GLOBAL_OBJECT_INVALID;
+    return find_scoped_global_object_from(parser, name_span, 0U);
 }
 
 MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
@@ -691,41 +678,27 @@ MinicFunctionId minic_parser_find_function(const MinicParser *parser_const,
         name, length, &parser->perf_find_function_steps, &consistent);
 }
 
-const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
-                                                   MinicSourceSpan name_span) {
+static const MinicParserTagBinding *find_tag_from(
+    const MinicParser *parser, MinicSourceSpan name_span, size_t begin) {
     size_t index;
-
-    if (parser == NULL) {
-        return NULL;
-    }
-    for (index = parser->tag_count; index > 0U; --index) {
+    if (parser == NULL) return NULL;
+    for (index = parser->tag_count; index > begin; --index) {
         const MinicParserTagBinding *tag = &parser->tags[index - 1U];
-
-        if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
-            return tag;
-        }
+        if (minic_parser_span_equals(parser, tag->name_span, name_span)) return tag;
     }
     return NULL;
 }
 
+const MinicParserTagBinding *minic_parser_find_tag(const MinicParser *parser,
+                                                   MinicSourceSpan name_span) {
+    return find_tag_from(parser, name_span, 0U);
+}
+
 const MinicParserTagBinding *minic_parser_find_tag_in_current_scope(
     const MinicParser *parser, MinicSourceSpan name_span) {
-    size_t begin;
-    size_t index;
-
-    if (parser == NULL) {
-        return NULL;
-    }
-    begin = parser->scope_count == 0U ? 0U
-                                       : parser->scopes[parser->scope_count - 1U].tag_begin;
-    for (index = parser->tag_count; index > begin; --index) {
-        const MinicParserTagBinding *tag = &parser->tags[index - 1U];
-
-        if (minic_parser_span_equals(parser, tag->name_span, name_span)) {
-            return tag;
-        }
-    }
-    return NULL;
+    if (parser == NULL) return NULL;
+    return find_tag_from(parser, name_span, parser->scope_count == 0U ? 0U
+        : parser->scopes[parser->scope_count - 1U].tag_begin);
 }
 
 /* The returned binding belongs to parser->tags; it is not a stable handle.

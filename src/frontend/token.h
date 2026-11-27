@@ -100,6 +100,5 @@ typedef struct MinicToken {
     MinicSourceSpan span;
 } MinicToken;
 
-const char *minic_token_kind_name(MinicTokenKind kind);
 
 #endif

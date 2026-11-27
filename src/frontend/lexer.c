@@ -307,11 +307,9 @@ static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
                                             MinicSourcePosition begin) {
     unsigned int long_count;
     bool saw_unsigned;
-    size_t suffix_count;
 
     long_count = 0U;
     saw_unsigned = false;
-    suffix_count = 0U;
     while (minic_lexer_peek(lexer) == 'l' || minic_lexer_peek(lexer) == 'L' ||
            minic_lexer_peek(lexer) == 'u' || minic_lexer_peek(lexer) == 'U') {
         char suffix;
@@ -330,12 +328,6 @@ static bool minic_lexer_scan_integer_suffix(MinicLexer *lexer,
                 return false;
             }
             saw_unsigned = true;
-        }
-        suffix_count += 1U;
-        if (suffix_count > 3U) {
-            minic_lexer_set_message(
-                lexer, diagnostic, begin, "unsupported integer constant suffix");
-            return false;
         }
         minic_lexer_advance(lexer);
     }

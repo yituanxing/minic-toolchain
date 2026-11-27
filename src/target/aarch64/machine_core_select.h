@@ -7,12 +7,11 @@
 /* A deliberately fail-closed physical Core-to-MachineIR selector. It emits an
  * entire AArch64 function or nothing; the production direct emitter remains
  * in service until its last Core/ABI family has a typed lowering. */
-bool minic_aarch64_machine_select_core_subset(MinicMachineFunction *,
-    const MinicDirectLP64BlockContext *);
 
-/* Internal production variant. Only the direct-function emitter may call
+
+/* Production selector: Only the direct-function emitter may call
  * it, and MUST commit the full physical prepared gate before any GNU ELF
- * envelope. The standalone selector above remains fully verified. */
+ * envelope. No separate standalone selector is retained. */
 bool minic_aarch64_machine_select_core_for_production(MinicMachineFunction *,
     const MinicDirectLP64BlockContext *);
 

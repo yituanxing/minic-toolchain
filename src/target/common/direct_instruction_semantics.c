@@ -1,6 +1,5 @@
 #include "target/common/direct_instruction_semantics.h"
 #include "core/core_ir.h"
-#include "target/common/core_instruction_family.h"
 #include "target/common/core_scalar_conversion.h"
 #include "target/common/core_floating_shape.h"
 #include "target/common/lp64_scalar.h"
@@ -243,7 +242,7 @@ bool minic_multi_direct_parameter_object_location(
 
 /* A compiler barrier is an ordering constraint in the Core stream, not a
  * machine fence and not a produced SSA value. */
-static bool minic_multi_direct_compiler_barrier_shape(
+bool minic_multi_direct_compiler_barrier_shape(
     const MinicCoreFunction *fn, const MinicCoreInstruction *ins) {
     return ins != NULL &&
            ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER &&
@@ -272,91 +271,6 @@ bool minic_multi_direct_wide_store_shape(
            minic_lp64_frame_plan_wide_slot(frame_plan, value, value_offset);
 }
 
-/* One machine-independent result-shape gate for direct LP64 codegen.
- * AArch64 admits binary64 VA_ARG; LoongArch64 does not yet, so callers
- * select that documented ISA capability explicitly. */
-static bool minic_multi_direct_result_slot_offset(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    bool allow_variadic_double_result, size_t *offset) {
-    if (fn == NULL || ins == NULL || offset == NULL)
-        return false;
-    if ((ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-         ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) &&
-        (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
-         (direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_RECORD) &&
-          (ins->kind == MINIC_CORE_INSTRUCTION_CALL
-              ? ins->value.call.result_object
-              : ins->value.indirect_call.result_object) != MINIC_CORE_OBJECT_INVALID))) {
-        /* Effect-only call or record-result object: no scalar Core slot. */
-        *offset = 0U;
-        return true;
-    }
-    if (ins->result == MINIC_CORE_VALUE_INVALID ||
-        ins->result >= fn->value_count ||
-        ((ins->kind == MINIC_CORE_INSTRUCTION_OBJECT_ADDRESS ||
-          ins->kind == MINIC_CORE_INSTRUCTION_GLOBAL_ADDRESS)
-            ? !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER)
-            : !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_INTEGER) &&
-              !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_POINTER) &&
-              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY32) &&
-                (ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_TO_FLOAT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_ADD ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_SUBTRACT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_MULTIPLY ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_DIVIDE)) &&
-              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY128) &&
-                (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL)) &&
-              !(direct_core_float(fn, ins->core_type_id, MINIC_CORE_FLOAT_BINARY64) &&
-                (ins->kind == MINIC_CORE_INSTRUCTION_FLOATING_CONSTANT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_LOAD ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_ADD ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_NEGATE ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_DIVIDE ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_SUBTRACT ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_DOUBLE_MULTIPLY ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_INTEGER_TO_DOUBLE ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_FLOAT_TO_DOUBLE ||
-                 (allow_variadic_double_result &&
-                  ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_NEXT_SCALAR) ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_CALL ||
-                 ins->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL))))
-        return false;
-    /* Slot placement is no longer encoded in the semantic shape. The
-     * common machine dispatch resolves this validated Core result through
-     * the shared LP64 FramePlan's last-use mapping. */
-    *offset = 0U;
-    return true;
-}
-
-
-
-/* Instruction kinds and Core operand/result types are not properties of
- * an ISA encoder. Keep the shared IEEE-754 validation here, but leave the
- * actual AArch64/LoongArch64 floating opcodes and register transfers local. */
-/* This is the complete numeric machine family implemented by both
- * direct LP64 emitters. SSA/result types remain validated by the separate
- * minic_multi_direct_floating_shape gate, never by opcode alone. */
-/* Complete Core integer, pointer-comparison and bit-operation machine
- * family shared by AAPCS64 and LP64D; instruction encodings remain ISA-owned. */
-/* The two ISA implementations consume the same Core call/parameter ABI
- * transfer family. Planning remains target-ABI-specific at the call site. */
-/* Common Core memory-effect family: ISA byte moves remain independent.
- * The relaxed-only atomic memory-order contract is checked separately. */
-static bool minic_multi_direct_abi_transfer_kind(MinicCoreInstructionKind kind) {
-    return minic_core_instruction_is_call(kind) ||
-           kind == MINIC_CORE_INSTRUCTION_PARAMETER;
-}
-
 /* Bounds and scalar result typing are a Core contract, not a per-ISA
  * register assignment rule. The ABI-specific plan already owns whether
  * a named parameter occupies FP/GP registers or caller stack. */
@@ -379,15 +293,6 @@ bool minic_multi_direct_scalar_parameter_location(
         return false;
     *location = &incoming->arguments[ordinal];
     return true;
-}
-
-static bool minic_multi_direct_integer_machine_kind(MinicCoreInstructionKind kind) {
-    /* Constants and conversions use distinct ABI/residual lowering in
-     * Direct LP64, unlike RV32/RV64 which use their scalar emitter. */
-    return kind == MINIC_CORE_INSTRUCTION_INTEGER_OVERFLOW ||
-           (kind != MINIC_CORE_INSTRUCTION_INTEGER_CONSTANT &&
-            kind != MINIC_CORE_INSTRUCTION_INTEGER_CONVERSION &&
-            minic_core_instruction_is_integer_scalar(kind));
 }
 
 bool minic_multi_direct_floating_shape(
@@ -764,117 +669,5 @@ bool minic_multi_direct_scalar_store_shape(
            *width != 4U && *width != 8U) ||
           *width != pointee_width)))
         return false;
-    return true;
-}
-
-/* One dispatch classifier and SSA-result guard for both LP64 direct
- * backends. Effect-only instructions deliberately have no scalar slots. */
-bool minic_multi_direct_machine_instruction_shape(
-    const MinicCoreFunction *fn, const MinicCoreInstruction *ins,
-    bool allow_variadic_double_result,
-    MinicDirectMachineInstructionShape *shape) {
-    if (fn == NULL || fn->type_context == NULL || ins == NULL || shape == NULL)
-        return false;
-    shape->result_offset = 0U;
-    if (ins->kind == MINIC_CORE_INSTRUCTION_COMPILER_BARRIER) {
-        if (!minic_multi_direct_compiler_barrier_shape(fn, ins))
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_COMPILER_BARRIER;
-        return true;
-    }
-    /* Structured GNU asm is already a Core effect, never an SSA value.
-     * Native target emission remains independently qualified and fail-closed. */
-    if (ins->kind == MINIC_CORE_INSTRUCTION_STRUCTURED_INLINE_ASM) {
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
-            ins->value.structured_inline_asm.inline_asm_id >= fn->inline_asm_count)
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
-        return true;
-    }
-    /* A zero-operand opaque hardware effect has no SSA result; the target
-     * must independently requalify the full exact template at emission. */
-    if (ins->kind == MINIC_CORE_INSTRUCTION_OPAQUE_INLINE_ASM) {
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
-            ins->value.inline_asm_id >= fn->inline_asm_count)
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
-        return true;
-    }
-    if (ins->kind == MINIC_CORE_INSTRUCTION_FIXED_REGISTER_WRITE) {
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
-            ins->value.fixed_register_write.binding_id >=
-                fn->fixed_register_binding_count ||
-            ins->value.fixed_register_write.source >= fn->value_count)
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
-        return true;
-    }
-    if (ins->kind == MINIC_CORE_INSTRUCTION_VARIADIC_COPY) {
-        const MinicCoreValueId dst = ins->value.variadic_copy.destination;
-        const MinicCoreValueId src = ins->value.variadic_copy.source;
-        if (ins->result != MINIC_CORE_VALUE_INVALID ||
-            !direct_core_kind(fn, ins->core_type_id, MINIC_CORE_TYPE_VOID) ||
-            dst >= fn->value_count ||
-            src >= fn->value_count ||
-            !direct_core_kind(fn, fn->values[dst].core_type_id,
-                              MINIC_CORE_TYPE_POINTER) ||
-            !direct_core_equal_exact(fn, fn->values[dst].core_type_id,
-                                     fn->values[src].core_type_id))
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
-        return true;
-    }
-    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_LOAD) {
-        shape->family = MINIC_DIRECT_MACHINE_RECORD_LOAD;
-        return true;
-    }
-    if (ins->kind == MINIC_CORE_INSTRUCTION_RECORD_COPY) {
-        shape->family = MINIC_DIRECT_MACHINE_RECORD_COPY;
-        return true;
-    }
-    if (ins->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT) {
-        shape->family = MINIC_DIRECT_MACHINE_PARAMETER_OBJECT;
-        return true;
-    }
-    if (minic_core_instruction_semantic_family(ins->kind) ==
-        MINIC_CORE_FAMILY_MEMORY) {
-        shape->family = MINIC_DIRECT_MACHINE_MEMORY;
-        return (ins->kind != MINIC_CORE_INSTRUCTION_LOAD &&
-                ins->kind != MINIC_CORE_INSTRUCTION_ATOMIC_LOAD) ||
-               minic_multi_direct_result_slot_offset(
-                   fn, ins, allow_variadic_double_result,
-                   &shape->result_offset);
-    }
-    /* Vector ALU has a typed SSA result, not a memory effect. Its 16-byte
-     * frame transport and native opcode are target-owned (AArch64 today).
-     * Never run this through the scalar-result gate, which cannot admit a
-     * register vector, or classify the register operation as a LOAD/STORE. */
-    if (minic_core_instruction_is_vector_arithmetic(ins->kind)) {
-        const MinicCoreType *vector = minic_core_function_base_type(fn, ins->core_type_id);
-        if (vector == NULL || vector->kind != MINIC_CORE_TYPE_VECTOR ||
-            vector->value.vector.representation != MINIC_CORE_VECTOR_REGISTER_VALUE ||
-            !vector->has_layout ||
-            (vector->size != 8U && vector->size != 16U) ||
-            ins->result >= fn->value_count || fn->values == NULL ||
-            fn->values[ins->result].core_type_id != ins->core_type_id)
-            return false;
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
-        return true;
-    }
-    if (!minic_multi_direct_result_slot_offset(
-            fn, ins, allow_variadic_double_result, &shape->result_offset))
-        return false;
-    if (minic_core_instruction_semantic_family(ins->kind) ==
-        MINIC_CORE_FAMILY_FLOATING_SCALAR)
-        shape->family = MINIC_DIRECT_MACHINE_FP;
-    else if (minic_multi_direct_integer_machine_kind(ins->kind))
-        shape->family = MINIC_DIRECT_MACHINE_INTEGER;
-    else if (minic_multi_direct_abi_transfer_kind(ins->kind))
-        shape->family = MINIC_DIRECT_MACHINE_ABI;
-    else
-        shape->family = MINIC_DIRECT_MACHINE_RESIDUAL;
     return true;
 }

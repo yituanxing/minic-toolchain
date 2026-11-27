@@ -93,40 +93,23 @@ static bool typedef_attribute_mode_name(const MinicParser *parser,
     }
     begin = attribute->arguments_span.begin.offset + 1U;
     end = attribute->arguments_span.end.offset - 1U;
-    while (begin < end &&
-           (parser->source[begin] == ' ' || parser->source[begin] == '\t' ||
-            parser->source[begin] == '\n' || parser->source[begin] == '\r' ||
-            parser->source[begin] == '\f' || parser->source[begin] == '\v')) {
-        begin += 1U;
-    }
-    while (end > begin &&
-           (parser->source[end - 1U] == ' ' || parser->source[end - 1U] == '\t' ||
-            parser->source[end - 1U] == '\n' || parser->source[end - 1U] == '\r' ||
-            parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v')) {
-        end -= 1U;
-    }
-    if (end <= begin) {
-        return false;
-    }
-    /* GNU system headers may spell mode arguments with an extra parenthesis
-       layer, e.g. __mode__ ((__word__)) after attribute collection. Normalize
-       redundant wrappers before matching the target-owned mode identifier. */
-    while (end > begin + 1U && parser->source[begin] == '(' &&
-           parser->source[end - 1U] == ')') {
-        begin += 1U;
-        end -= 1U;
+    /* Strip whitespace and redundant GNU mode argument wrappers. */
+    for (;;) {
         while (begin < end &&
                (parser->source[begin] == ' ' || parser->source[begin] == '\t' ||
                 parser->source[begin] == '\n' || parser->source[begin] == '\r' ||
-                parser->source[begin] == '\f' || parser->source[begin] == '\v')) {
-            begin += 1U;
-        }
+                parser->source[begin] == '\f' || parser->source[begin] == '\v'))
+            ++begin;
         while (end > begin &&
                (parser->source[end - 1U] == ' ' || parser->source[end - 1U] == '\t' ||
                 parser->source[end - 1U] == '\n' || parser->source[end - 1U] == '\r' ||
-                parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v')) {
-            end -= 1U;
-        }
+                parser->source[end - 1U] == '\f' || parser->source[end - 1U] == '\v'))
+            --end;
+        if (end <= begin) return false;
+        if (end - begin <= 1U || parser->source[begin] != '(' ||
+            parser->source[end - 1U] != ')') break;
+        ++begin;
+        --end;
     }
     if (end - begin > 4U && parser->source[begin] == '_' &&
         parser->source[begin + 1U] == '_' && parser->source[end - 2U] == '_' &&

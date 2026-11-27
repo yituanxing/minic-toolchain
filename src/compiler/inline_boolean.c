@@ -109,9 +109,13 @@ typedef struct MinicInlineBooleanWrites {
 
 static bool minic_inline_boolean_write(void *opaque, MinicLocalId id,
                                        MinicDirectLocalEffect effect,
-                                       MinicExpressionId rhs) {
+                                       MinicExpressionId rhs,
+                                       MinicStatementId statement_origin,
+                                       MinicExpressionId expression_origin) {
     MinicInlineBooleanWrites *writes = opaque;
     size_t index = id;
+    (void)statement_origin;
+    (void)expression_origin;
     if (writes->only_local != MINIC_LOCAL_INVALID) {
         if (id != writes->only_local) return true;
         index = 0U;
@@ -342,34 +346,6 @@ static bool minic_inline_boolean_range_argument(
     return false;
 }
 
-static bool minic_add_inline_boolean_range_specialization(
-    MinicC0Program *program,
-    MinicFunctionId source_id,
-    const MinicFunction *caller,
-    const MinicInlineSpecializationKey *key,
-    MinicFunctionId *specialized_id) {
-    MinicFunction *specialized;
-    size_t i;
-
-    if (!minic_add_inline_symbolic_specialization(
-            program,
-            source_id,
-            caller,
-            key->integer_known,
-            key->integer_bits,
-            key->symbolic_known,
-            key->symbolic_expression,
-            specialized_id)) {
-        return false;
-    }
-    specialized = &program->functions[*specialized_id];
-    for (i = 0U; i < specialized->parameter_count; ++i) {
-        specialized->specialization_boolean_range_known[i] =
-            key->boolean_range_known[i];
-    }
-    return true;
-}
-
 /* The direct-call plan selects a clone once per shared ExpressionId, but the
  * immutable source AST is also executed by its original inline owner. A
  * caller-specific section may select a clone in .init.text/.head.text that
@@ -427,9 +403,9 @@ static bool minic_close_original_inline_caller_sections(
             program, &source, &caller, source_id, &key,
             MINIC_INLINE_SPEC_FACT_ALL, 0U);
         if (variant_id == MINIC_FUNCTION_INVALID) {
-            if (added >= 1024U || !minic_add_inline_boolean_range_specialization(
-                    program, source_id, &caller, &key,
-                    &variant_id)) {
+            if (added >= 1024U || !minic_inline_spec_add_variant(
+                    program, source_id, &caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                    program->function_count, &variant_id)) {
                 minic_inline_initial_owners_destroy(&owners);
                 return false;
             }
@@ -477,21 +453,10 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
         bool adds_range = false;
         size_t i;
 
-        if (call->kind != MINIC_EXPRESSION_CALL) {
+        if (!minic_inline_spec_resolve_call(
+                call_plan, expression_index, program->function_count,
+                &current_id, &source_id, &current, &source))
             continue;
-        }
-        current_id = minic_inline_call_plan_get(call_plan, expression_index);
-        if (current_id >= program->function_count) {
-            continue;
-        }
-        current = program->functions[current_id];
-        source_id = current.is_integer_specialization
-                        ? current.specialization_source
-                        : current_id;
-        if (source_id >= program->function_count) {
-            continue;
-        }
-        source = program->functions[source_id];
         if (initial_owners.ready &&
             minic_inline_initial_owners_get(&initial_owners, expression_index) <
                 program->function_count)
@@ -499,12 +464,6 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 minic_inline_initial_owners_get(&initial_owners, expression_index)];
         else if (current.is_integer_specialization)
             caller = &program->functions[current_id];
-        if (!source.is_defined || !source.is_internal || !source.is_inline ||
-            source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
-            source.parameter_count == 0U ||
-            source.parameter_count != call->value.call.argument_count) {
-            continue;
-        }
         if (!minic_inline_spec_key_from_function(
                 &key, &current, source.parameter_count)) {
             minic_inline_initial_owners_destroy(&initial_owners);
@@ -544,12 +503,9 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
              * aborts ordinary legal C call sites here. The transitive
              * quota path below has the same failure contract. */
             if (direct_clone_count + transitive_clone_count >= 1024U ||
-                !minic_add_inline_boolean_range_specialization(
-                    program,
-                    source_id,
-                    caller,
-                    &key,
-                    &variant_id)) {
+                !minic_inline_spec_add_variant(
+                    program, source_id, caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                    program->function_count, &variant_id)) {
                 minic_inline_initial_owners_destroy(&initial_owners);
                 return false;
             }
@@ -574,10 +530,6 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
          * it; its fallback scans all live calls on index failure. */
         const size_t boolean_function_limit = program->function_count;
         MinicInlineCallWorklist worklist = {0};
-        size_t boolean_index_builds = 0U;
-        size_t boolean_caller_scans = 0U;
-        size_t boolean_call_candidates = 0U;
-        size_t boolean_skipped_other_owner = 0U;
         bool boolean_index_attempted = false;
         const bool section_closure_required =
             minic_inline_spec_sections_present(program);
@@ -604,10 +556,8 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
             if (!caller_has_range && !section_closure_required) {
                 continue;
             }
-            boolean_caller_scans += 1U;
             if (!boolean_index_attempted) {
                 boolean_index_attempted = true;
-                boolean_index_builds += 1U;
                 if (!minic_inline_call_worklist_build(
                         program, boolean_function_limit, call_plan, &worklist)) {
                     minic_inline_call_worklist_destroy(&worklist);
@@ -634,26 +584,10 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                 if (nested->kind != MINIC_EXPRESSION_CALL) {
                     continue;
                 }
-                boolean_call_candidates += 1U;
-                current_id = minic_inline_call_plan_get(
-                    call_plan, nested_expression_index);
-                if (current_id >= program->function_count) {
+                if (!minic_inline_spec_resolve_call(
+                        call_plan, nested_expression_index, program->function_count,
+                        &current_id, &source_id, &current, &source))
                     continue;
-                }
-                current = program->functions[current_id];
-                source_id = current.is_integer_specialization
-                                ? current.specialization_source
-                                : current_id;
-                if (source_id >= program->function_count) {
-                    continue;
-                }
-                source = program->functions[source_id];
-                if (!source.is_defined || !source.is_internal || !source.is_inline ||
-                    source.is_variadic || source.alias_target != MINIC_FUNCTION_INVALID ||
-                    source.parameter_count == 0U ||
-                    source.parameter_count != nested->value.call.argument_count) {
-                    continue;
-                }
                 needs_section_clone = current.is_integer_specialization &&
                     !minic_inline_spec_section_matches(&current, &source, &caller);
                 if (!minic_inline_spec_key_from_function(
@@ -689,27 +623,15 @@ static bool minic_specialize_inline_boolean_range_calls_for_pass(
                     MINIC_INLINE_SPEC_FACT_ALL, 0U);
                 if (variant_id == MINIC_FUNCTION_INVALID) {
                     if (direct_clone_count + transitive_clone_count >= 1024U ||
-                        !minic_add_inline_boolean_range_specialization(
-                            program, source_id, &caller, &key, &variant_id)) {
+                        !minic_inline_spec_add_variant(
+                            program, source_id, &caller, &key, MINIC_INLINE_SPEC_FACT_ALL,
+                            program->function_count, &variant_id)) {
                         minic_inline_call_worklist_destroy(&worklist);
                         return false;
                     }
                     transitive_clone_count += 1U;
                 }
             }
-            boolean_skipped_other_owner += cursor.skipped_other_owner;
-        }
-        if (getenv("MINIC_BOOLEAN_TRANSITIVE_PERF") != NULL) {
-            (void)fprintf(stderr,
-                          "MINIC_BOOLEAN_TRANSITIVE_INDEX callers=%zu "
-                          "index_builds=%zu call_entries=%zu candidates=%zu "
-                          "skipped_other_owner=%zu calls_ready=%u "
-                          "owners_ready=%u\n",
-                          boolean_caller_scans, boolean_index_builds,
-                          worklist.call_count, boolean_call_candidates,
-                          boolean_skipped_other_owner,
-                          (unsigned int)worklist.ready,
-                          (unsigned int)worklist.owner_ready);
         }
         minic_inline_call_worklist_destroy(&worklist);
     }

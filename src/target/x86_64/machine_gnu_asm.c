@@ -120,6 +120,7 @@ static bool x86_source_legacy_memory_form(
     (void)context;
     return function != NULL && function->target != NULL &&
         (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE ||
          instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
          instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE) &&
         minic_x86_64_machine_validate_source_asm(function->target,
@@ -880,6 +881,42 @@ static bool x86_emit_scalar_smp_lock(FILE *out) {
         "  lock; ",out) != EOF;
 }
 
+/* Render only the already-validated finite RAID6 ISA grammar. Extended
+ * GNU "%%" names collapse to physical "%" registers; positional %0..%7
+ * are independently verified MachineIR addresses, never raw substitutions. */
+static bool x86_emit_address(FILE *, const MinicMachineAddress *);
+
+static bool x86_emit_raid6_source(FILE *out,
+    const MinicMachineInstruction *ins) {
+    size_t i;
+    if (out == NULL || ins == NULL || ins->source_asm_template == NULL)
+        return false;
+    for (i = 0U; i < ins->source_asm_length; ++i) {
+        const char ch = ins->source_asm_template[i];
+        if (ch == '%' && i + 1U < ins->source_asm_length) {
+            const char next = ins->source_asm_template[i + 1U];
+            if (next == '%') {
+                if (fputc('%', out) == EOF) return false;
+                ++i;
+                continue;
+            }
+            if (next >= '0' && next <= '7') {
+                const size_t index = (size_t)(next - '0');
+                if (index >= ins->operand_count || ins->operands == NULL ||
+                    ins->operands[index].kind !=
+                        MINIC_MACHINE_OPERAND_ADDRESS ||
+                    !x86_emit_address(out,
+                        &ins->operands[index].value.address))
+                    return false;
+                ++i;
+                continue;
+            }
+        }
+        if (fputc(ch, out) == EOF) return false;
+    }
+    return fputc('\n', out) != EOF;
+}
+
 static bool x86_emit_source_asm(FILE *out,
     const MinicMachineFunction *function,
     const MinicMachineInstruction *instruction,
@@ -1467,6 +1504,7 @@ static bool x86_emit_source_asm(FILE *out,
         return fprintf(out,"  %s (%%r10)\n",forms[variant-1U]) >= 0;
     }
     if (instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_FXSAVE ||
+        instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_LEGACY_FNSAVE ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_VERW_CLEAR ||
         instruction->source_asm_machine_form_id == MINIC_X86_MACHINE_ASM_TLB_CACHE)
         return fputs("  ",out) != EOF &&
@@ -1989,6 +2027,29 @@ static bool x86_emit_source_asm(FILE *out,
             !x86_emit_scalar_smp_lock(out))) return false;
         return fprintf(out,"%s%s %s, (%%r11)\n",
             desc->locked ? "" : "  ",desc->op,desc->new_reg) >= 0;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_GS_TESTCC) {
+        const unsigned int form = minic_x86_64_linux_gs_testcc_form(
+            instruction->source_asm_template,
+            instruction->source_asm_length);
+        if (form != 1U && form != 2U) return false;
+        return fputs(form == 1U ?
+            "  btl %r11d, %gs:(%r10)\n" :
+            "  btq %r11, %gs:(%r10)\n", out) != EOF;
+    }
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_RAID6_SIMD)
+        return x86_emit_raid6_source(out, instruction);
+    if (instruction->source_asm_machine_form_id ==
+            MINIC_X86_MACHINE_ASM_KVM_MOVDQA) {
+        const unsigned int form = instruction->source_asm_machine_form_variant;
+        const bool read = form >= 1U && form <= 16U;
+        const unsigned int reg = read ? form - 1U : form - 17U;
+        if (form == 0U || form > 32U) return false;
+        return fprintf(out, read ?
+            "  movdqa (%%r10), %%xmm%u\n" :
+            "  movdqa %%xmm%u, (%%r10)\n", reg) >= 0;
     }
     if (instruction->source_asm_machine_form_id ==
             MINIC_X86_MACHINE_ASM_TESTCC)

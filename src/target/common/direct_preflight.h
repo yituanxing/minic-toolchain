@@ -18,7 +18,7 @@ typedef bool (*MinicDirectLP64OpaqueAsmQualifier)(const MinicCoreInlineAsm *);
 bool minic_multi_direct_lp64_function_preflight(
     const MinicCoreModuleFunctionSymbol *module_decl,
     const MinicCoreFunction *fn,
-    const MinicCoreFunctionFacts *facts, const char *arch, const char *name,
+    const MinicCoreFunctionFacts *facts,
     MinicDirectLP64OpaqueAsmQualifier qualify_opaque_asm,
     const MinicDirectLP64AbiPolicy *abi);
 

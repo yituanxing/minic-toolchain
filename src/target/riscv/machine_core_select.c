@@ -27,7 +27,7 @@ typedef struct RvCoreSelection {
     MinicMachineBuilder builder;
     const MinicRiscvCoreMachinePlan *plan;
     unsigned xlen;
-    bool *reachable;
+    const bool *reachable;
     size_t *core_blocks;
     size_t *far_entries;
     size_t *conditional_fallthroughs;
@@ -431,16 +431,15 @@ typedef struct RvFinalPlacement {
 
 /* Only convert the legacy immutable plan's representation into a common
  * transport view. No calling-convention classification occurs here. */
-static bool rv_formal_placement(const RvCoreSelection *sel, size_t index,
-                                RvFinalPlacement *out) {
+static bool rv_decode_placement(const RvCoreSelection *sel,
+    const Rv32AbiWordLocation *loc32,
+    const MinicRiscv64AbiArgumentLocation *loc64,
+    RvFinalPlacement *out) {
     if (out == NULL) return false;
     *out = (RvFinalPlacement){0};
     if (sel->xlen == 32U) {
-        const Rv32FunctionAbiPlan *abi = sel->plan->abi32;
-        const Rv32AbiWordLocation *loc;
-        if (abi == NULL || abi->parameters == NULL ||
-            index >= abi->parameter_count) return false;
-        loc = &abi->parameters[index];
+        const Rv32AbiWordLocation *loc = loc32;
+        if (loc == NULL) return false;
         out->register_begin = loc->location.register_begin;
         out->register_count = loc->location.register_count;
         out->stack_begin = loc->location.stack_begin;
@@ -451,11 +450,8 @@ static bool rv_formal_placement(const RvCoreSelection *sel, size_t index,
         out->indirect = loc->indirect_record;
         out->ignored = loc->words == 0U && loc->record_size == 0U;
     } else {
-        const MinicRiscv64FunctionAbiView *abi = sel->plan->abi64;
-        const MinicRiscv64AbiArgumentLocation *loc;
-        if (abi == NULL || abi->parameter_locations == NULL ||
-            index >= abi->parameter_location_count) return false;
-        loc = &abi->parameter_locations[index];
+        const MinicRiscv64AbiArgumentLocation *loc = loc64;
+        if (loc == NULL) return false;
         out->register_begin = loc->integer_register_begin;
         out->register_count = loc->integer_register_count;
         out->floating_register_begin = loc->floating_register_begin;
@@ -482,6 +478,20 @@ static bool rv_formal_placement(const RvCoreSelection *sel, size_t index,
         out->register_count + out->stack_count == out->words &&
         out->register_begin <= 8U &&
         out->register_count <= 8U - out->register_begin;
+}
+
+static bool rv_formal_placement(const RvCoreSelection *sel, size_t index,
+                                RvFinalPlacement *out) {
+    if (sel->xlen == 32U) {
+        const Rv32FunctionAbiPlan *abi = sel->plan->abi32;
+        if (abi == NULL || abi->parameters == NULL ||
+            index >= abi->parameter_count) return false;
+        return rv_decode_placement(sel, &abi->parameters[index], NULL, out);
+    }
+    const MinicRiscv64FunctionAbiView *abi = sel->plan->abi64;
+    if (abi == NULL || abi->parameter_locations == NULL ||
+        index >= abi->parameter_location_count) return false;
+    return rv_decode_placement(sel, NULL, &abi->parameter_locations[index], out);
 }
 
 /* Payload eligibility only: storage width and Core value identity are
@@ -633,8 +643,7 @@ static bool rv_core_runtime_binary(RvCoreSelection *sel,
         helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
     }
     chunks = (size + word - 1U) / word;
-    if (helper == NULL || chunks == 0U || chunks > 2U ||
-        2U * chunks > 8U) return false;
+    if (helper == NULL || chunks == 0U || chunks > 2U) return false;
     for (operand_index = 0U; operand_index < 2U; ++operand_index) {
         const MinicCoreValueId operand = operand_index ? rhs : lhs;
         for (i = 0U; i < chunks; ++i)
@@ -2192,8 +2201,8 @@ static bool rv_core_checked32_wide(RvCoreSelection *sel,
         rv_store(sel, ins->result, RV_A0);
 }
 
-static bool rv_core_checked32(RvCoreSelection *sel,
-    const MinicCoreInstruction *ins) {
+static const MinicCoreType *rv_checked_overflow_result_type(
+    RvCoreSelection *sel, const MinicCoreInstruction *ins, MinicCoreTypeId *result_id) {
     const MinicCoreFunction *fn = sel->plan->core;
     const MinicCoreTypeContext *types = fn->type_context;
     const MinicCoreValueId left = ins->value.integer_overflow.left;
@@ -2202,36 +2211,51 @@ static bool rv_core_checked32(RvCoreSelection *sel,
         ins->value.integer_overflow.result_address;
     const MinicCoreIntegerOverflowOperator op =
         ins->value.integer_overflow.operator_kind;
-    const MinicCoreType *pointer, *result, *flag, *lt, *rt;
+    const MinicCoreType *pointer, *result, *flag;
     MinicCoreTypeId pointee;
-    if (sel->xlen != 32U || types == NULL || !sel->plan->frame ||
+    if ((sel->xlen != 32U && sel->xlen != 64U) || types == NULL ||
         left >= fn->value_count || right >= fn->value_count ||
         address >= fn->value_count || ins->result >= fn->value_count ||
         (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
          op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
-         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY))
-        return false;
+         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)) return NULL;
     pointer = minic_core_type_base(types, fn->values[address].core_type_id);
     flag = minic_core_type_base(types, ins->core_type_id);
     if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
-        !pointer->has_layout || pointer->size != 4U ||
+        !pointer->has_layout || pointer->size != sel->xlen / 8U ||
         flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
         !flag->value.integer.is_bool ||
         minic_core_type_unqualified(types,
             fn->values[ins->result].core_type_id) !=
             minic_core_type_unqualified(types, ins->core_type_id))
-        return false;
+        return NULL;
     pointee = minic_core_type_unqualified(types,
         pointer->value.pointer.pointee);
     result = minic_core_type_get(types, pointee);
-    lt = minic_core_type_base(types, fn->values[left].core_type_id);
-    rt = minic_core_type_base(types, fn->values[right].core_type_id);
-    if (result == NULL || lt == NULL || rt == NULL ||
-        result->kind != MINIC_CORE_TYPE_INTEGER ||
-        result->value.integer.is_bool || !result->has_layout ||
+    if (result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
+        !result->has_layout || result->value.integer.is_bool ||
         (result->size != 1U && result->size != 2U &&
          result->size != 4U && result->size != 8U) ||
-        result->value.integer.bit_width != result->size * 8U ||
+        result->value.integer.bit_width != result->size * 8U)
+        return NULL;
+    *result_id = pointee;
+    return result;
+}
+
+static bool rv_core_checked32(RvCoreSelection *sel,
+    const MinicCoreInstruction *ins) {
+    const MinicCoreFunction *fn = sel->plan->core;
+    const MinicCoreTypeContext *types = fn->type_context;
+    const MinicCoreValueId left = ins->value.integer_overflow.left;
+    const MinicCoreValueId right = ins->value.integer_overflow.right;
+    const MinicCoreType *result, *lt, *rt;
+    MinicCoreTypeId pointee;
+    if (sel->xlen != 32U || !sel->plan->frame ||
+        (result = rv_checked_overflow_result_type(sel, ins, &pointee)) == NULL)
+        return false;
+    lt = minic_core_type_base(types, fn->values[left].core_type_id);
+    rt = minic_core_type_base(types, fn->values[right].core_type_id);
+    if (lt == NULL || rt == NULL ||
         lt->kind != MINIC_CORE_TYPE_INTEGER ||
         rt->kind != MINIC_CORE_TYPE_INTEGER ||
         lt->value.integer.is_bool || rt->value.integer.is_bool ||
@@ -2357,36 +2381,14 @@ static bool rv_core_checked_overflow(RvCoreSelection *sel,
         ins->value.integer_overflow.result_address;
     const MinicCoreIntegerOverflowOperator op =
         ins->value.integer_overflow.operator_kind;
-    const MinicCoreType *pointer, *result, *flag;
+    const MinicCoreType *result;
     MinicCoreTypeId pointee;
     bool signed_left, signed_right, signed_result;
     unsigned size;
     bool sign;
     if (sel->xlen == 32U) return rv_core_checked32(sel, ins);
-    if (sel->xlen != 64U || types == NULL ||
-        left >= fn->value_count || right >= fn->value_count ||
-        address >= fn->value_count || ins->result >= fn->value_count ||
-        (op != MINIC_CORE_INTEGER_OVERFLOW_ADD &&
-         op != MINIC_CORE_INTEGER_OVERFLOW_SUBTRACT &&
-         op != MINIC_CORE_INTEGER_OVERFLOW_MULTIPLY)) return false;
-    pointer = minic_core_type_base(types, fn->values[address].core_type_id);
-    flag = minic_core_type_base(types, ins->core_type_id);
-    if (pointer == NULL || pointer->kind != MINIC_CORE_TYPE_POINTER ||
-        !pointer->has_layout || pointer->size != 8U ||
-        flag == NULL || flag->kind != MINIC_CORE_TYPE_INTEGER ||
-        !flag->value.integer.is_bool ||
-        minic_core_type_unqualified(types,
-            fn->values[ins->result].core_type_id) !=
-            minic_core_type_unqualified(types, ins->core_type_id))
-        return false;
-    pointee = minic_core_type_unqualified(types,
-        pointer->value.pointer.pointee);
-    result = minic_core_type_get(types, pointee);
-    if (result == NULL || result->kind != MINIC_CORE_TYPE_INTEGER ||
-        !result->has_layout || result->value.integer.is_bool ||
-        (result->size != 1U && result->size != 2U &&
-         result->size != 4U && result->size != 8U) ||
-        result->value.integer.bit_width != result->size * 8U)
+    if (sel->xlen != 64U ||
+        (result = rv_checked_overflow_result_type(sel, ins, &pointee)) == NULL)
         return false;
     if (op == MINIC_CORE_INTEGER_OVERFLOW_ADD) {
         if (minic_core_integer_overflow_mixed_add_i32_shape(fn, ins,
@@ -2732,52 +2734,13 @@ static bool rv_call_placement(const RvCoreSelection *sel,
     const Rv32CallAbiPlan *call32,
     const MinicRiscv64PreparedCall *call64,
     size_t index, RvFinalPlacement *out) {
-    if (out == NULL) return false;
-    *out = (RvFinalPlacement){0};
     if (sel->xlen == 32U) {
-        const Rv32AbiWordLocation *loc;
         if (call32 == NULL || call32->arguments == NULL ||
             index >= call32->view.argument_count) return false;
-        loc = &call32->arguments[index];
-        out->register_begin = loc->location.register_begin;
-        out->register_count = loc->location.register_count;
-        out->stack_begin = loc->location.stack_begin;
-        out->stack_count = loc->location.stack_count;
-        out->words = loc->words;
-        out->bytes = loc->record_size;
-        out->record = loc->record_size != 0U;
-        out->indirect = loc->indirect_record;
-        out->ignored = loc->words == 0U && loc->record_size == 0U;
-    } else {
-        const MinicRiscv64AbiArgumentLocation *loc;
-        if (call64 == NULL || index >= call64->argument_count) return false;
-        loc = &call64->arguments[index];
-        out->register_begin = loc->integer_register_begin;
-        out->register_count = loc->integer_register_count;
-        out->floating_register_begin = loc->floating_register_begin;
-        out->floating_register_count = loc->floating_register_count;
-        out->stack_begin = loc->stack_slot_begin;
-        out->stack_count = loc->stack_slot_count;
-        out->words = loc->value.slot_count;
-        out->bytes = loc->value.storage_size;
-        out->record = loc->value.kind == MINIC_RISCV64_ABI_VALUE_AGGREGATE ||
-            loc->value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT ||
-            loc->value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE;
-        out->indirect = loc->value.kind == MINIC_RISCV64_ABI_VALUE_INDIRECT;
-        out->ignored = loc->value.kind == MINIC_RISCV64_ABI_VALUE_IGNORE;
-        if (loc->value.kind == MINIC_RISCV64_ABI_VALUE_INVALID ||
-            loc->value.kind == MINIC_RISCV64_ABI_VALUE_VOID) return false;
+        return rv_decode_placement(sel, &call32->arguments[index], NULL, out);
     }
-    if (out->floating_register_count != 0U)
-        return sel->xlen == 64U &&
-            out->floating_register_count == 1U &&
-            out->floating_register_begin < 8U &&
-            out->register_count == 0U && out->stack_count == 0U &&
-            out->words == 1U && !out->record;
-    return out->words <= 2U &&
-        out->register_count + out->stack_count == out->words &&
-        out->register_begin <= 8U &&
-        out->register_count <= 8U - out->register_begin;
+    if (call64 == NULL || index >= call64->argument_count) return false;
+    return rv_decode_placement(sel, NULL, &call64->arguments[index], out);
 }
 
 static bool rv_core_call_arguments(RvCoreSelection *sel,
@@ -4128,6 +4091,7 @@ static bool rv_core_terminator(RvCoreSelection *sel, size_t core_id) {
 
 static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
     const MinicRiscvCoreMachinePlan *plan,
+    const MinicCoreFunctionFacts *facts,
     bool defer_physical_preflight) {
     RvCoreSelection sel = {0};
     MinicRiscvIsa isa = {0};
@@ -4146,13 +4110,14 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
         (target = plan->target)->data_layout == NULL ||
         (core = plan->core)->name == NULL || core->block_count == 0U ||
         core->entry_block >= core->block_count || core->blocks == NULL ||
-        !minic_core_function_verify(core) ||
+        !minic_core_function_facts_verified(facts, core) ||
+        facts->reachable_blocks == NULL ||
         !minic_riscv_target_isa_load(target, &isa) ||
         (isa.xlen != 32U && isa.xlen != 64U) ||
         (isa.xlen == 32U
             ? (plan->abi32 == NULL || plan->abi64 != NULL ||
                plan->semantic_calls64 != NULL ||
-               plan->abi32->semantic_calls.index == NULL ||
+               plan->abi32->semantic_calls == NULL ||
                plan->abi32->parameter_count !=
                    minic_core_function_parameter_count(core) ||
                plan->frame->has_hidden_result_pointer !=
@@ -4196,12 +4161,12 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
     machine->has_dynamic_stack = frame->has_dynamic_stack;
     sel.plan = plan;
     sel.xlen = isa.xlen;
+    sel.reachable = facts->reachable_blocks;
     reject_phase = "builder_alloc";
     if (!minic_machine_builder_initialize(&sel.builder, machine)) goto done;
     if (core->block_count > SIZE_MAX / sizeof(*sel.core_blocks)) goto done;
     sel.core_blocks = calloc(core->block_count, sizeof(*sel.core_blocks));
     sel.far_entries = calloc(core->block_count, sizeof(*sel.far_entries));
-    sel.reachable = calloc(core->block_count, sizeof(*sel.reachable));
     sel.conditional_fallthroughs = malloc(
         core->block_count * sizeof(*sel.conditional_fallthroughs));
     sel.conditional_others = malloc(
@@ -4232,8 +4197,6 @@ static bool riscv_machine_select_core_impl(MinicMachineFunction *machine,
         sel.dynamic_overflow[i] = SIZE_MAX;
         sel.asm_goto_continuations[i] = SIZE_MAX;
     }
-    if (!minic_core_function_mark_reachable_blocks(
-            core, sel.reachable, core->block_count)) goto done;
     reject_phase = "block_map";
     if (!minic_machine_builder_create_block(&sel.builder,
         NULL, false, true, &id) || id != 0U) goto done;
@@ -4376,7 +4339,6 @@ done:
             reject_terminator_kind);
     free(sel.core_blocks);
     free(sel.far_entries);
-    free(sel.reachable);
     free(sel.conditional_fallthroughs);
     free(sel.conditional_others);
     free(sel.dynamic_check2);
@@ -4388,12 +4350,10 @@ done:
     return success;
 }
 
-bool minic_riscv_machine_select_core_subset(MinicMachineFunction *machine,
-    const MinicRiscvCoreMachinePlan *plan) {
-    return riscv_machine_select_core_impl(machine, plan, false);
-}
+
 
 bool minic_riscv_machine_select_core_for_production(
-    MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan) {
-    return riscv_machine_select_core_impl(machine, plan, true);
+    MinicMachineFunction *machine, const MinicRiscvCoreMachinePlan *plan,
+    const MinicCoreFunctionFacts *facts) {
+    return riscv_machine_select_core_impl(machine, plan, facts, true);
 }

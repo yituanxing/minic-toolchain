@@ -306,20 +306,8 @@ static bool rv64_core_call_arguments_resolved_supported(
 }
 
 /* ABI legality is independent of whether the callee address is a symbol or
- * an SSA pointer. One checked CoreCallView, one immutable RV64 prepared
- * placement and one transfer shape checker cover both. We must not rerun a
- * default LP64D cursor here: the frame/caller may target soft-float LP64.
- * Only the intentionally unsupported *indirect*
- * unnamed-record path remains a policy difference: its machine emitter does
- * not yet transport those aggregates. Never widen admission ahead of emit. */
-static bool rv64_core_call_arguments_supported(
-    const MinicCoreFunction *function,
-    const MinicCoreCallView *call, const MinicRiscv64PreparedCall *prepared,
-    bool direct_call) {
-    return rv64_core_call_arguments_resolved_supported(
-        function, call, prepared, direct_call);
-}
-
+ * an SSA pointer. One immutable CoreCallView and one prepared RV64 ABI
+ * placement own all CALL checks. No duplicate unprepared classification. */
 /* The verified call view owns the result representation for both direct
  * symbol calls and SSA-pointer calls. Return ABI legality must therefore be
  * checked by one target policy, not two subtly different call-site copies. */
@@ -359,86 +347,34 @@ static bool rv64_core_call_return_supported(
     }
 }
 
-/* Standalone (no ABI cursor) Core admission has deliberately narrower
- * capability than the production prepared-call path: at most eight scalar
- * VALUE arguments. Once a type snapshot is attached the proof must use its
- * Core IDs, not the C signatures retained for legacy fixture producers. */
-static bool rv64_core_preparedless_call_supported(
-    const MinicCoreFunction *function, const MinicCoreCallView *call) {
-    const MinicCoreType *return_type;
-    size_t argument_index;
-    if (function == NULL || function->type_context == NULL || call == NULL ||
-        call->argument_count > 8U ||
-        (call->parameter_count != 0U && call->core_parameter_type_ids == NULL))
-        return false;
-    return_type = minic_core_function_base_type(function, call->core_return_type_id);
-    if (return_type == NULL ||
-        (return_type->kind != MINIC_CORE_TYPE_VOID &&
-         !minic_riscv64_core_scalar_kind(return_type))) return false;
-    for (argument_index = 0U; argument_index < call->argument_count; ++argument_index) {
-        const MinicCoreCallArgument *argument = &call->arguments[argument_index];
-        MinicCoreTypeId type_id;
-        if (argument->kind != MINIC_CORE_CALL_ARGUMENT_VALUE ||
-            argument->value.value_id >= function->value_count ||
-            !minic_core_call_view_argument_core_type(
-                function, call, argument_index, &type_id)) return false;
-        if (argument_index < call->parameter_count)
-            type_id = call->core_parameter_type_ids[argument_index];
-        else if (!call->is_variadic) return false;
-        if (!minic_riscv64_core_scalar_kind(minic_core_function_base_type(function, type_id)))
-            return false;
-    }
-    return true;
-}
-
-bool minic_riscv64_core_direct_call_supported(bool require_prepared_abi,
-                                       const MinicCoreFunction *function,
-                                       const MinicCoreInstruction *instruction,
-                                       const MinicCoreCallView *semantic_view,
-                                       const MinicRiscv64PreparedCall *prepared) {
-    MinicCoreCallView call;
+bool minic_riscv64_core_direct_call_supported(
+    const MinicCoreFunction *function,
+    const MinicCoreCallView *semantic_view,
+    const MinicRiscv64PreparedCall *prepared) {
     const MinicCoreCallee *callee;
-
-    /* The already-admitted Common FunctionPlan supplies an immutable
-     * semantic view. A standalone caller still builds a checked view once. */
-    if (!(semantic_view != NULL ? (call = *semantic_view, true) :
-          minic_core_call_view_build(function, instruction, &call)) ||
-        call.callee == NULL)
+    if (semantic_view == NULL || semantic_view->callee == NULL ||
+        prepared == NULL)
         return false;
-    callee = call.callee;
-    if (callee->name == NULL || callee->name_length == 0U)
+    callee = semantic_view->callee;
+    if (callee->name == NULL || callee->name_length == 0U ||
+        !rv64_core_call_return_supported(
+            function, semantic_view, &prepared->return_value))
         return false;
-    if (!require_prepared_abi)
-        return function != NULL && function->type_context != NULL &&
-               rv64_core_preparedless_call_supported(function, &call);
-    if (prepared == NULL ||
-        !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
-        return false;
-    }
-    return rv64_core_call_arguments_supported(function, &call, prepared, true);
+    return rv64_core_call_arguments_resolved_supported(
+        function, semantic_view, prepared, true);
 }
 
-/* M151_INDIRECT_CALL_BATCH_OWNER: validate indirect arguments through the
-   same register-only RV64 ABI classifier used by direct calls. */
-bool minic_riscv64_core_indirect_call_supported(bool require_prepared_abi,
-                                         const MinicCoreFunction *function,
-                                         const MinicCoreInstruction *instruction,
-                                         const MinicCoreCallView *semantic_view,
-                                         const MinicRiscv64PreparedCall *prepared) {
-    MinicCoreCallView call;
-
-    if (!(semantic_view != NULL ? (call = *semantic_view, true) :
-          minic_core_call_view_build(function, instruction, &call)) ||
-        call.signature == NULL)
+/* An indirect CALL differs only in Core signature/operand admission;
+ * register/stack locations are still the same prepared ABI witness. */
+bool minic_riscv64_core_indirect_call_supported(
+    const MinicCoreFunction *function,
+    const MinicCoreCallView *semantic_view,
+    const MinicRiscv64PreparedCall *prepared) {
+    if (semantic_view == NULL || semantic_view->signature == NULL ||
+        prepared == NULL ||
+        !rv64_core_call_return_supported(
+            function, semantic_view, &prepared->return_value))
         return false;
-    if (!require_prepared_abi)
-        return function != NULL && function->type_context != NULL &&
-               rv64_core_preparedless_call_supported(function, &call);
-    if (prepared == NULL ||
-        !rv64_core_call_return_supported(function, &call, &prepared->return_value)) {
-        return false;
-    }
-    return rv64_core_call_arguments_supported(function, &call, prepared, false);
+    return rv64_core_call_arguments_resolved_supported(
+        function, semantic_view, prepared, false);
 }
-
-

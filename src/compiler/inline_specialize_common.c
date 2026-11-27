@@ -1,4 +1,4 @@
-#include "compiler/inline_specialize_common.h"
+#include "compiler/inline_specialize_internal.h"
 #include "frontend/function_body.h"
 #include "core/symbol_identity.h"
 
@@ -132,36 +132,6 @@ bool minic_inline_call_plan_copy_source_owners(
                          plan->source_owner_count * sizeof(*owners));
             for (i = plan->source_owner_count; i < owner_count; ++i)
                 owners[i] = MINIC_FUNCTION_INVALID;
-            /* Opt-in exact original-oracle check for frozen Linux/clone-heavy
-             * acceptance. Never let an invalidated source graph silently
-             * reuse stale ownership during a diagnostic run. */
-            if (getenv("MINIC_INLINE_OWNER_CACHE_VERIFY") != NULL) {
-                MinicFunctionId *fresh;
-                bool matches = true;
-                if (owner_count > SIZE_MAX / sizeof(*fresh)) return false;
-                fresh = malloc((owner_count == 0U ? 1U : owner_count) *
-                               sizeof(*fresh));
-                if (fresh == NULL) return false;
-                if (!minic_perf_program_build_expression_source_owners(
-                        program, function_limit, fresh, owner_count)) {
-                    free(fresh);
-                    return false;
-                }
-                for (i = 0U; i < owner_count; ++i) {
-                    const MinicFunctionId actual = fresh[i] < function_limit
-                        ? fresh[i] : MINIC_FUNCTION_INVALID;
-                    if (owners[i] != actual) {
-                        (void)fprintf(stderr,
-                            "MINIC_INLINE_OWNER_CACHE_MISMATCH expression=%zu "
-                            "cached=%zu actual=%zu limit=%zu\n",
-                            i, (size_t)owners[i], (size_t)actual, function_limit);
-                        matches = false;
-                        break;
-                    }
-                }
-                free(fresh);
-                if (!matches) return false;
-            }
             return true;
         }
     }
@@ -182,6 +152,30 @@ bool minic_inline_call_plan_copy_source_owners(
         }
     }
     return true;
+}
+
+bool minic_inline_spec_resolve_call(
+    const MinicInlineCallPlan *plan, MinicExpressionId expression_id,
+    size_t source_limit, MinicFunctionId *current_id, MinicFunctionId *source_id,
+    MinicFunction *current, MinicFunction *source) {
+    const MinicC0Program *program;
+    const MinicExpression *call;
+    if (plan == NULL || (program = plan->program) == NULL ||
+        current_id == NULL || source_id == NULL || current == NULL || source == NULL ||
+        source_limit > program->function_count)
+        return false;
+    *current_id = minic_inline_call_plan_get(plan, expression_id);
+    if (*current_id >= program->function_count) return false;
+    *current = program->functions[*current_id];
+    *source_id = current->is_integer_specialization
+        ? current->specialization_source : *current_id;
+    if (*source_id >= source_limit) return false;
+    *source = program->functions[*source_id];
+    call = &program->expressions[expression_id];
+    return source->is_defined && source->is_internal && source->is_inline &&
+           !source->is_variadic && source->alias_target == MINIC_FUNCTION_INVALID &&
+           source->parameter_count != 0U &&
+           source->parameter_count == call->value.call.argument_count;
 }
 
 void minic_inline_spec_key_clear(MinicInlineSpecializationKey *key) {

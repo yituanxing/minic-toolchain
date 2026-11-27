@@ -201,28 +201,7 @@ static bool machine_emit_directive(FILE *output,
     return false;
 }
 
-bool minic_machine_gnu_asm_emit_unbound_source_asm(FILE *output,
-    const MinicMachineFunction *function,
-    const MinicMachineInstruction *instruction,
-    const MinicMachineGNUAsmLabels *labels, void *context) {
-    size_t i;
-    const char *bytes;
-    (void)function;
-    (void)labels;
-    (void)context;
-    if (output == NULL || instruction == NULL ||
-        instruction->kind != MINIC_MACHINE_INSTRUCTION_SOURCE_ASM ||
-        instruction->operand_count != 0U ||
-        instruction->source_asm_template == NULL) return false;
-    if (instruction->source_asm_length == 0U) return true;
-    bytes = instruction->source_asm_template;
-    for (i = 0U; i < instruction->source_asm_length; ++i)
-        if (bytes[i] == '\0' || bytes[i] == '%') return false;
-    if (fwrite(bytes, 1U, instruction->source_asm_length, output) !=
-        instruction->source_asm_length) return false;
-    return bytes[instruction->source_asm_length - 1U] == '\n' ||
-        fputc('\n', output) != EOF;
-}
+
 
 static bool machine_gnu_asm_prepare(const MinicMachineFunction *function,
     const MinicMachineGNUAsmPolicy *policy, MachineOwnedLabels *owned) {
@@ -335,14 +314,4 @@ done:
     return ok;
 }
 
-bool minic_machine_gnu_asm_emit_body(FILE *output,
-    const MinicMachineFunction *function,
-    const MinicMachineGNUAsmPolicy *policy) {
-    MinicMachineGNUAsmPrepared *prepared = NULL;
-    bool ok;
-    if (output == NULL || !minic_machine_gnu_asm_prepare_body(
-            function, policy, &prepared)) return false;
-    ok = minic_machine_gnu_asm_emit_prepared_body(output, prepared);
-    minic_machine_gnu_asm_prepared_destroy(prepared);
-    return ok;
-}
+

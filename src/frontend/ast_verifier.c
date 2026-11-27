@@ -787,13 +787,6 @@ static bool verify_expression(const MinicC0Program *program,
     }
     case MINIC_EXPRESSION_BUILTIN_VA_START:
     case MINIC_EXPRESSION_BUILTIN_VA_END:
-        operand = expression_before(program, expression->value.unary.operand, expression_index);
-        return operand != NULL &&
-               minic_target_info_va_cursor_source_operand_supported(
-                   target, program, operand->type,
-                   operand->value_category == MINIC_VALUE_LVALUE) &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_VA_ARG:
         operand = expression_before(program, expression->value.unary.operand, expression_index);
         return operand != NULL &&
@@ -801,11 +794,13 @@ static bool verify_expression(const MinicC0Program *program,
                    target, program, operand->type,
                    operand->value_category == MINIC_VALUE_LVALUE) &&
                expression->value_category == MINIC_VALUE_RVALUE &&
-               (minic_type_is_integer(expression->type) ||
-                minic_type_is_pointer(expression->type) ||
-                minic_type_is_double(expression->type) ||
-                (minic_type_is_record(expression->type) &&
-                 minic_c0_type_is_complete_object(program, expression->type)));
+               (expression->kind != MINIC_EXPRESSION_BUILTIN_VA_ARG
+                ? minic_type_is_void(expression->type)
+                : (minic_type_is_integer(expression->type) ||
+                   minic_type_is_pointer(expression->type) ||
+                   minic_type_is_double(expression->type) ||
+                   (minic_type_is_record(expression->type) &&
+                    minic_c0_type_is_complete_object(program, expression->type))));
     case MINIC_EXPRESSION_BUILTIN_VA_COPY:
         left = expression_before(program, expression->value.binary.left, expression_index);
         right = expression_before(program, expression->value.binary.right, expression_index);
@@ -821,67 +816,25 @@ static bool verify_expression(const MinicC0Program *program,
                expression->value_category == MINIC_VALUE_RVALUE &&
                minic_type_is_void(expression->type);
     case MINIC_EXPRESSION_BUILTIN_UNARY: {
-        const MinicExpression *builtin_operand;
-        MinicType expected_operand_type;
-
-        builtin_operand =
+        const MinicExpression *builtin_operand =
             expression_before(program, expression->value.builtin_unary.operand, expression_index);
-        switch (expression->value.builtin_unary.operator_kind) {
-        case MINIC_BUILTIN_UNARY_CLZ:
-        case MINIC_BUILTIN_UNARY_CTZ:
-        case MINIC_BUILTIN_UNARY_POPCOUNT:
-            expected_operand_type = minic_type_unsigned_int();
-            break;
-        case MINIC_BUILTIN_UNARY_CLZL:
-        case MINIC_BUILTIN_UNARY_CTZL:
-        case MINIC_BUILTIN_UNARY_POPCOUNTL:
-            expected_operand_type = minic_type_unsigned_long();
-            break;
-        case MINIC_BUILTIN_UNARY_CLZLL:
-        case MINIC_BUILTIN_UNARY_CTZLL:
-        case MINIC_BUILTIN_UNARY_POPCOUNTLL:
-            expected_operand_type = minic_type_unsigned_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_FFSLL:
-            expected_operand_type = minic_type_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_ISDIGIT:
-            expected_operand_type = minic_type_int();
-            break;
-        case MINIC_BUILTIN_UNARY_ISNAN:
-            return builtin_operand != NULL &&
-                   (minic_type_is_float(builtin_operand->type) ||
-                    minic_type_is_double(builtin_operand->type)) &&
-                   expression->value_category == MINIC_VALUE_RVALUE &&
-                   minic_type_equal(expression->type, minic_type_int());
-        case MINIC_BUILTIN_UNARY_BSWAP16:
-            expected_operand_type = minic_type_unsigned_short();
-            break;
-        case MINIC_BUILTIN_UNARY_BSWAP32:
-            expected_operand_type = minic_type_unsigned_int();
-            break;
-        case MINIC_BUILTIN_UNARY_BSWAP64:
-            expected_operand_type = minic_type_unsigned_long_long();
-            break;
-        case MINIC_BUILTIN_UNARY_CONSTANT_P:
-            /* GCC permits __builtin_constant_p on non-integer expressions too.
-             * The operand is unevaluated; its type does not constrain the int
-             * result.  Returning here avoids imposing the ordinary unary-builtin
-             * operand-type equality contract. */
-            return builtin_operand != NULL &&
-                   expression->value_category == MINIC_VALUE_RVALUE &&
-                   minic_type_equal(expression->type, minic_type_int());
-        default:
+        MinicBuiltinUnaryOperator operation = expression->value.builtin_unary.operator_kind;
+        MinicType expected_operand_type;
+        MinicType expected_result_type;
+
+        if (builtin_operand == NULL || expression->value_category != MINIC_VALUE_RVALUE)
             return false;
-        }
-        return builtin_operand != NULL &&
+        if (operation == MINIC_BUILTIN_UNARY_ISNAN)
+            return (minic_type_is_float(builtin_operand->type) ||
+                    minic_type_is_double(builtin_operand->type)) &&
+                   minic_type_equal(expression->type, minic_type_int());
+        /* constant_p has an unevaluated operand of any type. */
+        if (operation == MINIC_BUILTIN_UNARY_CONSTANT_P)
+            return minic_type_equal(expression->type, minic_type_int());
+        return minic_c0_integer_builtin_signature(operation, &expected_operand_type,
+                                                   &expected_result_type) &&
                minic_type_equal(builtin_operand->type, expected_operand_type) &&
-               expression->value_category == MINIC_VALUE_RVALUE &&
-               minic_type_equal(expression->type,
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
-                   expression->value.builtin_unary.operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
-                       ? expected_operand_type : minic_type_int());
+               minic_type_equal(expression->type, expected_result_type);
     }
     case MINIC_EXPRESSION_BUILTIN_ATOMIC_LOAD: {
         const MinicExpression *address =
@@ -1674,15 +1627,6 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
             !array_type->is_query_materialized &&
             !(array_owners != NULL ? array_owners[index] != 0U
                                     : incomplete_array_has_semantic_owner(program, index))) {
-            if (getenv("MINIC_AST_VERIFY_TRACE") != NULL)
-                (void)fprintf(stderr,
-                    "AST_ORPHAN_ARRAY id=%zu element_base=%d element_array=%zu "
-                    "element_pointer_depth=%u program_arrays=%zu expressions=%zu aliases=%zu\n",
-                    index, (int)array_type->element_type.base_kind,
-                    array_type->element_type.array_type_id,
-                    array_type->element_type.pointer_depth,
-                    program->array_type_count, program->expression_count,
-                    program->type_alias_count);
             MINIC_AST_VERIFY_FAIL("incomplete array type has no semantic owner");
         }
         if (array_type->is_query_materialized &&
@@ -1883,22 +1827,6 @@ bool minic_c0_program_verify_target_detailed(const MinicC0Program *program,
                 !type_is_top_level_unqualified(function->parameter_types[parameter_index]) ||
                 minic_type_is_void(function->parameter_types[parameter_index]) ||
                 minic_type_is_function(function->parameter_types[parameter_index])) {
-                if (getenv("MINIC_AST_VERIFY_TRACE") != NULL) {
-                    const MinicType t = function->parameter_types[parameter_index];
-                    (void)fprintf(stderr,
-                        "MINIC_AST_PARAMETER_FRONTIER function=%s index=%zu "
-                        "base=%u rank=%u sign=%u plain_char=%d ptr=%u qualifiers=%u "
-                        "ptrqual=%u top_unqualified=%d type_valid=%d\n",
-                        function->name != NULL ? function->name : "<unnamed>",
-                        parameter_index, (unsigned int)t.base_kind,
-                        (unsigned int)t.integer_rank,
-                        (unsigned int)t.integer_sign, t.is_plain_char ? 1 : 0,
-                        (unsigned int)t.pointer_depth,
-                        (unsigned int)t.base_qualifiers,
-                        (unsigned int)t.pointer_qualifiers,
-                        type_is_top_level_unqualified(t) ? 1 : 0,
-                        type_is_valid(program, target, t) ? 1 : 0);
-                }
                 MINIC_AST_VERIFY_FAIL(minic_c0_ast_verify_stage_default_reason(stage));
             }
         }

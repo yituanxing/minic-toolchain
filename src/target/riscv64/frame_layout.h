@@ -20,13 +20,10 @@ typedef struct MinicRiscv64CoreFrame {
     size_t value_count;
     size_t value_slot_count;
     size_t *object_offsets;
-    MinicCoreObjectStoragePlan object_storage;
-    bool borrows_object_storage;
+    const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
     MinicCoreObjectReusePlan object_reuse;
     /* Borrowed from the Common Function Plan, never owned by RV64. */
     const MinicCoreCallIndex *semantic_calls;
-    /* Common borrows prepared semantic CALLs or owns a standalone snapshot. */
-    MinicCoreCallIndexHandle call_index;
     /* RV64-owned ABI location plan, prepared once from Common CALL views. */
     MinicRiscv64CallPlanCache outgoing_calls;
     size_t *value_offsets;
@@ -38,10 +35,6 @@ typedef struct MinicRiscv64CoreFrame {
     bool has_return_abi_value;
     MinicRiscv64AbiCursor named_parameter_cursor;
     bool has_named_parameter_cursor;
-    /* M177_CONSTANT_SWITCH_CFG_OWNER: suppress target emission of Core blocks
-       that have no executable predecessor after semantic CFG pruning. */
-    const bool *reachable_blocks;
-    bool *owned_reachable_blocks;
     size_t value_base_offset;
     size_t outgoing_argument_size;
     size_t dynamic_call_area_size;
@@ -82,7 +75,4 @@ bool minic_riscv64_machine_physical_frame(
  * retained return classification. No second ABI classification is legal. */
 bool minic_riscv64_core_frame_abi_view(
     const MinicRiscv64CoreFrame *, MinicRiscv64FunctionAbiView *);
-bool minic_riscv64_core_frame_mark_reachable_blocks(
-    const MinicCoreFunction *, const MinicCoreFunctionFacts *,
-    MinicRiscv64CoreFrame *);
 #endif

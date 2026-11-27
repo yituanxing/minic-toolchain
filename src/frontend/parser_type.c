@@ -772,55 +772,6 @@ static bool type_name_starts_parenthesized_pointer_to_array(const MinicParser *p
            token.kind == MINIC_TOKEN_LBRACKET;
 }
 
-static bool parse_abstract_pointer_to_array_type_name(MinicParser *parser,
-                                                      MinicType element_type,
-                                                      MinicType *type) {
-    unsigned int depth;
-    unsigned int const_qualifiers;
-    unsigned int volatile_qualifiers;
-    bool is_array;
-    size_t level;
-
-    if (!minic_parser_expect(parser, MINIC_TOKEN_LPAREN,
-                             "expected '(' before abstract array pointer")) {
-        return false;
-    }
-    depth = 0U;
-    const_qualifiers = 0U;
-    volatile_qualifiers = 0U;
-    while (parser->current.kind == MINIC_TOKEN_STAR) {
-        depth += 1U;
-        if (depth > 31U || !minic_parser_advance(parser) ||
-            !minic_parser_parse_pointer_qualifier_sequence(
-                parser, depth, &const_qualifiers, &volatile_qualifiers)) {
-            minic_parser_error(parser, "abstract array pointer depth is unsupported");
-            return false;
-        }
-    }
-    if (depth == 0U ||
-        !minic_parser_expect(parser, MINIC_TOKEN_RPAREN,
-                             "expected ')' after abstract array pointer") ||
-        !minic_parser_parse_array_declarator_suffix(
-            parser, element_type, false, type, &is_array) || !is_array) {
-        return false;
-    }
-    for (level = 0U; level < depth; ++level) {
-        unsigned int bit;
-
-        if (!minic_type_pointer_to(*type, type)) {
-            minic_parser_error(parser, "cannot form pointer to array type");
-            return false;
-        }
-        bit = 1U << level;
-        if (((const_qualifiers & bit) != 0U && !minic_type_add_const(*type, type)) ||
-            ((volatile_qualifiers & bit) != 0U && !minic_type_add_volatile(*type, type))) {
-            minic_parser_error(parser, "cannot qualify abstract array pointer");
-            return false;
-        }
-    }
-    return true;
-}
-
 bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, MinicType *type) {
     MinicType base_type;
     MinicType declarator_base;
@@ -830,7 +781,8 @@ bool minic_parser_parse_type_name_preserving_incomplete(MinicParser *parser, Min
         return false;
     }
     if (type_name_starts_parenthesized_pointer_to_array(parser)) {
-        return parse_abstract_pointer_to_array_type_name(parser, declarator_base, type);
+        return minic_parser_parse_parenthesized_pointer_to_array_declarator(
+            parser, declarator_base, NULL, type, NULL, NULL, NULL);
     }
     if (type_name_starts_parenthesized_function_pointer(parser)) {
         MinicParsedFunctionDeclarator declarator;

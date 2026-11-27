@@ -21,7 +21,6 @@ void minic_core_function_plan_destroy(
 bool minic_core_function_plan_build(
     const MinicCoreFunction *function, MinicCoreFunctionPlan *plan) {
     if (plan == NULL || function == NULL || function->type_context == NULL ||
-        plan->prepared ||
         plan->calls.sites != NULL || plan->objects.objects != NULL ||
         plan->variadic_results != NULL || plan->reachable_blocks != NULL ||
         plan->value_use_counts != NULL)
@@ -29,7 +28,7 @@ bool minic_core_function_plan_build(
     /* The sole backend-boundary canonical Core verification; every physical
      * target then performs only its own capability and ABI checks. */
     if (!minic_core_function_verify(function) ||
-        !minic_core_function_facts_analyze_collect(
+        !minic_core_function_facts_analyze(
             function, &plan->facts, &plan->variadic_results) ||
         plan->facts.direct_call_count >
             SIZE_MAX - plan->facts.indirect_call_count ||
@@ -56,6 +55,5 @@ bool minic_core_function_plan_build(
     plan->facts.verified_function = function;
     plan->facts.reachable_blocks = plan->reachable_blocks;
     plan->facts.value_use_counts = plan->value_use_counts;
-    plan->prepared = true;
     return true;
 }

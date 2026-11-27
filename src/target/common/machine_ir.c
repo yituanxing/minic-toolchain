@@ -161,25 +161,7 @@ bool minic_machine_function_add_block(MinicMachineFunction *function,
     return true;
 }
 
-bool minic_machine_block_add_alias_label(MinicMachineFunction *function,
-    size_t block_id, const char *alias_label) {
-    MinicMachineBlock *block;
-    char *copy;
-    if (function == NULL || block_id >= function->block_count ||
-        alias_label == NULL || alias_label[0] == '\0') return false;
-    copy = machine_copy_string(alias_label);
-    if (copy == NULL) return false;
-    block = &function->blocks[block_id];
-    if (block->alias_count == SIZE_MAX ||
-        !machine_reserve((void **)&block->alias_labels,
-                         &block->alias_capacity, block->alias_count + 1U,
-                         sizeof(*block->alias_labels))) {
-        free(copy);
-        return false;
-    }
-    block->alias_labels[block->alias_count++] = copy;
-    return true;
-}
+
 
 bool minic_machine_block_add_successor(MinicMachineFunction *function,
     size_t from, size_t to) {

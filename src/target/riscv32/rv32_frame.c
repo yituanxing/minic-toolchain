@@ -110,11 +110,9 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame,
         return false;
     frame->object_offsets = NULL;
     frame->value_offsets = NULL;
-    frame->object_storage = (MinicCoreObjectStoragePlan){0};
-    frame->borrows_object_storage = false;
-    if (!minic_core_object_storage_plan_acquire(
-            f, storage,
-            &frame->object_storage, &frame->borrows_object_storage))
+    frame->object_storage = NULL;
+    if (!minic_core_object_storage_plan_borrow(
+            f, storage, &frame->object_storage))
         return rv32_frame_reject("core_object_storage", 0U, f,
                                  MINIC_CORE_TYPE_INVALID);
     frame->object_count = f->object_count;
@@ -160,7 +158,7 @@ bool rv32_frame_init_with_storage(Rv32Frame *frame,
         for (i = 0U; i < f->object_count; ++i) {
             const MinicCoreObject *obj = &f->objects[i];
             const MinicCoreObjectStorage *object_slot =
-                &frame->object_storage.objects[i];
+                &frame->object_storage->objects[i];
             size_t size, align, slot, peak;
             bool reusable;
             if (!minic_core_object_reuse_plan_get(
@@ -270,8 +268,7 @@ void rv32_frame_destroy(Rv32Frame *f) {
     if (f != NULL) {
         free(f->object_offsets);
         free(f->value_offsets);
-        minic_core_object_storage_plan_release(
-            &f->object_storage, f->borrows_object_storage);
+        f->object_storage = NULL;
         f->object_offsets = NULL;
         f->value_offsets = NULL;
         rv32_function_abi_plan_destroy(&f->abi);

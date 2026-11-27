@@ -1148,45 +1148,14 @@ static bool parse_builtin_unary(MinicParser *parser,
     MinicExpressionId operand_id;
     MinicSourcePosition begin;
     MinicType argument_type;
+    MinicType result_type;
 
     if (parser == NULL || spelling == NULL || expression_id == NULL ||
         !minic_parser_current_identifier_lexeme_equals_cstr(parser, spelling)) {
         return false;
     }
-    switch (operator_kind) {
-    case MINIC_BUILTIN_UNARY_CLZ:
-    case MINIC_BUILTIN_UNARY_CTZ:
-    case MINIC_BUILTIN_UNARY_POPCOUNT:
-        argument_type = minic_type_unsigned_int();
-        break;
-    case MINIC_BUILTIN_UNARY_CLZL:
-    case MINIC_BUILTIN_UNARY_CTZL:
-    case MINIC_BUILTIN_UNARY_POPCOUNTL:
-        argument_type = minic_type_unsigned_long();
-        break;
-    case MINIC_BUILTIN_UNARY_CLZLL:
-    case MINIC_BUILTIN_UNARY_CTZLL:
-    case MINIC_BUILTIN_UNARY_POPCOUNTLL:
-        argument_type = minic_type_unsigned_long_long();
-        break;
-    case MINIC_BUILTIN_UNARY_FFSLL:
-        argument_type = minic_type_long_long();
-        break;
-    case MINIC_BUILTIN_UNARY_ISDIGIT:
-        argument_type = minic_type_int();
-        break;
-    case MINIC_BUILTIN_UNARY_BSWAP16:
-        argument_type = minic_type_unsigned_short();
-        break;
-    case MINIC_BUILTIN_UNARY_BSWAP32:
-        argument_type = minic_type_unsigned_int();
-        break;
-    case MINIC_BUILTIN_UNARY_BSWAP64:
-        argument_type = minic_type_unsigned_long_long();
-        break;
-    default:
+    if (!minic_c0_integer_builtin_signature(operator_kind, &argument_type, &result_type))
         return false;
-    }
 
     begin = parser->current.span.begin;
     if (!minic_parser_advance(parser) ||
@@ -1198,6 +1167,25 @@ static bool parse_builtin_unary(MinicParser *parser,
     if (operand == NULL || !minic_type_is_integer(operand->type)) {
         minic_parser_error(parser, "unary builtin requires an integer operand");
         return false;
+    }
+    /* ffs and ffsl first convert to their declared C argument width.
+     * The canonical FFSLL AST then widens that signed value for lowering. */
+    if (operator_kind == MINIC_BUILTIN_UNARY_FFSLL &&
+        strcmp(spelling, "__builtin_ffsll") != 0) {
+        MinicType narrow = strcmp(spelling, "__builtin_ffs") == 0
+                               ? minic_type_int() : minic_type_long();
+        if (!minic_type_equal(operand->type, narrow)) {
+            (void)memset(&conversion, 0, sizeof(conversion));
+            conversion.kind = MINIC_EXPRESSION_CAST;
+            conversion.span = operand->span;
+            conversion.type = narrow;
+            conversion.value_category = MINIC_VALUE_RVALUE;
+            conversion.value.unary.operand = operand_id;
+            if (!minic_parser_add_expression(parser, &conversion, &operand_id))
+                return false;
+            operand = minic_c0_program_expression(parser->program, operand_id);
+            if (operand == NULL) return false;
+        }
     }
     if (!minic_type_equal(operand->type, argument_type)) {
         (void)memset(&conversion, 0, sizeof(conversion));
@@ -1220,13 +1208,7 @@ static bool parse_builtin_unary(MinicParser *parser,
     expression.kind = MINIC_EXPRESSION_BUILTIN_UNARY;
     expression.span.begin = begin;
     expression.span.end = parser->current.span.end;
-    /* GCC bswap builtins return uint16_t/uint32_t/uint64_t respectively;
-     * all existing bit-count/isdigit builtins return int. */
-    expression.type =
-        operator_kind == MINIC_BUILTIN_UNARY_BSWAP16 ||
-        operator_kind == MINIC_BUILTIN_UNARY_BSWAP32 ||
-        operator_kind == MINIC_BUILTIN_UNARY_BSWAP64
-            ? argument_type : minic_type_int();
+    expression.type = result_type;
     expression.value_category = MINIC_VALUE_RVALUE;
     expression.value.builtin_unary.operator_kind = operator_kind;
     expression.value.builtin_unary.operand = operand_id;
@@ -1806,138 +1788,45 @@ bool minic_parser_try_builtin_primary_early(
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap16")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_BSWAP16, "__builtin_bswap16", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap32")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_BSWAP32, "__builtin_bswap32", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_bswap64")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_BSWAP64, "__builtin_bswap64", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clz")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZ, "__builtin_clz", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
+    {
+        static const struct {
+            const char *spelling;
+            MinicBuiltinUnaryOperator operation;
+        } integer_builtins[] = {
+            {"__builtin_bswap16", MINIC_BUILTIN_UNARY_BSWAP16},
+            {"__builtin_bswap32", MINIC_BUILTIN_UNARY_BSWAP32},
+            {"__builtin_bswap64", MINIC_BUILTIN_UNARY_BSWAP64},
+            {"__builtin_clz", MINIC_BUILTIN_UNARY_CLZ},
+            {"__builtin_clzl", MINIC_BUILTIN_UNARY_CLZL},
+            {"__builtin_clzll", MINIC_BUILTIN_UNARY_CLZLL},
+            {"__builtin_ctz", MINIC_BUILTIN_UNARY_CTZ},
+            {"__builtin_ctzl", MINIC_BUILTIN_UNARY_CTZL},
+            {"__builtin_ctzll", MINIC_BUILTIN_UNARY_CTZLL},
+            {"__builtin_popcount", MINIC_BUILTIN_UNARY_POPCOUNT},
+            {"__builtin_popcountl", MINIC_BUILTIN_UNARY_POPCOUNTL},
+            {"__builtin_popcountll", MINIC_BUILTIN_UNARY_POPCOUNTLL},
+            {"__builtin_ffs", MINIC_BUILTIN_UNARY_FFSLL},
+            {"__builtin_ffsl", MINIC_BUILTIN_UNARY_FFSLL},
+            {"__builtin_ffsll", MINIC_BUILTIN_UNARY_FFSLL},
+            {"__builtin_isdigit", MINIC_BUILTIN_UNARY_ISDIGIT},
+        };
+        size_t index;
+        for (index = 0U; index < sizeof(integer_builtins) / sizeof(integer_builtins[0]); ++index) {
+            if (!minic_parser_current_identifier_lexeme_equals_cstr(
+                    parser, integer_builtins[index].spelling))
+                continue;
+            if (!parse_builtin_unary(parser, integer_builtins[index].operation,
+                                    integer_builtins[index].spelling, &primary_id) ||
+                !minic_parser_parse_postfix(parser, primary_id, &primary_id))
+                return false;
+            *handled = true;
+            return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
         }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clzl")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CLZL, "__builtin_clzl", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_clzll")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_CLZLL, "__builtin_clzll", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctz")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZ, "__builtin_ctz", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctzl")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_CTZL, "__builtin_ctzl", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ctzll")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_CTZLL, "__builtin_ctzll", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcount")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNT,
-                                 "__builtin_popcount", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcountl")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNTL,
-                                 "__builtin_popcountl", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_popcountll")) {
-        if (!parse_builtin_unary(parser, MINIC_BUILTIN_UNARY_POPCOUNTLL,
-                                 "__builtin_popcountll", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffs")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffs", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffsl")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffsl", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_ffsll")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_FFSLL, "__builtin_ffsll", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }
     if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_isnan")) {
         if (!parse_builtin_isnan(parser, &primary_id) ||
             !minic_parser_parse_postfix(parser, primary_id, &primary_id))
             return false;
-        *handled = true;
-        return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
-    }
-    if (minic_parser_current_identifier_lexeme_equals_cstr(parser, "__builtin_isdigit")) {
-        if (!parse_builtin_unary(
-                parser, MINIC_BUILTIN_UNARY_ISDIGIT, "__builtin_isdigit", &primary_id) ||
-            !minic_parser_parse_postfix(parser, primary_id, &primary_id)) {
-            return false;
-        }
         *handled = true;
         return minic_parser_finish_value_expression(parser, primary_id, decay_array, expression_id);
     }

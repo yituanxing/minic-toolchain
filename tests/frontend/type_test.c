@@ -77,15 +77,16 @@ static int test_header_fixed_vector_xor_type(void) {
     if (!minic_type_add_const(vector_u8, &qualified) ||
         !minic_type_pointer_to(vector_u8, &pointer) ||
         minic_type_is_fixed_vector128_storage(pointer) ||
-        !minic_type_fixed_vector128_binary_result(vector_u8, qualified, &result) ||
+        !minic_type_is_fixed_vector128_storage(vector_u8) ||
+        !minic_type_fixed_vector_binary_result(vector_u8, qualified, &result) ||
         !minic_type_equal(result, vector_u8) ||
-        !minic_type_fixed_vector128_binary_result(qualified, vector_u8, &result) ||
+        !minic_type_fixed_vector_binary_result(qualified, vector_u8, &result) ||
         !minic_type_equal(result, vector_u8) ||
-        minic_type_fixed_vector128_binary_result(vector_u8, vector_u64, &result) ||
-        minic_type_fixed_vector128_binary_result(vector_u8, opaque, &result) ||
-        minic_type_fixed_vector128_binary_result(opaque, opaque, &result) ||
-        minic_type_fixed_vector128_binary_result(pointer, pointer, &result) ||
-        minic_type_fixed_vector128_binary_result(vector_u8, vector_u8, NULL) ||
+        minic_type_fixed_vector_binary_result(vector_u8, vector_u64, &result) ||
+        minic_type_fixed_vector_binary_result(vector_u8, opaque, &result) ||
+        minic_type_fixed_vector_binary_result(opaque, opaque, &result) ||
+        minic_type_fixed_vector_binary_result(pointer, pointer, &result) ||
+        minic_type_fixed_vector_binary_result(vector_u8, vector_u8, NULL) ||
         !minic_type_is_fixed_vector64_storage(vector_d) ||
         minic_type_is_fixed_vector64_storage(vector_u8) ||
         !minic_type_is_fixed_vector_register_storage(vector_u8) ||
@@ -189,12 +190,12 @@ int main(void)
     signed_long_type = minic_type_long();
     unsigned_long_type = minic_type_unsigned_long();
     if (!minic_type_is_integer(signed_long_type) ||
-        !minic_type_is_long_integer(signed_long_type) ||
+        signed_long_type.integer_rank != MINIC_INTEGER_RANK_LONG ||
         !minic_type_is_signed_integer(signed_long_type) ||
         minic_type_is_unsigned_integer(signed_long_type) ||
         minic_type_is_double(signed_long_type) ||
         !minic_type_is_integer(unsigned_long_type) ||
-        !minic_type_is_long_integer(unsigned_long_type) ||
+        unsigned_long_type.integer_rank != MINIC_INTEGER_RANK_LONG ||
         minic_type_is_signed_integer(unsigned_long_type) ||
         !minic_type_is_unsigned_integer(unsigned_long_type) ||
         minic_type_is_double(unsigned_long_type) ||
@@ -206,13 +207,13 @@ int main(void)
 
     if (!minic_type_add_const(signed_long_type, &const_long_type) ||
         !minic_type_is_const(const_long_type) ||
-        !minic_type_is_long_integer(const_long_type)) {
+        const_long_type.integer_rank != MINIC_INTEGER_RANK_LONG) {
         return fail("const long identity");
     }
 
     double_type = minic_type_double();
     if (!minic_type_is_double(double_type) || minic_type_is_integer(double_type) ||
-        minic_type_is_char_integer(double_type) || minic_type_is_long_integer(double_type) ||
+        minic_type_is_char_integer(double_type) ||
         minic_type_is_signed_integer(double_type) || minic_type_is_unsigned_integer(double_type) ||
         minic_type_is_void(double_type) || minic_type_is_record(double_type) ||
         minic_type_is_array(double_type) || minic_type_is_pointer(double_type) ||

@@ -10,56 +10,9 @@
 
 /* Static initializer constants, symbol and subobject relocations. */
 
-static bool token_starts_type_name(MinicTokenKind kind) {
-    return kind == MINIC_TOKEN_KW_CONST || kind == MINIC_TOKEN_KW_CHAR ||
-           kind == MINIC_TOKEN_KW_FLOAT || kind == MINIC_TOKEN_KW_DOUBLE ||
-           kind == MINIC_TOKEN_KW_INT || kind == MINIC_TOKEN_KW_LONG ||
-           kind == MINIC_TOKEN_KW_SIGNED || kind == MINIC_TOKEN_KW_UNSIGNED ||
-           kind == MINIC_TOKEN_KW_VOID || kind == MINIC_TOKEN_KW_STRUCT ||
-           kind == MINIC_TOKEN_IDENTIFIER;
-}
 
-bool minic_parser_parse_zero_pointer_constant(MinicParser *parser) {
-    if (parser->current.kind == MINIC_TOKEN_INTEGER_CONSTANT) {
-        int value;
 
-        if (!minic_parser_parse_integer_value(parser, &value)) {
-            return false;
-        }
-        if (value != 0) {
-            minic_parser_error(parser, "static pointer initializer must be null");
-            return false;
-        }
-        return true;
-    }
 
-    if (parser->current.kind == MINIC_TOKEN_LPAREN) {
-        MinicType cast_type;
-
-        if (!minic_parser_advance(parser)) {
-            return false;
-        }
-        if (token_starts_type_name(parser->current.kind)) {
-            if (!minic_parser_parse_type_name(parser, &cast_type) ||
-                !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after null cast") ||
-                !minic_type_is_pointer(cast_type)) {
-                if (parser->diagnostic != NULL && parser->diagnostic->message[0] == '\0') {
-                    minic_parser_error(parser, "static null cast requires a pointer type");
-                }
-                return false;
-            }
-            return minic_parser_parse_zero_pointer_constant(parser);
-        }
-        if (!minic_parser_parse_zero_pointer_constant(parser) ||
-            !minic_parser_expect(parser, MINIC_TOKEN_RPAREN, "expected ')' after null constant")) {
-            return false;
-        }
-        return true;
-    }
-
-    minic_parser_error(parser, "static pointer initializer must be null");
-    return false;
-}
 
 static bool static_pointer_expression_has_explicit_cast(const MinicC0Program *program,
                                                         MinicExpressionId expression_id) {

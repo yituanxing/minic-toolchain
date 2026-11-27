@@ -447,16 +447,6 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
-    "src/target/backend_core_usage.c": {
-      "blob": "78f326b119324c4c35e5b5227e03e3846239e51c",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
-    "src/target/backend_core_usage.h": {
-      "blob": "05ac6003112f9806796901b3459098a920190b18",
-      "review_depth": "inventory",
-      "ci_touched_in": []
-    },
     "src/target/backend.c": {
       "blob": "87b022695064b135f0731ede2b348646cea3acb1",
       "review_depth": "inventory",

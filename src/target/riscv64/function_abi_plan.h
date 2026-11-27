@@ -29,8 +29,7 @@ typedef struct MinicRiscv64FunctionAbiView {
     const MinicRiscv64CallPlanCache *outgoing_calls;
     bool validated;
 } MinicRiscv64FunctionAbiView;
-bool minic_riscv64_function_abi_view_from_prepared(
-    const MinicRiscv64FunctionAbiPlan *, MinicRiscv64FunctionAbiView *);
+
 bool minic_riscv64_function_abi_plan_build_profile(
     const MinicCoreFunction *,
     MinicRiscv64FunctionAbiPlan *, bool lp64_soft_float);

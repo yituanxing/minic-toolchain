@@ -377,19 +377,6 @@ bool minic_gnu_neon_inline_filter(const char *path, const char *source,
         return true; /* fail closed: retain unmodified source and old parser */
     }
     ok = index_wrappers(&scan, source) && mark_live(&scan, source);
-    if (getenv("MINIC_GNU_INLINE_FILTER_TRACE") != NULL) {
-        size_t live = 0U;
-        for (i = 0U; i < scan.function_count; ++i)
-            if (scan.functions[i].needed) {
-                MinicToken name = scan.tokens[scan.functions[i].name];
-                ++live;
-                (void)fprintf(stderr, "GNU_INLINE_LIVE %.*s\n",
-                              (int)(name.span.end.offset - name.span.begin.offset),
-                              source + name.span.begin.offset);
-            }
-        (void)fprintf(stderr, "GNU_INLINE_FILTER candidates=%zu live=%zu ok=%d tokens=%zu\n",
-                      scan.function_count, live, ok ? 1 : 0, scan.token_count);
-    }
     if (!ok) {
         free(scan.tokens); free(scan.functions); free(scan.slots); free(scan.options);
         return true; /* ambiguous duplicates, allocation or liveness: no skip */

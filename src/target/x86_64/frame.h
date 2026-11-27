@@ -24,19 +24,14 @@ typedef struct MinicX86Frame {
     const MinicCoreModule *module;
     size_t value_count;
     size_t *value_offsets;
-    /* Borrowed from the function's canonical use census while emitting
-     * its blocks. A NULL census retains the standalone emitter's
-     * conservative always-spill behavior. This is not a register allocator:
-     * live Core values still use their original ABI-safe frame slots. */
+    /* Exact immutable Core facts lent by the prepared FunctionPlan;
+     * the Machine selector must never redo CFG or SSA-use analysis. */
+    const bool *reachable_blocks;
     const size_t *function_value_use_counts;
     size_t *object_offsets;
-    MinicCoreObjectStoragePlan object_storage;
-    bool borrows_object_storage;
+    const MinicCoreObjectStoragePlan *object_storage; /* borrowed */
     MinicX86ArgumentPlan incoming_arguments;
     MinicX86OutgoingCallPlans outgoing_call_plans;
-    /* Borrowed for the duration of this function emission. Target machine
-     * location planning remains x86-owned and consumes semantic CALL views. */
-    const MinicCoreCallIndex *semantic_calls;
     size_t object_count;
     size_t frame_size;
     /* Before early x86 kernel page tables are installed, a .head.text C
@@ -77,7 +72,7 @@ typedef struct MinicX86Frame {
     /* SysV x86-64 va_list: gp_offset / fp_offset / overflow / reg_save.
      * Each va_start owns its own 24-byte cursor tag, while the incoming
      * argument registers have one shared 176-byte save area per function. */
-    MinicCoreValueId *varargs_results;
+    const MinicCoreValueId *varargs_results; /* borrowed from prepared Core facts */
     size_t varargs_count;
     size_t varargs_regsave_offset;
     size_t varargs_tag_base_offset;

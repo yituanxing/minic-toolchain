@@ -32,6 +32,10 @@ bool minic_c0_inline_asm_output_value_supported(
     const MinicC0Program *, const MinicTargetInvocation *,
     const MinicExpression *, const char *constraint, size_t constraint_length);
 
+bool minic_c0_integer_builtin_signature(MinicBuiltinUnaryOperator operator_kind,
+                                        MinicType *argument_type,
+                                        MinicType *result_type);
+
 /* Resolve enum compatibility before testing the effective integer sign. */
 bool minic_c0_integer_type_is_signed(const MinicC0Program *program, MinicType type);
 bool minic_c0_integer_assignment_value_type(const MinicC0Program *program,

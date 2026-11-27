@@ -293,31 +293,6 @@ static bool core_runtime_if_guard_preserves_locals_depth(
     return false;
 }
 
-static bool core_runtime_if_pure_local_guard(
-    const MinicCoreLowerContext *context, MinicExpressionId id) {
-    return core_runtime_if_guard_preserves_locals_depth(context, id, 0U);
-}
-
-static MinicCoreLocalIntegerConstant *core_runtime_if_copy_facts(
-    const MinicCoreLowerContext *context) {
-    MinicCoreLocalIntegerConstant *copy;
-    size_t count;
-
-    if (context == NULL || context->source_function == NULL ||
-        context->local_integer_constants == NULL) {
-        return NULL;
-    }
-    count = context->source_function->local_count;
-    if (count == 0U || count > SIZE_MAX / sizeof(*copy)) {
-        return NULL;
-    }
-    copy = (MinicCoreLocalIntegerConstant *)malloc(count * sizeof(*copy));
-    if (copy != NULL) {
-        (void)memcpy(copy, context->local_integer_constants,
-                     count * sizeof(*copy));
-    }
-    return copy;
-}
 
 static void core_runtime_if_merge_false_fallthrough(
     MinicCoreLowerContext *context,
@@ -343,17 +318,8 @@ static void core_runtime_if_merge_false_fallthrough(
               before->value.bits != after->value.bits))) {
             continue;
         }
-        context->local_integer_constants[i] = *before;
-        if (!then_terminated && after != NULL) {
-            context->local_integer_constants[i].specialization_modified =
-                before->specialization_modified ||
-                after->specialization_modified;
-            context->local_integer_constants[i].escaped =
-                before->escaped || after->escaped;
-            if (context->local_integer_constants[i].specialization_modified) {
-                context->local_integer_constants[i].specialization_known = false;
-            }
-        }
+        context->local_integer_constants[i] = then_terminated
+            ? *before : minic_core_local_fact_meet(before, after);
     }
 }
 MinicCoreLowerStatus
@@ -370,8 +336,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     MinicCoreBlockId else_continuation_block;
     MinicCoreBlockId continuation_block;
     MinicCoreLowerStatus status;
-    MinicCoreLocalIntegerConstant *fallthrough_facts = NULL;
-    MinicCoreLocalIntegerConstant *then_exit_facts = NULL;
+    bool preserve_false_fallthrough;
     MinicCoreLocalIntegerConstant *incoming_facts = NULL;
     MinicCoreLocalIntegerConstant *branch_entry_facts = NULL;
     MinicCoreLocalIntegerConstant *then_facts = NULL;
@@ -458,8 +423,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
     /* M182_TERMINATING_GUARD_FACTS: a pure terminating taken arm does not
        contribute state to the following statement. */
     preserve_guard_facts = false;
-    if (else_source == NULL && then_source->statement_count == 1U &&
-        minic_core_cfg_pure_call_argument(context, statement->expression, 0U)) {
+    if (else_source == NULL && then_source->statement_count == 1U && condition_is_pure) {
         const MinicStatement *guard_statement = minic_c0_program_statement(
             context->body->program, then_source->statements[0]);
         preserve_guard_facts =
@@ -468,54 +432,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
              guard_statement->kind == MINIC_STATEMENT_BREAK);
     }
 
-    /* MINIC_DMA_IF_TRACE_V0 */
-    if (getenv("MINIC_DMA_IF_TRACE") != NULL &&
-        context->source_function != NULL &&
-        context->source_function->name != NULL &&
-        strcmp(context->source_function->name, "dma_direct_alloc") == 0) {
-        MinicConstValue traced;
-        MinicLocalId traced_local = MINIC_LOCAL_INVALID;
-        size_t fact_idx = 0U;
-        bool local_read = minic_core_lower_direct_local_read(
-            context, statement->expression, &traced_local);
-        bool fact_local = local_read &&
-            minic_core_local_fact_index(context, traced_local, &fact_idx);
-        bool known = core_const_eval_integer_with_locals(
-            context, statement->expression, &traced);
-        (void)fprintf(stderr,
-            "DMA_IF_TRACE line=%zu expr_kind=%d read_local=%d local=%zu known=%d bits=%llu fact_known=%d escaped=%d stable=%d\\n",
-            statement->span.begin.line,
-            (int)condition_expression->kind, local_read ? 1 : 0,
-            (size_t)traced_local, known ? 1 : 0,
-            known ? (unsigned long long)traced.bits : 0ULL,
-            fact_local && context->local_integer_constants[fact_idx].known ? 1 : 0,
-            fact_local && context->local_integer_constants[fact_idx].escaped ? 1 : 0,
-            fact_local && context->local_integer_constants[fact_idx].program_zero_stable ? 1 : 0);
-    }
-    /* MINIC_SHMEM_IF_TRACE_V0 */
-    if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
-        context->source_function != NULL &&
-        context->source_function->name != NULL &&
-        strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
-        MinicConstValue traced;
-        MinicLocalId traced_local = MINIC_LOCAL_INVALID;
-        size_t fact_idx = 0U;
-        bool local_read = minic_core_lower_direct_local_read(
-            context, statement->expression, &traced_local);
-        bool fact_local = local_read &&
-            minic_core_local_fact_index(context, traced_local, &fact_idx);
-        bool known = core_const_eval_integer_with_locals(
-            context, statement->expression, &traced);
-        (void)fprintf(stderr,
-            "SHMEM_IF_TRACE line=%zu expr_kind=%d read_local=%d local=%zu known=%d bits=%llu fact_known=%d escaped=%d stable=%d\n",
-            statement->span.begin.line,
-            (int)condition_expression->kind, local_read ? 1 : 0,
-            (size_t)traced_local, known ? 1 : 0,
-            known ? (unsigned long long)traced.bits : 0ULL,
-            fact_local && context->local_integer_constants[fact_idx].known ? 1 : 0,
-            fact_local && context->local_integer_constants[fact_idx].escaped ? 1 : 0,
-            fact_local && context->local_integer_constants[fact_idx].program_zero_stable ? 1 : 0);
-    }
     /* BusyBox and ordinary GNU C intentionally leave impossible references in
        branches guarded by target constants such as sizeof comparisons and
        ENABLE_* macros.  GCC removes those branches before emission.  Preserve
@@ -539,8 +455,7 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             if ((minic_const_eval_integer(context->body->program,
                                           context->target,
                                           statement->expression, &condition_value) ||
-                 (minic_core_cfg_pure_call_argument(
-                      context, statement->expression, 0U) &&
+                 (condition_is_pure &&
                   !core_block_contains_inline_asm(context, then_source) &&
                   (else_source == NULL ||
                    !core_block_contains_inline_asm(context, else_source)) &&
@@ -571,27 +486,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
         }
     }
 
-    fallthrough_facts = NULL;
-    then_exit_facts = NULL;
-    if (else_source == NULL &&
-        core_runtime_if_pure_local_guard(context, statement->expression) &&
-        !core_block_contains_reentry_label(context, then_source)) {
-        fallthrough_facts = core_runtime_if_copy_facts(context);
-    }
-    if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
-        context->source_function != NULL &&
-        strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
-        size_t dbg_idx;
-        if (minic_core_local_fact_index(context, (MinicLocalId)10022U, &dbg_idx)) {
-            (void)fprintf(stderr, "SHMEM_IF_FLOW line=%zu edge=entry huge_known=%d val=%llu snap=%d pure=%d reentry=%d\n",
-               statement->span.begin.line,
-               context->local_integer_constants[dbg_idx].known ? 1 : 0,
-               (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,
-               fallthrough_facts != NULL ? 1 : 0,
-               core_runtime_if_pure_local_guard(context, statement->expression) ? 1 : 0,
-               core_block_contains_reentry_label(context, then_source) ? 1 : 0);
-        }
-    }
+    preserve_false_fallthrough = else_source == NULL &&
+        core_runtime_if_guard_preserves_locals_depth(context, statement->expression, 0U) &&
+        !core_block_contains_reentry_label(context, then_source);
     incoming_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && incoming_facts == NULL) {
@@ -637,9 +534,6 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
         goto if_facts_cleanup;
     }
     then_continuation_block = context->block_id;
-    if (fallthrough_facts != NULL) {
-        then_exit_facts = core_runtime_if_copy_facts(context);
-    }
     then_facts = minic_core_local_facts_snapshot(context);
     if (context->source_function != NULL &&
         context->source_function->local_count != 0U && then_facts == NULL) {
@@ -733,21 +627,9 @@ minic_core_lower_if(MinicCoreLowerContext *context, const MinicStatement *statem
             else_source == NULL ? branch_entry_facts : else_facts,
             else_source == NULL ? true : !else_terminated);
     }
-    if (else_source == NULL) {
+    if (preserve_false_fallthrough) {
         core_runtime_if_merge_false_fallthrough(
-            context, fallthrough_facts, then_exit_facts, then_terminated);
-    }
-    if (getenv("MINIC_SHMEM_IF_TRACE") != NULL &&
-        context->source_function != NULL &&
-        strcmp(context->source_function->name, "shmem_alloc_and_acct_folio") == 0) {
-        size_t dbg_idx;
-        if (minic_core_local_fact_index(context, (MinicLocalId)10022U, &dbg_idx)) {
-            (void)fprintf(stderr, "SHMEM_IF_FLOW line=%zu edge=merge huge_known=%d val=%llu terminated=%d\n",
-                statement->span.begin.line,
-                context->local_integer_constants[dbg_idx].known ? 1 : 0,
-                (unsigned long long)context->local_integer_constants[dbg_idx].value.bits,
-                then_terminated ? 1 : 0);
-        }
+            context, incoming_facts, then_facts, then_terminated);
     }
     *terminated = !needs_merge;
     status = MINIC_CORE_LOWER_OK;
@@ -759,8 +641,6 @@ if_facts_cleanup:
     free(else_facts);
     free(then_facts);
     free(branch_entry_facts);
-    free(then_exit_facts);
-    free(fallthrough_facts);
     free(incoming_facts);
     return status;
 }

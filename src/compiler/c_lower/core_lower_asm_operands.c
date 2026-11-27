@@ -219,7 +219,6 @@ static const char *core_inline_asm_symbolic_immediate_name(
 }
 
 
-
 static bool core_inline_asm_parameter_index(
     const MinicCoreLowerContext *context,
     MinicLocalId local_id,
@@ -703,16 +702,9 @@ static bool core_inline_asm_symbolic_address_depth(
     if (expression == NULL) {
         return false;
     }
-    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT) {
-        const MinicGlobalObject *object =
-            minic_c0_program_global_object(program, expression->value.global_object_id);
-        if (object == NULL || object->name == NULL || object->name_length == 0U) {
-            return false;
-        }
-        *symbol = object->name;
-        *addend = 0;
-        return true;
-    }
+    if (expression->kind == MINIC_EXPRESSION_GLOBAL_OBJECT)
+        return core_inline_asm_symbolic_lvalue_address(
+            context, expression_id, symbol, addend, depth);
     if (expression->kind == MINIC_EXPRESSION_FUNCTION) {
         const MinicFunction *function =
             minic_c0_program_function(program, expression->value.function_id);
@@ -918,13 +910,6 @@ static bool core_inline_asm_local_integer_fact_depth(
     return false;
 }
 
-static bool core_inline_asm_local_integer_fact(
-    const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id,
-    MinicConstValue *value) {
-    return core_inline_asm_local_integer_fact_depth(context, expression_id, value, 0U);
-}
-
 
 static const char *core_inline_asm_specialized_symbolic_name_depth(
     const MinicCoreLowerContext *context,
@@ -985,11 +970,6 @@ static const char *core_inline_asm_specialized_symbolic_name_depth(
         specialized->specialization_symbolic_expression[parameter_index]);
 }
 
-static const char *core_inline_asm_specialized_symbolic_name(
-    const MinicCoreLowerContext *context,
-    MinicExpressionId expression_id) {
-    return core_inline_asm_specialized_symbolic_name_depth(context, expression_id, 0U);
-}
 
 bool core_inline_asm_immediate_fact(
     const MinicCoreLowerContext *context,
@@ -1010,32 +990,25 @@ bool core_inline_asm_immediate_fact(
          !core_inline_asm_constraint_is(operand, "rK"))) {
         return false;
     }
-    if ((minic_const_eval_integer(
+    /* Try an ordinary constant fact first; specialization remains a fallback
+     * when the ordinary value cannot satisfy the target immediate constraint. */
+    if (((minic_const_eval_integer(
              context->body->program, context->target, operand->expression, &constant) ||
-         core_inline_asm_local_integer_fact(context, operand->expression, &constant)) &&
+         core_inline_asm_local_integer_fact_depth(context, operand->expression, &constant, 0U)) &&
         minic_const_value_as_int64(
             context->body->program, context->target, &constant, &value) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
          (value >= 0 && value <= 31)) &&
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
-             context->target, "I", 1U, value))) {
-        *is_symbol = false;
-        *integer = value;
-        *symbol = NULL;
-        *byte_addend = 0;
-        return true;
-    }
-    /* Compute expressions such as `1 << (feature & 7)` and `feature >> 3`
-     * after transitive inline specialization. This path is also used by
-     * relocatable-symbol indexing, and never fabricates an unknown value. */
-    if (core_inline_asm_specialized_integer(
+             context->target, "I", 1U, value))) ||
+        (core_inline_asm_specialized_integer(
             context, operand->expression, &value, 0U) &&
         (!core_inline_asm_constraint_is(operand, "rK") ||
          (value >= 0 && value <= 31)) &&
         (!core_inline_asm_constraint_is(operand, "I") ||
          minic_target_info_inline_asm_immediate_constraint_supported(
-             context->target, "I", 1U, value))) {
+             context->target, "I", 1U, value)))) {
         *is_symbol = false;
         *integer = value;
         *symbol = NULL;
@@ -1059,8 +1032,8 @@ bool core_inline_asm_immediate_fact(
         resolved_symbol = core_inline_asm_symbolic_immediate_name(
             context->body->program, context->target, operand->expression);
         if (resolved_symbol == NULL)
-            resolved_symbol = core_inline_asm_specialized_symbolic_name(
-                context, operand->expression);
+            resolved_symbol = core_inline_asm_specialized_symbolic_name_depth(
+                context, operand->expression, 0U);
     }
     if (!minic_core_inline_asm_symbol_valid(resolved_symbol)) return false;
     *is_symbol = true;
@@ -1184,254 +1157,105 @@ static bool core_inline_asm_immediate_reference(
     return true;
 }
 
-static bool core_inline_asm_specialized_length(const MinicInlineAsm *source,
-                                               const size_t *replacement_lengths,
-                                               size_t *specialized_length) {
-    size_t cursor;
-    size_t output_length;
-
-    if (source == NULL || source->template_text == NULL || replacement_lengths == NULL ||
-        specialized_length == NULL) {
-        return false;
-    }
-    cursor = 0U;
-    output_length = 0U;
+/* The same token walk measures and emits text. A NULL output performs
+ * the overflow-checked sizing pass without copying. */
+static bool core_inline_asm_render_immediates(
+    const MinicInlineAsm *source, bool register_output,
+    const char *const *replacements, const size_t *replacement_lengths,
+    char *output, size_t capacity, size_t *length) {
+    size_t cursor = 0U, used = 0U;
     while (cursor < source->template_length) {
-        size_t replacement_index;
-        size_t consumed;
-
-        if (source->template_text[cursor] != '%') {
-            if (output_length == SIZE_MAX) {
-                return false;
+        size_t consumed = 1U, count = 1U, index = 0U;
+        const char *text = source->template_text + cursor;
+        if (*text == '%') {
+            if (cursor + 1U >= source->template_length) return false;
+            if (text[1] == '%') {
+                consumed = 2U;
+            } else if (!register_output) {
+                if (!core_inline_asm_immediate_reference(source, cursor, &index, &consumed))
+                    return false;
+                text = replacements[index];
+                count = replacement_lengths[index];
+            } else {
+                bool bare = text[1] == 'c';
+                const size_t position = bare ? 2U : 1U;
+                char digit;
+                if (position >= source->template_length - cursor) return false;
+                digit = text[position];
+                if (digit < '0' || digit > '9') return false;
+                consumed = position + 1U;
+                index = (size_t)(digit - '0');
+                if (index == 0U) {
+                    if (bare) return false;
+                    count = 2U;
+                } else {
+                    --index;
+                    if (index >= source->input_count) return false;
+                    text = replacements[index];
+                    count = replacement_lengths[index];
+                }
             }
-            output_length += 1U;
-            cursor += 1U;
-            continue;
         }
-        if (cursor + 1U >= source->template_length) {
-            return false;
+        if (count > SIZE_MAX - used) return false;
+        if (output != NULL) {
+            if (used > capacity || count > capacity - used) return false;
+            (void)memcpy(output + used, text, count);
         }
-        if (source->template_text[cursor + 1U] == '%') {
-            if (output_length == SIZE_MAX) {
-                return false;
-            }
-            output_length += 1U;
-            cursor += 2U;
-            continue;
-        }
-        if (!core_inline_asm_immediate_reference(
-                source, cursor, &replacement_index, &consumed) ||
-            output_length > SIZE_MAX - replacement_lengths[replacement_index])
-            return false;
-        output_length += replacement_lengths[replacement_index];
+        used += count;
         cursor += consumed;
     }
-    *specialized_length = output_length;
+    *length = used;
     return true;
 }
 
-bool core_inline_asm_specialize_immediates(const MinicCoreLowerContext *context,
-                                                  const MinicInlineAsm *source,
-                                                  char **template_out,
-                                                  size_t *template_length_out) {
+static bool specialize_immediate_template(const MinicCoreLowerContext *context,
+    const MinicInlineAsm *source, bool register_output,
+    char **template_out, size_t *template_length_out) {
     char integer_text[MINIC_CORE_IMMEDIATE_ASM_LIMIT][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
     const char *replacements[MINIC_CORE_IMMEDIATE_ASM_LIMIT];
     size_t replacement_lengths[MINIC_CORE_IMMEDIATE_ASM_LIMIT];
-    size_t input_index;
-    size_t specialized_length;
-    size_t cursor;
-    size_t output_cursor;
-    char *specialized;
-
-    if (context == NULL || source == NULL || template_out == NULL ||
-        template_length_out == NULL || source->input_count == 0U ||
-        source->input_count > MINIC_CORE_IMMEDIATE_ASM_LIMIT || source->inputs == NULL) {
-        return false;
-    }
-    for (input_index = 0U; input_index < source->input_count; ++input_index) {
-        if (!core_inline_asm_immediate_text(context,
-                                            &source->inputs[input_index],
-                                            integer_text[input_index],
-                                            sizeof(integer_text[input_index]),
-                                            &replacements[input_index],
-                                            &replacement_lengths[input_index])) {
-            return false;
-        }
-    }
-    if (!core_inline_asm_specialized_length(source, replacement_lengths, &specialized_length) ||
-        specialized_length == SIZE_MAX) {
-        return false;
-    }
-    specialized = (char *)malloc(specialized_length + 1U);
-    if (specialized == NULL) {
-        return false;
-    }
-    cursor = 0U;
-    output_cursor = 0U;
-    while (cursor < source->template_length) {
-        size_t replacement_index;
-        size_t consumed;
-
-        if (source->template_text[cursor] != '%') {
-            specialized[output_cursor++] = source->template_text[cursor++];
-            continue;
-        }
-        if (source->template_text[cursor + 1U] == '%') {
-            specialized[output_cursor++] = '%';
-            cursor += 2U;
-            continue;
-        }
-        if (!core_inline_asm_immediate_reference(
-                source, cursor, &replacement_index, &consumed)) {
-            free(specialized);
-            return false;
-        }
-        (void)memcpy(specialized + output_cursor,
-                     replacements[replacement_index],
-                     replacement_lengths[replacement_index]);
-        output_cursor += replacement_lengths[replacement_index];
-        cursor += consumed;
-    }
-    specialized[output_cursor] = '\0';
-    if (output_cursor != specialized_length) {
-        free(specialized);
-        return false;
-    }
-    *template_out = specialized;
-    *template_length_out = specialized_length;
-    return true;
-}
-
-/* BATCH_I_REGISTER_OUTPUT_IMMEDIATE_SPECIALIZATION: a value-producing
-   asm may have one runtime register output plus compile-time-only immediate
-   inputs. Preserve %0 for the output and bake %1..%9 / GNU %c1..%c9 into
-   target text using the existing i/I constant/symbol resolver. The `c`
-   modifier suppresses a target immediate prefix; Core's normalized text
-   already has no such prefix. No target instruction meaning is introduced. */
-bool core_inline_asm_specialize_register_output_immediates(
-    const MinicCoreLowerContext *context,
-    const MinicInlineAsm *source,
-    char **template_out,
-    size_t *template_length_out) {
-    char integer_text[MINIC_CORE_IMMEDIATE_ASM_LIMIT][MINIC_CORE_IMMEDIATE_TEXT_LIMIT];
-    const char *replacements[MINIC_CORE_IMMEDIATE_ASM_LIMIT];
-    size_t replacement_lengths[MINIC_CORE_IMMEDIATE_ASM_LIMIT];
-    size_t input_index;
-    size_t cursor;
-    size_t output_length;
-    size_t output_cursor;
+    size_t index, length, written;
     char *specialized;
 
     if (context == NULL || source == NULL || template_out == NULL ||
         template_length_out == NULL || source->template_text == NULL ||
-        source->template_length == 0U || source->output_count != 1U ||
-        source->input_count == 0U || source->input_count > 9U ||
-        source->input_count > MINIC_CORE_IMMEDIATE_ASM_LIMIT || source->inputs == NULL) {
+        source->input_count == 0U || source->input_count > MINIC_CORE_IMMEDIATE_ASM_LIMIT ||
+        source->inputs == NULL ||
+        (register_output && (source->template_length == 0U ||
+                            source->output_count != 1U || source->input_count > 9U)))
         return false;
-    }
-    for (input_index = 0U; input_index < source->input_count; ++input_index) {
-        if (!core_inline_asm_immediate_text(context,
-                                            &source->inputs[input_index],
-                                            integer_text[input_index],
-                                            sizeof(integer_text[input_index]),
-                                            &replacements[input_index],
-                                            &replacement_lengths[input_index])) {
+    for (index = 0U; index < source->input_count; ++index)
+        if (!core_inline_asm_immediate_text(context, &source->inputs[index],
+                integer_text[index], sizeof(integer_text[index]),
+                &replacements[index], &replacement_lengths[index]))
             return false;
-        }
-    }
-
-    cursor = 0U;
-    output_length = 0U;
-    while (cursor < source->template_length) {
-        size_t operand_index;
-        size_t operand_width = 2U;
-        bool bare_immediate = false;
-        char digit;
-
-        if (source->template_text[cursor] != '%') {
-            if (output_length == SIZE_MAX) return false;
-            output_length += 1U;
-            cursor += 1U;
-            continue;
-        }
-        if (cursor + 1U >= source->template_length) return false;
-        if (source->template_text[cursor + 1U] == '%') {
-            if (output_length == SIZE_MAX) return false;
-            output_length += 1U;
-            cursor += 2U;
-            continue;
-        }
-        digit = source->template_text[cursor + 1U];
-        if (digit == 'c') {
-            if (cursor + 2U >= source->template_length) return false;
-            digit = source->template_text[cursor + 2U];
-            operand_width = 3U;
-            bare_immediate = true;
-        }
-        if (digit < '0' || digit > '9') {
-            return false;
-        }
-        operand_index = (size_t)(digit - '0');
-        if (operand_index == 0U) {
-            if (bare_immediate) return false; /* Output %0 is a register. */
-            if (output_length > SIZE_MAX - 2U) return false;
-            output_length += 2U;
-        } else {
-            input_index = operand_index - 1U;
-            if (input_index >= source->input_count ||
-                output_length > SIZE_MAX - replacement_lengths[input_index]) {
-                return false;
-            }
-            output_length += replacement_lengths[input_index];
-        }
-        cursor += operand_width;
-    }
-    if (output_length == SIZE_MAX) return false;
-    specialized = (char *)malloc(output_length + 1U);
+    if (!core_inline_asm_render_immediates(source, register_output, replacements,
+            replacement_lengths, NULL, 0U, &length) || length == SIZE_MAX)
+        return false;
+    specialized = malloc(length + 1U);
     if (specialized == NULL) return false;
-
-    cursor = 0U;
-    output_cursor = 0U;
-    while (cursor < source->template_length) {
-        size_t operand_index;
-        size_t operand_width = 2U;
-        char digit;
-
-        if (source->template_text[cursor] != '%') {
-            specialized[output_cursor++] = source->template_text[cursor++];
-            continue;
-        }
-        if (source->template_text[cursor + 1U] == '%') {
-            specialized[output_cursor++] = '%';
-            cursor += 2U;
-            continue;
-        }
-        digit = source->template_text[cursor + 1U];
-        if (digit == 'c') {
-            digit = source->template_text[cursor + 2U]; /* Checked above. */
-            operand_width = 3U;
-        }
-        operand_index = (size_t)(digit - '0');
-        if (operand_index == 0U) {
-            specialized[output_cursor++] = '%';
-            specialized[output_cursor++] = '0';
-        } else {
-            input_index = operand_index - 1U;
-            (void)memcpy(specialized + output_cursor,
-                         replacements[input_index],
-                         replacement_lengths[input_index]);
-            output_cursor += replacement_lengths[input_index];
-        }
-        cursor += operand_width;
-    }
-    specialized[output_cursor] = '\0';
-    if (output_cursor != output_length) {
+    if (!core_inline_asm_render_immediates(source, register_output, replacements,
+            replacement_lengths, specialized, length, &written) || written != length) {
         free(specialized);
         return false;
     }
+    specialized[length] = '\0';
     *template_out = specialized;
-    *template_length_out = output_length;
+    *template_length_out = length;
     return true;
+}
+
+bool core_inline_asm_specialize_immediates(const MinicCoreLowerContext *context,
+                                          const MinicInlineAsm *source,
+                                          char **template_out,
+                                          size_t *template_length_out) {
+    return specialize_immediate_template(context, source, false, template_out, template_length_out);
+}
+
+bool core_inline_asm_specialize_register_output_immediates(
+    const MinicCoreLowerContext *context, const MinicInlineAsm *source,
+    char **template_out, size_t *template_length_out) {
+    return specialize_immediate_template(context, source, true, template_out, template_length_out);
 }
 
 /* M67_STRUCTURED_MULTI_OPERAND_INLINE_ASM: normalize GNU named operand

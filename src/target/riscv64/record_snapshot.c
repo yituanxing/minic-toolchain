@@ -36,54 +36,6 @@ static bool core_instruction_block_position(const MinicCoreFunction *function,
     return found;
 }
 
-static bool core_call_argument_object_use_count(const MinicCoreFunction *function,
-                                                MinicCoreObjectId object_id,
-                                                MinicCoreInstructionId target_call,
-                                                size_t *total_uses,
-                                                size_t *target_uses) {
-    size_t instruction_index;
-    size_t total = 0U;
-    size_t target = 0U;
-
-    if (function == NULL || total_uses == NULL || target_uses == NULL) {
-        return false;
-    }
-    for (instruction_index = 0U; instruction_index < function->instruction_count;
-         ++instruction_index) {
-        const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
-        size_t begin;
-        size_t count;
-        size_t i;
-
-        if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
-            begin = instruction->value.call.argument_begin;
-            count = instruction->value.call.argument_count;
-        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
-            begin = instruction->value.indirect_call.argument_begin;
-            count = instruction->value.indirect_call.argument_count;
-        } else {
-            continue;
-        }
-        if (begin > function->call_argument_count ||
-            count > function->call_argument_count - begin) {
-            return false;
-        }
-        for (i = 0U; i < count; ++i) {
-            const MinicCoreCallArgument *argument = &function->call_arguments[begin + i];
-            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
-                argument->value.object_id == object_id) {
-                ++total;
-                if (instruction_index == target_call) {
-                    ++target;
-                }
-            }
-        }
-    }
-    *total_uses = total;
-    *target_uses = target;
-    return true;
-}
-
 static bool core_record_snapshot_single_call_candidate(
     const MinicCoreFunction *function,
     MinicCoreObjectId candidate,
@@ -91,26 +43,23 @@ static bool core_record_snapshot_single_call_candidate(
     MinicCoreInstructionId producer = MINIC_CORE_INSTRUCTION_INVALID;
     size_t producer_count = 0U;
     size_t instruction_index;
-    size_t total_call_uses;
-    size_t target_call_uses;
+    size_t total_call_uses = 0U;
+    size_t target_call_uses = 0U;
     size_t producer_block;
     size_t producer_position;
     size_t call_block;
     size_t call_position;
 
     if (function == NULL || candidate >= function->object_count ||
-        target_call >= function->instruction_count ||
-        !core_call_argument_object_use_count(function,
-                                             candidate,
-                                             target_call,
-                                             &total_call_uses,
-                                             &target_call_uses) ||
-        total_call_uses != 1U || target_call_uses != 1U) {
+        target_call >= function->instruction_count) {
         return false;
     }
     for (instruction_index = 0U; instruction_index < function->instruction_count;
          ++instruction_index) {
         const MinicCoreInstruction *instruction = &function->instructions[instruction_index];
+        size_t begin = 0U;
+        size_t count = 0U;
+        size_t i;
 
         if (instruction->kind == MINIC_CORE_INSTRUCTION_PARAMETER_OBJECT &&
             instruction->value.parameter_object.object_id == candidate) {
@@ -133,7 +82,30 @@ static bool core_record_snapshot_single_call_candidate(
             instruction->value.indirect_call.result_object == candidate) {
             return false;
         }
+        if (instruction->kind == MINIC_CORE_INSTRUCTION_CALL) {
+            begin = instruction->value.call.argument_begin;
+            count = instruction->value.call.argument_count;
+        } else if (instruction->kind == MINIC_CORE_INSTRUCTION_INDIRECT_CALL) {
+            begin = instruction->value.indirect_call.argument_begin;
+            count = instruction->value.indirect_call.argument_count;
+        } else {
+            continue;
+        }
+        if (begin > function->call_argument_count ||
+            count > function->call_argument_count - begin) {
+            return false;
+        }
+        for (i = 0U; i < count; ++i) {
+            const MinicCoreCallArgument *argument =
+                &function->call_arguments[begin + i];
+            if (argument->kind == MINIC_CORE_CALL_ARGUMENT_OBJECT &&
+                argument->value.object_id == candidate) {
+                ++total_call_uses;
+                if (instruction_index == target_call) ++target_call_uses;
+            }
+        }
     }
+    if (total_call_uses != 1U || target_call_uses != 1U) return false;
     if (producer_count != 1U || producer == MINIC_CORE_INSTRUCTION_INVALID ||
         !core_instruction_block_position(function,
                                          producer,

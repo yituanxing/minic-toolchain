@@ -348,16 +348,16 @@ bool minic_parser_visibility_from_name(const char *name, size_t length,
     return false;
 }
 
-static bool parse_object_visibility_argument(MinicParser *parser,
-                                             const MinicParsedAttribute *attribute,
-                                             MinicSymbolVisibility *visibility) {
+static bool parse_plain_attribute_string(MinicParser *parser,
+                                         const MinicParsedAttribute *attribute,
+                                         const char **value, size_t *value_length,
+                                         const char *missing, const char *escaped,
+                                         const char *unterminated, const char *extra) {
     size_t cursor;
     size_t end;
     size_t value_begin;
-    size_t value_length;
-    const char *value;
 
-    if (parser == NULL || attribute == NULL || visibility == NULL || !attribute->has_arguments ||
+    if (parser == NULL || attribute == NULL || value == NULL || value_length == NULL || !attribute->has_arguments ||
         attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
         return false;
     }
@@ -369,24 +369,24 @@ static bool parse_object_visibility_argument(MinicParser *parser,
         cursor += 1U;
     }
     if (cursor >= end || parser->source[cursor] != '"') {
-        minic_parser_error(parser, "GNU visibility attribute requires one string literal");
+        minic_parser_error(parser, "%s", missing);
         return false;
     }
     cursor += 1U;
     value_begin = cursor;
     while (cursor < end && parser->source[cursor] != '"') {
         if (parser->source[cursor] == '\\') {
-            minic_parser_error(parser, "escaped GNU visibility values are not supported yet");
+            minic_parser_error(parser, "%s", escaped);
             return false;
         }
         cursor += 1U;
     }
     if (cursor >= end || parser->source[cursor] != '"') {
-        minic_parser_error(parser, "unterminated GNU visibility value");
+        minic_parser_error(parser, "%s", unterminated);
         return false;
     }
-    value_length = cursor - value_begin;
-    value = parser->source + value_begin;
+    *value_length = cursor - value_begin;
+    *value = parser->source + value_begin;
     cursor += 1U;
     while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
                             parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
@@ -394,9 +394,22 @@ static bool parse_object_visibility_argument(MinicParser *parser,
         cursor += 1U;
     }
     if (cursor != end) {
-        minic_parser_error(parser, "GNU visibility attribute requires exactly one string literal");
+        minic_parser_error(parser, "%s", extra);
         return false;
     }
+    return true;
+}
+
+static bool parse_object_visibility_argument(MinicParser *parser,
+                                             const MinicParsedAttribute *attribute,
+                                             MinicSymbolVisibility *visibility) {
+    const char *value;
+    size_t value_length;
+    if (visibility == NULL || !parse_plain_attribute_string(parser, attribute, &value, &value_length,
+            "GNU visibility attribute requires one string literal",
+            "escaped GNU visibility values are not supported yet",
+            "unterminated GNU visibility value",
+            "GNU visibility attribute requires exactly one string literal")) return false;
     if (!minic_parser_visibility_from_name(value, value_length, visibility)) {
         minic_parser_error(parser, "unsupported GNU visibility value");
         return false;
@@ -428,49 +441,16 @@ static bool apply_object_visibility_attribute(MinicParser *parser,
 static bool resolve_object_alias_attribute(MinicParser *parser,
                                            const MinicParsedAttribute *attribute,
                                            MinicGlobalObjectId *target_id) {
-    size_t cursor;
-    size_t end;
-    size_t name_begin;
+    const char *name;
     size_t name_length;
     size_t index;
 
-    if (parser == NULL || attribute == NULL || target_id == NULL ||
-        !attribute->has_arguments ||
-        attribute->arguments_span.end.offset <= attribute->arguments_span.begin.offset + 1U) {
-        return false;
-    }
-    cursor = attribute->arguments_span.begin.offset + 1U;
-    end = attribute->arguments_span.end.offset - 1U;
-    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
-                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
-                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
-        cursor += 1U;
-    }
-    if (cursor >= end || parser->source[cursor] != '"') {
-        minic_parser_error(parser, "GNU object alias requires one string literal target");
-        return false;
-    }
-    cursor += 1U;
-    name_begin = cursor;
-    while (cursor < end && parser->source[cursor] != '"') {
-        if (parser->source[cursor] == '\\') {
-            minic_parser_error(parser, "escaped GNU object alias targets are not supported");
-            return false;
-        }
-        cursor += 1U;
-    }
-    if (cursor >= end || parser->source[cursor] != '"') {
-        minic_parser_error(parser, "unterminated GNU object alias target");
-        return false;
-    }
-    name_length = cursor - name_begin;
-    cursor += 1U;
-    while (cursor < end && (parser->source[cursor] == ' ' || parser->source[cursor] == '\t' ||
-                            parser->source[cursor] == '\n' || parser->source[cursor] == '\r' ||
-                            parser->source[cursor] == '\f' || parser->source[cursor] == '\v')) {
-        cursor += 1U;
-    }
-    if (cursor != end || name_length == 0U) {
+    if (target_id == NULL || !parse_plain_attribute_string(parser, attribute, &name, &name_length,
+            "GNU object alias requires one string literal target",
+            "escaped GNU object alias targets are not supported",
+            "unterminated GNU object alias target",
+            "GNU object alias requires exactly one string literal target")) return false;
+    if (name_length == 0U) {
         minic_parser_error(parser, "GNU object alias requires exactly one string literal target");
         return false;
     }
@@ -479,7 +459,7 @@ static bool resolve_object_alias_attribute(MinicParser *parser,
 
         candidate = minic_c0_program_global_object(parser->program, index);
         if (candidate != NULL && candidate->name_length == name_length &&
-            memcmp(candidate->name, parser->source + name_begin, name_length) == 0) {
+            memcmp(candidate->name, name, name_length) == 0) {
             *target_id = index;
             return true;
         }

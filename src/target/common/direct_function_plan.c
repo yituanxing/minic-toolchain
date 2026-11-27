@@ -40,7 +40,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
         return false;
     name = module_decl->name;
     if (!minic_multi_direct_lp64_function_preflight(
-            module_decl, fn, facts, architecture_name, name,
+            module_decl, fn, facts,
             qualify_opaque_asm, abi))
         return false;
     profile_result = minic_multi_direct_lp64_profile_function(
@@ -53,7 +53,7 @@ bool minic_multi_direct_lp64_function_plan_prepare(
                 ? "variadic_preflight" : "function_preflight";
         return false;
     }
-    machine_frame->variadic_count = profile.variadic_address_count;
+    machine_frame->variadic_count = facts->variadic_address_count;
     machine_frame->variadic_gp_count = profile.fixed_gp_count;
     machine_frame->variadic_fp_count = profile.fixed_fp_count;
     machine_frame->has_dynamic_stack = profile.has_dynamic_stack;
@@ -100,18 +100,13 @@ bool minic_multi_direct_lp64_function_plan_prepare(
 
     /* Preserve the target's hidden result pointer across nested calls.
      * The target supplies the ABI return classifier, not Core or Common. */
-    if (minic_lp64_core_kind(fn->type_context,
-            minic_core_function_return_type(fn), MINIC_CORE_TYPE_RECORD) &&
-        abi->core_indirect_return != NULL) {
-        size_t result_bytes = 0U;
-        if (abi->core_indirect_return(fn->type_context,
-                minic_core_function_return_type(fn), &result_bytes) && result_bytes > 16U) {
-            if (!minic_core_frame_reserve(&object_end, 8U, 8U,
-                                          MINIC_LARGE_FRAME_MAX,
-                                          &machine_frame->indirect_return_offset))
-                return false;
-            machine_frame->has_indirect_return = true;
-        }
+    if (minic_lp64_core_indirect_result(fn->type_context,
+            minic_core_function_return_type(fn), abi->core_indirect_return)) {
+        if (!minic_core_frame_reserve(&object_end, 8U, 8U,
+                                      MINIC_LARGE_FRAME_MAX,
+                                      &machine_frame->indirect_return_offset))
+            return false;
+        machine_frame->has_indirect_return = true;
     }
 
     /* One checked CALL traversal performs admission and ABI placement.

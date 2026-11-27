@@ -8,15 +8,6 @@
 
 #include "target/riscv/isa_features.h"
 
-/* A small target-owned instruction-family selector. Call only for reachable
- * Core instructions, after frame/ABI planning and before emitting machine
- * bytes. Unknown auxiliary opcodes are still audited in the final assembler
- * stream. This selection has no cost in the historical default path. */
-#include "core/core_ir.h"
-bool minic_riscv_isa_admit_core_instruction(
-    const MinicRiscvIsa *isa, const MinicCoreFunction *function,
-    const MinicCoreInstruction *instruction, char *reason, size_t capacity);
-
 /* Source-owned inline/file asm is always provenance tagged (comment-only).
  * MiniC-generated machine instructions are audited independently against
  * selected ISA capabilities. GNU AS is authoritative for source instructions
