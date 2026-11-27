@@ -393,13 +393,6 @@ static void core_invalidate_loop_mutated_specialization_facts(
         may_mutate = modified == NULL || modified[index] != 0U;
         if (may_mutate) {
             minic_core_local_fact_invalidate(context, local_id);
-            if (getenv("MINIC_LOOP_MUTATED_FACT_TRACE") != NULL) {
-                (void)fprintf(stderr,
-                              "LOOP_SPECIALIZATION_FACT_KILL function=%s local=%zu\n",
-                              context->source_function->name != NULL
-                                  ? context->source_function->name : "?",
-                              (size_t)local_id);
-            }
         }
     }
 }

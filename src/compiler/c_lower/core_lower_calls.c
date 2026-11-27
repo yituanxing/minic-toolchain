@@ -365,26 +365,6 @@ static const MinicFunction *core_select_direct_call_specialization(
             best_exact_symbolic = exact_symbolic;
         }
     }
-    if (best != source_callee) {
-        const char *caller_name = context->source_function != NULL &&
-            context->source_function->name != NULL
-                ? context->source_function->name : "?";
-        const char *from_name = source_callee->name != NULL
-                                   ? source_callee->name : "?";
-        const char *to_name = best->name != NULL ? best->name : "?";
-        if (getenv("MINIC_INLINE_SPEC_TRANSITIVE_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_TRANSITIVE_SELECT caller=%s from=%s to=%s known=%zu\n",
-                caller_name, from_name, to_name, best_integer);
-        if (getenv("MINIC_INLINE_SPEC_SYMBOLIC_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_SYMBOLIC_SELECT caller=%s from=%s to=%s symbols=%zu\n",
-                caller_name, from_name, to_name, best_symbolic);
-        if (getenv("MINIC_INLINE_SPEC_BOOLEAN_TRACE") != NULL)
-            (void)fprintf(stderr,
-                "INLINE_SPEC_BOOLEAN_SELECT caller=%s from=%s to=%s ranges=%zu\n",
-                caller_name, from_name, to_name, best_boolean);
-    }
     return best;
 }
 
