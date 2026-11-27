@@ -55,6 +55,8 @@ bool minic_core_function_facts_analyze(
                 (*variadic_results)[n] = instruction->result;
             }
             ++facts->variadic_address_count;
+            if (!instruction->value.variadic_address.copy_destination)
+                ++facts->variadic_start_count;
             break;
         default:
             break;

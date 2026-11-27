@@ -19,6 +19,7 @@ typedef struct MinicCoreFunctionFacts {
     const bool *reachable_blocks;
     const size_t *value_use_counts;
     size_t variadic_address_count;
+    size_t variadic_start_count;
     /* Visitor-owned checked va_start result slots; NULL when count is zero. */
     const MinicCoreValueId *variadic_address_results;
     bool needs_saved_return_address;
@@ -33,7 +34,7 @@ static inline bool minic_core_function_facts_verified(
            facts->verified_function == function;
 }
 
-/* One checked scan collects Core facts and all va_start result IDs.
+/* One checked scan collects Core facts, va_start counts, and all result IDs.
  * Caller owns *variadic_results, initially NULL. */
 bool minic_core_function_facts_analyze(
     const MinicCoreFunction *, MinicCoreFunctionFacts *,

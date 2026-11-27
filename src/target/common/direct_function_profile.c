@@ -13,7 +13,7 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
     const MinicCoreFunctionFacts *facts,
     const MinicDirectLP64AbiPolicy *abi,
     MinicLP64ArgumentPlan *incoming, MinicDirectLP64FunctionProfile *profile) {
-    size_t i, starts = 0U, cursors = 0U;
+    size_t i, starts, cursors;
 
     if (fn == NULL || fn->type_context == NULL || facts == NULL ||
         incoming == NULL || profile == NULL ||
@@ -23,6 +23,8 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
         abi->core_indirect_record == NULL ||
         abi->core_indirect_return == NULL)
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
+    starts = facts->variadic_start_count;
+    cursors = facts->variadic_address_count;
     (void)memset(profile, 0, sizeof(*profile));
     profile->variadic_address_count = facts->variadic_address_count;
     profile->has_dynamic_stack = facts->uses_dynamic_stack_alloc;
@@ -38,16 +40,9 @@ MinicDirectLP64ProfileResult minic_multi_direct_lp64_profile_function(
      * GAR/FAR and stack consumption for a subsequent va_start. */
     if (!minic_lp64_plan_incoming_parameters(fn, abi, incoming))
         return MINIC_DIRECT_LP64_PROFILE_PARAMETER_SHAPE;
-    if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE ||
-        profile->variadic_address_count != 0U) {
-        for (i = 0U; i < fn->instruction_count; ++i) {
-            const MinicCoreInstruction *ins = &fn->instructions[i];
-            if (ins->kind != MINIC_CORE_INSTRUCTION_VARIADIC_ARGUMENT_ADDRESS)
-                continue;
-            ++cursors;
-            if (!ins->value.variadic_address.copy_destination) ++starts;
-        }
-    }
+    /* Core FunctionFacts already counted every cursor and va_start while
+     * collecting the result IDs. Do not rescan the immutable instruction
+     * array just to recover the same semantic counts. */
     if (abi->variadic_cursor == MINIC_DIRECT_LP64_VARIADIC_ABI_STATE) {
         /* AAPCS64's mutable va_list stores the NEXT available GR/VR
          * register offset, not the number of named C parameters. A fixed
