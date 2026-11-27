@@ -95,6 +95,26 @@ static bool parse_runtime_record_array_element_initializer(MinicParser *parser,
     return minic_parser_statement_record_initialize(parser, target_id, source_id, source->span);
 }
 
+/* Uniform runtime initializer statement construction; callers own
+ * type conversion, value evaluation, and source-span decisions. */
+static bool add_runtime_initializer_assignment(
+    MinicParser *parser, MinicExpressionId target,
+    MinicExpressionId source, MinicSourceSpan span) {
+    MinicStatement statement;
+    (void)memset(&statement, 0, sizeof(statement));
+    statement.kind = MINIC_STATEMENT_ASSIGN;
+    statement.span = span;
+    statement.target_expression = target;
+    statement.expression = source;
+    statement.is_initializer_write = true;
+    statement.target_statement = MINIC_STATEMENT_INVALID;
+    statement.cleanup_context = parser->cleanup_context;
+    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
+    statement.then_block = MINIC_BLOCK_INVALID;
+    statement.else_block = MINIC_BLOCK_INVALID;
+    return minic_parser_add_statement(parser, &statement);
+}
+
 static bool add_array_object_element_assignment(MinicParser *parser,
                                                 MinicExpressionId base_id,
                                                 size_t index,
@@ -104,7 +124,6 @@ static bool add_array_object_element_assignment(MinicParser *parser,
     MinicArrayObjectInfo array_info;
     MinicExpressionId target_id;
     MinicSourceSpan value_span;
-    MinicStatement statement;
     MinicType element_type;
 
     base = minic_c0_program_expression(parser->program, base_id);
@@ -134,18 +153,8 @@ static bool add_array_object_element_assignment(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span = value_span;
-    statement.target_expression = target_id;
-    statement.expression = value_id;
-    statement.is_initializer_write = true;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.cleanup_context = parser->cleanup_context;
-    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
-    return minic_parser_add_statement(parser, &statement);
+
+    return add_runtime_initializer_assignment(parser, target_id, value_id, value_span);
 }
 
 static bool add_local_array_element_assignment(MinicParser *parser,
@@ -1075,7 +1084,6 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
     const MinicExpression *target;
     MinicExpression zero;
     MinicExpressionId value_id;
-    MinicStatement statement;
     MinicType target_type;
 
     target = minic_c0_program_expression(parser->program, target_id);
@@ -1097,18 +1105,8 @@ static bool add_zero_assignment_to_lvalue(MinicParser *parser,
         return false;
     }
 
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span = initializer_span;
-    statement.target_expression = target_id;
-    statement.expression = value_id;
-    statement.is_initializer_write = true;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.cleanup_context = parser->cleanup_context;
-    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
-    return minic_parser_add_statement(parser, &statement);
+
+    return add_runtime_initializer_assignment(parser, target_id, value_id, initializer_span);
 }
 
 static bool add_zero_initialized_record_lvalue(MinicParser *parser,
@@ -1300,8 +1298,8 @@ static bool add_runtime_record_member_assignment(MinicParser *parser,
     const MinicExpression *member;
     const MinicExpression *value;
     MinicSourceSpan member_span;
-    MinicStatement statement;
     MinicType member_type;
+    MinicSourceSpan statement_span;
 
     member = minic_c0_program_expression(parser->program, member_id);
     if (member == NULL || member->value_category != MINIC_VALUE_LVALUE) {
@@ -1331,19 +1329,10 @@ static bool add_runtime_record_member_assignment(MinicParser *parser,
         return minic_parser_statement_record_initialize(parser, member_id, value_id, value->span);
     }
 
-    (void)memset(&statement, 0, sizeof(statement));
-    statement.kind = MINIC_STATEMENT_ASSIGN;
-    statement.span.begin = member_span.begin;
-    statement.span.end = value->span.end;
-    statement.target_expression = member_id;
-    statement.expression = value_id;
-    statement.is_initializer_write = true;
-    statement.target_statement = MINIC_STATEMENT_INVALID;
-    statement.cleanup_context = parser->cleanup_context;
-    statement.cleanup_stop_context = MINIC_CLEANUP_CONTEXT_ROOT;
-    statement.then_block = MINIC_BLOCK_INVALID;
-    statement.else_block = MINIC_BLOCK_INVALID;
-    return minic_parser_add_statement(parser, &statement);
+
+    statement_span.begin = member_span.begin;
+    statement_span.end = value->span.end;
+    return add_runtime_initializer_assignment(parser, member_id, value_id, statement_span);
 }
 
 static bool zero_runtime_record_fields_from(MinicParser *parser,

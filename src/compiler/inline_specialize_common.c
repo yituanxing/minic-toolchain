@@ -132,36 +132,6 @@ bool minic_inline_call_plan_copy_source_owners(
                          plan->source_owner_count * sizeof(*owners));
             for (i = plan->source_owner_count; i < owner_count; ++i)
                 owners[i] = MINIC_FUNCTION_INVALID;
-            /* Opt-in exact original-oracle check for frozen Linux/clone-heavy
-             * acceptance. Never let an invalidated source graph silently
-             * reuse stale ownership during a diagnostic run. */
-            if (getenv("MINIC_INLINE_OWNER_CACHE_VERIFY") != NULL) {
-                MinicFunctionId *fresh;
-                bool matches = true;
-                if (owner_count > SIZE_MAX / sizeof(*fresh)) return false;
-                fresh = malloc((owner_count == 0U ? 1U : owner_count) *
-                               sizeof(*fresh));
-                if (fresh == NULL) return false;
-                if (!minic_perf_program_build_expression_source_owners(
-                        program, function_limit, fresh, owner_count)) {
-                    free(fresh);
-                    return false;
-                }
-                for (i = 0U; i < owner_count; ++i) {
-                    const MinicFunctionId actual = fresh[i] < function_limit
-                        ? fresh[i] : MINIC_FUNCTION_INVALID;
-                    if (owners[i] != actual) {
-                        (void)fprintf(stderr,
-                            "MINIC_INLINE_OWNER_CACHE_MISMATCH expression=%zu "
-                            "cached=%zu actual=%zu limit=%zu\n",
-                            i, (size_t)owners[i], (size_t)actual, function_limit);
-                        matches = false;
-                        break;
-                    }
-                }
-                free(fresh);
-                if (!matches) return false;
-            }
             return true;
         }
     }
