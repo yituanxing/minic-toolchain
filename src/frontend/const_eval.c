@@ -397,9 +397,6 @@ static bool integer_cast_operand_is_pointer_roundtrip_constant(const MinicC0Prog
         return false;
     }
     pointer_width = (unsigned int)(pointer_size * (size_t)CHAR_BIT);
-    if (pointer_width == 0U || pointer_width > 64U) {
-        return false;
-    }
 
     if (eval_null_based_pointer_constant(program,
                                          target,
@@ -676,10 +673,9 @@ static bool eval_integer_address_pointer_bits(const MinicC0Program *program,
         return false;
     }
     pointer_width = (unsigned int)(pointer_size * (size_t)CHAR_BIT);
-    if (pointer_width == 0U || pointer_width > 64U ||
-        (expression->kind != MINIC_EXPRESSION_CAST &&
-         expression->kind != MINIC_EXPRESSION_CONVERSION &&
-         expression->kind != MINIC_EXPRESSION_BITCAST)) {
+    if (expression->kind != MINIC_EXPRESSION_CAST &&
+        expression->kind != MINIC_EXPRESSION_CONVERSION &&
+        expression->kind != MINIC_EXPRESSION_BITCAST) {
         return false;
     }
     operand = minic_c0_program_expression(program, expression->value.unary.operand);

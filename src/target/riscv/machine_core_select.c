@@ -643,8 +643,7 @@ static bool rv_core_runtime_binary(RvCoreSelection *sel,
         helper = minic_riscv_softfloat_arithmetic_symbol(ins->kind);
     }
     chunks = (size + word - 1U) / word;
-    if (helper == NULL || chunks == 0U || chunks > 2U ||
-        2U * chunks > 8U) return false;
+    if (helper == NULL || chunks == 0U || chunks > 2U) return false;
     for (operand_index = 0U; operand_index < 2U; ++operand_index) {
         const MinicCoreValueId operand = operand_index ? rhs : lhs;
         for (i = 0U; i < chunks; ++i)

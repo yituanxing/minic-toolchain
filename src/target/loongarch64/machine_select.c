@@ -869,7 +869,7 @@ static bool loong_frame_register(MinicMachineBuilder *b, uint32_t opcode,
             MINIC_LOONG_ADDRESS_PTR14, load);
     /* Old LP64 frame lowering uses $t3 as large-offset address scratch.
      * Never silently overwrite a store value parked in that same register. */
-    if (reg == LOONG_T3 || offset > INT64_MAX ||
+    if (reg == LOONG_T3 ||
         !loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T3, (int64_t)offset) ||
         !loong_rrr(b, MINIC_LOONG_MACHINE_ADD_D, LOONG_T3, base, LOONG_T3))
         return false;
@@ -906,8 +906,7 @@ static bool loong_sp_adjust(MinicMachineBuilder *b, size_t frame,
         (restore && frame <= 2047U))
         return loong_rri(b, MINIC_LOONG_MACHINE_ADDI_D, LOONG_SP,
             LOONG_SP, restore ? (int64_t)frame : -(int64_t)frame);
-    if (frame > INT64_MAX ||
-        !loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T3, (int64_t)frame))
+    if (!loong_ri(b, MINIC_LOONG_MACHINE_LI_D, LOONG_T3, (int64_t)frame))
         return false;
     return loong_rrr(b, restore ? MINIC_LOONG_MACHINE_ADD_D :
         MINIC_LOONG_MACHINE_SUB_D, LOONG_SP, LOONG_SP, LOONG_T3);

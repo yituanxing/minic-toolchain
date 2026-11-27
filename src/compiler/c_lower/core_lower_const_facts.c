@@ -329,9 +329,6 @@ static bool core_cfg_const_pointer_bits(const MinicCoreLowerContext *context,
         return false;
     }
     pointer_width = (unsigned int)(pointer_size * 8U);
-    if (pointer_width == 0U || pointer_width > 64U) {
-        return false;
-    }
     mask = minic_integer_mask64(pointer_width);
 
     if (expression->kind == MINIC_EXPRESSION_CAST ||

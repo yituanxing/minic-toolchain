@@ -245,7 +245,7 @@ bool minic_c0_integer_range_representable_in_type(const MinicC0Program *program,
         return false;
     }
     if (minic_type_is_bool_integer(source_type)) {
-        return destination_bits >= 1U;
+        return true;
     }
     source_signed = minic_c0_integer_type_is_signed(program, source_type);
     destination_signed = minic_c0_integer_type_is_signed(program, destination_type);

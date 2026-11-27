@@ -92,7 +92,7 @@ static inline bool minic_core_format_symbol(const char *format, size_t ordinal,
     if (format == NULL || result == NULL) return false;
     *result = NULL;
     length = snprintf(NULL, 0U, format, ordinal);
-    if (length < 0 || (size_t)length == SIZE_MAX) return false;
+    if (length < 0) return false;
     allocated = malloc((size_t)length + 1U);
     if (allocated == NULL) return false;
     if (snprintf(allocated, (size_t)length + 1U, format, ordinal) != length) {
