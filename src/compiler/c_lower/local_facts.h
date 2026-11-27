@@ -11,8 +11,6 @@ bool minic_core_local_fact_index(const MinicCoreLowerContext *context,
                                       MinicLocalId local_id,
                                       size_t *index);
 
-bool minic_core_inline_spec_fact_trace_enabled(const MinicCoreLowerContext *context);
-
 MinicCoreLocalIntegerConstant *minic_core_local_facts_snapshot(
     const MinicCoreLowerContext *context);
 

@@ -312,16 +312,6 @@ static MinicCoreLowerStatus lower_parameter_ingress(MinicCoreLowerContext *conte
                         fact->specialization_value = fact->value;
                         fact->specialization_known = true;
                         fact->specialization_modified = false;
-                        if (minic_core_inline_spec_fact_trace_enabled(context)) {
-                            (void)fprintf(stderr,
-                                          "INLINE_SPEC_FACT event=seed function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                                          context->source_function->name != NULL
-                                              ? context->source_function->name
-                                              : "?",
-                                          (size_t)context->source_function->specialization_source,
-                                          (size_t)local_id,
-                                          fact->specialization_value.bits);
-                        }
                     }
                 }
                 if (getenv("MINIC_LOCAL_FACT_TRACE") != NULL) {

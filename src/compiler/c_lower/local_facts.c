@@ -32,25 +32,6 @@ bool minic_core_local_fact_index(const MinicCoreLowerContext *context,
 
 
 
-bool minic_core_inline_spec_fact_trace_enabled(const MinicCoreLowerContext *context) {
-    const char *text;
-    char *end;
-    unsigned long long source_id;
-
-    if (context == NULL || context->source_function == NULL ||
-        !context->source_function->is_integer_specialization) {
-        return false;
-    }
-    text = getenv("MINIC_INLINE_SPEC_FACT_TRACE_SOURCE");
-    if (text == NULL || *text == '\0') {
-        return false;
-    }
-    end = NULL;
-    source_id = strtoull(text, &end, 10);
-    return end != text && end != NULL && *end == '\0' &&
-           source_id == (unsigned long long)context->source_function->specialization_source;
-}
-
 /* M179_TERMINATING_GUARD_FACTS: Core builds branch bodies before it emits
  * the condition block.  Keep one copy of the straight-line facts that reach an
  * uncertain if so condition lowering sees the correct incoming state.  When a
@@ -187,19 +168,6 @@ void minic_core_local_facts_clear_known(MinicCoreLowerContext *context) {
         fact->possible_one_bits = fact->possible_one_bits_valid
             ? fact->value.bits : UINT64_MAX;
         fact->nonnegative_range_valid = false;
-        if (fact->specialization_known && minic_core_inline_spec_fact_trace_enabled(context)) {
-            (void)fprintf(stderr,
-                          "INLINE_SPEC_FACT event=clear function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
-                          context->source_function->name != NULL
-                              ? context->source_function->name
-                              : "?",
-                          (size_t)context->source_function->specialization_source,
-                          (size_t)(context->source_function->local_begin + index),
-                          fact->known ? 1 : 0,
-                          fact->specialization_modified ? 1 : 0,
-                          fact->escaped ? 1 : 0,
-                          fact->specialization_value.bits);
-        }
     }
 }
 
@@ -222,15 +190,6 @@ static void core_local_fact_kill(MinicCoreLowerContext *context,
         fact->nonnegative_range_valid = false;
         /* All entry specializations cease to describe a written or escaped local. */
         fact->specialization_modified = true;
-        if (fact->specialization_known && minic_core_inline_spec_fact_trace_enabled(context)) {
-            (void)fprintf(stderr,
-                          "INLINE_SPEC_FACT event=%s function=%s source=%zu local=%zu bits=%" PRIu64 "\n",
-                          escape ? "escape" : "invalidate",
-                          context->source_function->name != NULL
-                              ? context->source_function->name : "?",
-                          (size_t)context->source_function->specialization_source,
-                          (size_t)local_id, fact->specialization_value.bits);
-        }
     }
 }
 
@@ -258,22 +217,6 @@ bool minic_core_local_fact_get(const MinicCoreLowerContext *context,
     const MinicLocal *local;
     size_t index;
 
-    if (minic_core_local_fact_index(context, local_id, &index) &&
-        context->local_integer_constants[index].specialization_known &&
-        minic_core_inline_spec_fact_trace_enabled(context)) {
-        const MinicCoreLocalIntegerConstant *fact = &context->local_integer_constants[index];
-        (void)fprintf(stderr,
-                      "INLINE_SPEC_FACT event=get function=%s source=%zu local=%zu known=%d modified=%d escaped=%d bits=%" PRIu64 "\n",
-                      context->source_function->name != NULL
-                          ? context->source_function->name
-                          : "?",
-                      (size_t)context->source_function->specialization_source,
-                      (size_t)local_id,
-                      fact->known ? 1 : 0,
-                      fact->specialization_modified ? 1 : 0,
-                      fact->escaped ? 1 : 0,
-                      fact->specialization_value.bits);
-    }
     if (value == NULL || !minic_core_local_fact_index(context, local_id, &index) ||
         !context->local_integer_constants[index].known ||
         context->local_integer_constants[index].escaped || context->body == NULL ||
