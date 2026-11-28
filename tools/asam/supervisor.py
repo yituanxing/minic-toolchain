@@ -256,6 +256,33 @@ def progress(state):
     return counts
 
 
+def event_commitments(events):
+    """Expose only provenance commitments, never raw model-generated prose.
+
+    Historical worker content remains in the versioned event store for
+    investigation. It has NO authority to become a future worker prompt.
+    """
+    result = []
+    for event in events[-8:]:
+        canonical = json.dumps(event, sort_keys=True, ensure_ascii=False,
+                               separators=(",", ":")).encode("utf-8")
+        result.append({
+            "kind": event["kind"],
+            "epoch": event.get("epoch", 0),
+            "slice_id": event.get("id"),
+            "content_sha256": hashlib.sha256(canonical).hexdigest(),
+        })
+    return result
+
+
+def reference_commitments(refs):
+    """Return fingerprint(s) instead of injecting unreviewed URLs into tasks."""
+    return [
+        hashlib.sha256(ref.encode("utf-8")).hexdigest()
+        for ref in refs
+    ]
+
+
 def handoff(policy, state):
     slices = state["slices"]
     remaining = [x for x in slices if x["status"] != "VERIFIED"]
@@ -286,13 +313,17 @@ def handoff(policy, state):
             "id": selected["id"], "name": selected["name"],
             "current_stage": selected["audit_stage"],
             "status": selected["status"], "scope_hint": selected["scope_hint"],
-            "canonical_evidence_refs": selected["canonical_evidence_refs"],
+            # The repository event store may contain untrusted worker text.
+            # Never pass those URLs or descriptions into the new model session.
+            "evidence_reference_sha256":
+                reference_commitments(selected["canonical_evidence_refs"]),
             "instruction": ("Read existing canonical docs and real code; "
                             "map entrance/producer/consumers/ownership, "
                             "record uncovered paths. Do NOT substitute a "
                             "single-file clean-up for global coverage.")
         } if selected else None),
-        "recent_history_pointers_only": state["recorded_events"][-8:],
+        "recent_history_commitments_only":
+            event_commitments(state["recorded_events"]),
         "temporary_context": [],
         "reset_contract": "This packet is sufficient to restart a new AI task. "
                           "Do not rely on earlier model messages. "
