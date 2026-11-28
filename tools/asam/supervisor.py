@@ -78,6 +78,17 @@ def load(root, *, require_canonical=True):
          "invalid state epoch")
     must(SHA.fullmatch(state.get("source_snapshot", {}).get(
          "observed_commit", "")) is not None, "invalid source baseline")
+    # When a real checkout is available, detect stale frontiers instead of
+    # silently applying a last-turn SHA to newly changed source.
+    if (root / ".git").exists():
+        import subprocess
+        ref = subprocess.run(
+            ["git", "rev-parse", "--verify", "refs/remotes/origin/main"],
+            cwd=root, capture_output=True, text=True, check=False
+        )
+        if ref.returncode == 0 and SHA.fullmatch(ref.stdout.strip()):
+            must(ref.stdout.strip() == state["source_snapshot"]["observed_commit"],
+                 "source main advanced: perform S0 rebaseline before work")
     must(policy.get("nonnegotiable") and
          len(policy["nonnegotiable"]) >= 16, "missing permanent constraints")
     refs = policy.get("authoritative_sources", {})
@@ -98,6 +109,21 @@ def load(root, *, require_canonical=True):
         ids.add(ident)
         status = item.get("status")
         must(status in STATUSES, "illegal slice state for " + ident)
+        # Terminal completion requires an authenticated CI/owner attestation
+        # which the present prototype intentionally does not implement.
+        must(status != "VERIFIED", "terminal verified state is not trusted yet")
+        expected_stage = {
+            "PLANNED": "S0_BASELINE",
+            "MAPPED": "S1_FUNCTIONAL_MAP",
+            "INVESTIGATING": "S2_BREADTH_DISCOVERY",
+            "CONFIRMED": "S3_INDEPENDENT_COUNTEREVIDENCE",
+            "FIXED_UNVERIFIED": "S4_ROOT_CAUSE_FIX",
+        }
+        must(item.get("audit_stage") == expected_stage.get(status),
+             "audit stage/status mismatch for " + ident)
+        if status != "PLANNED":
+            must(bool(item.get("canonical_evidence_refs")),
+                 "completed stage without canonical evidence for " + ident)
         must(bool(item.get("scope_hint")), "scope lost: " + ident)
         must(isinstance(item.get("canonical_evidence_refs"), list),
              "missing source references: " + ident)
