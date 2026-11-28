@@ -60,6 +60,21 @@ except ValueError:
 else:
     raise AssertionError("stale baseline accepted as current")
 
+# A modified working-tree source must not be silently indexed as pristine
+# origin/main. Restore its exact bytes even when this test fails.
+tracked_path = root / a["source_file_fingerprints"][0]["path"]
+original_bytes = tracked_path.read_bytes()
+try:
+    tracked_path.write_bytes(original_bytes + b"\\n/* dirty ASAM test fixture */\\n")
+    try:
+        topo.map_slices(root, policy, state)
+    except ValueError as exc:
+        assert "dirty" in str(exc), str(exc)
+    else:
+        raise AssertionError("working-tree source poisoning was accepted")
+finally:
+    tracked_path.write_bytes(original_bytes)
+
 # Source code fingerprints must remain distinct from architecture/issue facts.
 assert all(len(x["sha256"]) == 64 and x["path"].endswith((".c", ".h"))
            for x in a["source_file_fingerprints"])
