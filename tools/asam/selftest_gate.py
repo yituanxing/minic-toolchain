@@ -55,6 +55,12 @@ triaged = gate.enforce(contract, packet, model)
 assert triaged["status"] == "TRIAGE_ONLY"
 assert triaged["queue"][0]["state"] == "REQUIRES_FURTHER_EVIDENCE"
 assert triaged["fixer_tasks_authorized"] == 0
+controller = copy.deepcopy(model)
+controller["status"] = "CONTROLLER_TRIAGE_NO_EDITS"
+controller["reviewer_type"] = "CHATGPT_CONTROLLER"
+controller_result = gate.enforce(contract, packet, controller)
+assert controller_result["status"] == "CONTROLLER_TRIAGE_ONLY"
+assert controller_result["fixer_tasks_authorized"] == 0
 
 def blocked(reason, changed_contract=contract, changed_packet=packet,
             changed_model=model):
@@ -64,6 +70,9 @@ def blocked(reason, changed_contract=contract, changed_packet=packet,
         return
     raise AssertionError("unsafe case accepted: " + reason)
 
+tampered = copy.deepcopy(controller)
+del tampered["reviewer_type"]
+blocked("controller without provenance", changed_model=tampered)
 tampered = copy.deepcopy(model)
 tampered["results"][0]["approval_to_edit"] = True
 blocked("AI self-approval", changed_model=tampered)
