@@ -78,8 +78,35 @@ def check(root, policy, state, resume, inventory, orders):
     )
     require(dirty.returncode == 0, "source or authority docs changed after export")
     source_tree = sh(root, "rev-parse", "HEAD:src")
-    require(inventory["source_tree"] == source_tree,
-            "different actual compiler source tree")
+    require(inventory["source_tree"] == source_tree and
+            inventory["current_head_commit"] == sh(root, "rev-parse", "HEAD"),
+            "different actual compiler/tool checkout")
+    # Verify the reported file scope from Git and the bytes on disk. Unlike
+    # Topology, this checker does not import its scanning functions.
+    scan_roots = ("src/", "tools/minic/", "tools/minic-cc/",
+                  "tests/compiler/", "tests/target/")
+    tracked = sh(root, "ls-files", "-z").split("\\0")
+    tracked = sorted(name for name in tracked if name and
+                     name.endswith((".c", ".h")) and
+                     any(name.startswith(prefix) for prefix in scan_roots))
+    observed_files, prefix_counts = [], {}
+    for name in tracked:
+        path = root / name
+        data = path.read_bytes()
+        observed_files.append({
+            "path": name, "physical_lines": len(
+                data.decode("utf-8", "replace").splitlines()
+            ), "sha256": hashlib.sha256(data).hexdigest()
+        })
+        prefix = next(p for p in scan_roots if name.startswith(p))
+        prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+    require(inventory["inventory_scope"] == list(scan_roots) and
+            inventory["source_file_fingerprints"] == observed_files and
+            inventory["tracked_c_h_files"] == len(tracked) and
+            inventory["tracked_physical_lines"] == sum(
+                f["physical_lines"] for f in observed_files) and
+            inventory["file_prefix_counts"] == prefix_counts,
+            "whole-compiler file/line scope or content fingerprints were altered")
     require(orders["state_epoch"] == state["epoch"], "stale task work-order epoch")
     refs = policy["authoritative_sources"]
     require(set(inventory["canonical_documents"]) == set(refs),
@@ -94,12 +121,15 @@ def check(root, policy, state, resume, inventory, orders):
 
     slices = {s["id"]: s for s in state["slices"]}
     require(len(slices) == len(state["slices"]) == 10, "duplicate or lost functional region")
-    expected_counts = {}
+    expected_counts = dict.fromkeys(
+        ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING",
+         "CONFIRMED", "FIXED_UNVERIFIED", "VERIFIED"), 0
+    )
     for s in state["slices"]:
-        expected_counts[s["status"]] = expected_counts.get(s["status"], 0) + 1
-    for status, amount in expected_counts.items():
-        require(resume["coverage_status"].get(status) == amount,
-                "status count differs from actual scheduler")
+        require(s["status"] in expected_counts, "unknown lifecycle state")
+        expected_counts[s["status"]] += 1
+    require(resume["coverage_status"] == expected_counts,
+            "status counts differ from actual scheduler")
     require(sum(resume["coverage_status"].values()) == len(slices),
             "missing or inflated coverage count")
     require(all(not s["verified"] for s in state["slices"]),
@@ -110,6 +140,24 @@ def check(root, policy, state, resume, inventory, orders):
             "unassigned tracked source has no next mapping domain")
     records = {s["id"]: s for s in inventory["slice_candidates"]}
     require(set(records) == set(slices), "inventory silently dropped a region")
+    observed_paths = {f["path"]: f["physical_lines"] for f in observed_files}
+    assigned = set()
+    for ident, state_slice in slices.items():
+        wanted = [
+            name for name in tracked if any(
+                name == hint if not hint.endswith("/") else name.startswith(hint)
+                for hint in state_slice["scope_hint"])
+        ]
+        assigned.update(wanted)
+        require(records[ident]["tracked_file_candidates"] == len(wanted) and
+                records[ident]["physical_lines_in_candidate_files"] ==
+                    sum(observed_paths[x] for x in wanted),
+                "functional coverage scope or line totals changed: " + ident)
+    unmatched = sorted(set(tracked) - assigned)
+    require(inventory["unassigned_files"] == unmatched and
+            inventory["unassigned_count"] == len(unmatched) and
+            inventory["unique_candidate_files"] == len(assigned),
+            "functional scope silently omits tracked C/H source")
     plan = [s for s in state["slices"] if s["status"] == "PLANNED"]
     front = plan if plan else [s for s in state["slices"] if s["status"] != "VERIFIED"]
     require(resume["breadth_frontier"] == [
@@ -133,6 +181,10 @@ def check(root, policy, state, resume, inventory, orders):
     else:
         require(resume["selected"] is None, "unexpected selected work")
 
+    require(orders["schema"] == "asam-breadth-work-orders-v1" and
+            orders["note"] ==
+            "Independent task specifications only; no new AI agents run.",
+            "work-order container is not the permitted read-only handoff")
     work = orders["work_orders"]
     require(len(work) == len(slices) and
             len({w["slice_id"] for w in work}) == len(slices),
