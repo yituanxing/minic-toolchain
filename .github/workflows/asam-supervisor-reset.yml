@@ -37,6 +37,7 @@ jobs:
             case "$path" in
               tools/asam/control/policy.json|\
               tools/asam/control/state.json|\
+              tools/asam/experiments/c01_mapping_proposal.json|\
               tools/asam/supervisor.py|\
               tools/asam/selftest_supervisor.py|\
               tools/asam/topology.py|\
@@ -62,11 +63,14 @@ jobs:
           data = json.load(open("/tmp/asam-resume.json"))
           assert data["policy_id"] == "ASAM-MINIC-GLOBAL-20261128"
           assert data["global_task_completed"] is False
-          assert data["coverage_status"]["PLANNED"] == 10
+          assert data["coverage_status"]["PLANNED"] == 9
+          assert data["coverage_status"]["MAPPING_PROPOSED"] == 1
           assert data["coverage_status"]["VERIFIED"] == 0
-          assert len(data["breadth_frontier"]) == 10
+          assert len(data["breadth_frontier"]) == 9
+          assert data["selected"]["id"] == "C02"
+          assert data["global_task_completed"] is False
           assert not data["temporary_context"]
-          print("ASAM_MISSION_RELOAD=PASS 10 pending functional regions, no false completion")
+          print("ASAM_MISSION_RELOAD=PASS 1 C01 proposal, 9 planned, C02 selected, no false completion")
           PY
 
       - name: Test independent process restoration and forbidden transitions
