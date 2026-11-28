@@ -138,7 +138,7 @@ def map_slices(root, policy, state, *, check_baseline=True):
     for item in state["slices"]:
         hints = item["scope_hint"]
         matching = sorted(x for x in tracked if any(
-            (x == hint if not hint.endswith("/") else x.startswith(hint))
+            (x == hint if not hint.endswith(("/", "-")) else x.startswith(hint))
             for hint in hints))
         unique_covered.update(matching)
         anchors = []
