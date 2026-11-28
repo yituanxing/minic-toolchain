@@ -1,42 +1,73 @@
-# ASAM v1 — Runner feasibility trial
+# ASAM v1.1 — tool-driven repository triage trial
 
-This folder is a **read-only trial**, not an automatic dead-code remover.
+Status: Read-only trial using a real GitHub Actions runner in Draft PR #710.
 
-## Purpose
+This is NOT an autonomous refactoring pipeline and certifies no function as dead
+or semantically duplicated.
 
-Determine whether a GitHub Actions runner can reproducibly inspect the actual
-MiniC compiler without using a persistent ChatGPT conversation or local PC.
+## Current execution
 
-## Trial
+Workflow: .github/workflows/asam-v1-readonly.yml
 
-1. A push to the dedicated experiment branch starts the GitHub Actions workflow.
-2. A standard Ubuntu runner installs Universal Ctags and runs a synthetic selftest.
-3. The scanner inventories C function definitions within src/target/x86_64.
-4. It searches token references across compiler C/H files, creates conservative
-   static-function candidates and exact lexical-duplicate candidates.
-5. It writes versioned JSON, symbol records and Markdown reports as CI artifacts.
+1. GitHub push/PR starts an isolated Ubuntu Runner.
+2. scan.py uses Universal Ctags for C symbol definitions, source positions and
+   conservative static token-reference candidates.
+3. near_duplicates.py separates structural similarity from semantic anchors:
+   called functions, field names, constants and literal values. Merely sharing
+   a control-flow template is reported in a separate lower-priority category.
+4. review_packets.py builds up to 12 bounded evidence packets with source
+   excerpts, exact revision, source digest and lexical reference candidates.
+5. review_dispositions.json stores already reviewed distinct cases; unchanged
+   source digests suppress repeat triage, changes invalidate the suppression.
+6. selftest.py and selftest_structural.py verify these deterministic behaviors.
+7. scout_api.py produces DRY_RUN without a credential. It cannot approve a
+   source change even when operator-initiated model triage is enabled.
+8. JSON/Markdown/symbol index artifacts are uploaded for inspection.
 
-No compiler code is edited and no source candidates are deleted automatically.
+No production compiler source file is modified by this workflow.
 
-## Explicit limitations
+## Local test commands
 
-- This is **not** a semantic call graph or a reliable dead-code proof.
-- The AST/type-aware, multi-config compilation database, AI Scout, Fixer, and
-  independent test gates are **not yet implemented**.
-- Runner model inference requires a separately configured model provider;
-  the retired GitHub Models API must not be used.
-- The trial is intentionally isolated; it does not alter existing CI acceptance.
+Requires Python 3.10+ and Universal Ctags:
 
-## Next acceptance gates
+    python3 tools/asam/selftest.py
+    python3 tools/asam/selftest_structural.py
+    python3 tools/asam/scan.py --scope src/target/x86_64 --output asam-out
+    python3 tools/asam/near_duplicates.py
+    python3 tools/asam/review_packets.py
+    python3 tools/asam/scout_api.py
 
-- Real GitHub Actions run with downloadable report and clean selftest.
-- Scout triage of actual candidates with direct source and caller evidence.
-- Explicit contract and model credentials before autonomous Fixer is enabled.
-- Source changes only in an isolated branch and independently verified PR.
+An explicit opt-in for at most 3 packets (not enabled in CI):
 
-The scanner can run locally as well:
+    export ASAM_OPENAI_API_KEY=<credential; never commit>
+    export ASAM_SCOUT_MODEL=<supported Responses API model>
+    python3 tools/asam/scout_api.py --execute --max-packets 2
 
-    python3 tools/asam/scan.py --repo . --scope src/target/x86_64 --output asam-out
+The adapter uses a strict JSON response schema, supplies no tools, never
+changes source and classifies evidence as DISTINCT_KEEP, POSSIBLE_OVERLAP or
+INSUFFICIENT_EVIDENCE. No paid model call occurs in the default workflow.
+Do not expose inference credentials to untrusted PR code.
 
-Requires Universal Ctags installed in PATH. Reports are ephemeral; an
-authoritative finding must be recorded separately before a source edit.
+## Generated reports
+
+- asam-out/report.json: source inventory
+- asam-out/symbols.json: C symbol definitions and source ranges
+- asam-out/near-duplicates.json: ranked hypotheses and pattern-only examples
+- asam-out/scout-packets.json: bounded review evidence and source digests
+- asam-out/scout-queue.md: compact review queue
+- asam-out/scout-model-status.json: explicit inference status
+
+## Limitations and next gates
+
+This is not an exhaustive call graph, AST or data-flow analysis.
+Indirect calls, feature flags, inline assembly, linker roots and ABI contracts
+must be checked independently. Similarity is not proof of duplicate semantics.
+
+MiniC's existing issue and architecture registers remain authoritative.
+Nothing in this folder automatically retires a function, changes production
+logic or redefines existing test acceptance.
+
+Before automatic Fixer work can be enabled: connect an authorized model
+provider; establish verifiable call/data-flow evidence; use an isolated
+worktree; require an independent Verifier and relevant build/runtime/performance
+gates; preserve the existing production CI.
