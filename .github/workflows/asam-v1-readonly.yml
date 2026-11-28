@@ -1,0 +1,99 @@
+name: ASAM v1 read-only runner trial
+
+on:
+  push:
+    branches:
+      - experiment/asam-v1-runner-20261128
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-v1-readonly.yml'
+  pull_request:
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-v1-readonly.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    name: Real MiniC C source inventory
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out workflow revision
+        uses: actions/checkout@v4
+
+      - name: Install deterministic C symbol indexer
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends universal-ctags cflow
+          ctags --version
+
+      - name: Verify scanner on synthetic C input
+        run: |
+          python3 -m py_compile tools/asam/scan.py tools/asam/selftest.py
+          python3 tools/asam/selftest.py
+
+      - name: Scan real x86-64 compiler sources
+        run: |
+          python3 tools/asam/scan.py --repo . \
+            --scope src/target/x86_64 --output asam-out
+          cat asam-out/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rank structural near-duplicate candidates
+        run: |
+          python3 -m py_compile tools/asam/near_duplicates.py
+          python3 tools/asam/near_duplicates.py --repo . \
+            --input asam-out/symbols.json --output asam-out
+          cat asam-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prepare bounded Scout semantic evidence
+        run: |
+          python3 -m py_compile tools/asam/review_packets.py tools/asam/scout_api.py tools/asam/selftest_structural.py tools/asam/handoff_gate.py tools/asam/selftest_gate.py
+          python3 tools/asam/selftest_structural.py
+          python3 tools/asam/review_packets.py --repo . --input asam-out/near-duplicates.json --output asam-out --limit 12
+          python3 tools/asam/scout_api.py --input asam-out/scout-packets.json --output asam-out
+          cat asam-out/scout-queue.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/asam/selftest_gate.py
+          python3 tools/asam/handoff_gate.py --repo . --packets asam-out/scout-packets.json --model asam-out/scout-model-status.json --output asam-out
+
+      - name: Generate partial source-call graph evidence
+        run: |
+          python3 -m py_compile tools/asam/cflow_probe.py
+          python3 tools/asam/cflow_probe.py --repo . --output asam-out
+
+      - name: Ensure production C sources remain unchanged
+        run: git diff --exit-code -- src/ compiler/ tools/minic/ tools/minic-cc/
+
+      - name: Broader target-backend cross-file discovery
+        run: |
+          python3 tools/asam/scan.py --repo . --scope src/target --output asam-target-out
+          python3 tools/asam/near_duplicates.py --repo . --input asam-target-out/symbols.json --output asam-target-out
+          python3 tools/asam/review_packets.py --repo . --input asam-target-out/near-duplicates.json --output asam-target-out --limit 12
+          cat asam-target-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/asam/scout_api.py --input asam-target-out/scout-packets.json --output asam-target-out
+          python3 tools/asam/handoff_gate.py --repo . --packets asam-target-out/scout-packets.json --model asam-target-out/scout-model-status.json --output asam-target-out
+          if [ -f tools/asam/controller_triage.json ]; then
+            python3 tools/asam/handoff_gate.py --repo . --packets asam-target-out/scout-packets.json --model tools/asam/controller_triage.json --output asam-target-out/controller-gate
+            cat asam-target-out/controller-gate/handoff-gate.json >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload broader target-backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-v1-all-target-backends-readonly
+          path: asam-target-out/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload scan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-v1-minic-x86-readonly
+          path: asam-out/
+          if-no-files-found: warn
+          retention-days: 14

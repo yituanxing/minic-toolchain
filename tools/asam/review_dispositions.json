@@ -1,0 +1,27 @@
+{
+  "schema": "asam-v1-dispositions-1",
+  "notice": "Reviewer dispositions suppress repeated SCOUT proposals only when both function source digests still match. They are not defect fixes or authority to delete code.",
+  "reviews": [
+    {
+      "id": "ASAM-fe4a22b8c555",
+      "status": "DISTINCT_KEEP",
+      "reviewer": "ChatGPT source review of complete function bodies (2026-11-28)",
+      "reason": "Both rely on the existing shared pointer-pointee and x86_type helpers, but one requires a 4-byte non-bool integer lvalue and the other a 1-byte bool lvalue. Similar type-check control flow is not duplicate semantics. Confirmed lexical callsite digests from real Runner artifact 15244358585; re-open whenever a function body or any indexed lexical use site changes.",
+      "members": [
+        {
+          "path": "src/target/x86_64/machine_core_select.c",
+          "name": "x86_asm_u32_lvalue",
+          "content_sha256": "36b44a5fea9f8d6bd3dd6f6e3ecaffa7c3a963740ff39e3ccba7743243ed7de4",
+          "lexical_reference_sha256": "f647c38c90d2241d15682ed5bddefd2cea7a3c55ff7b6284a3bdd48ba14b4851"
+        },
+        {
+          "path": "src/target/x86_64/machine_core_select.c",
+          "name": "x86_asm_bool_lvalue",
+          "content_sha256": "5cfde7cf910365e1d13f15145ba21c8700dc862fce60ae5be7e5246495ec78c9",
+          "lexical_reference_sha256": "9a84255aebc4194bdffae68fb1641bdd6b9bab74ddce7eb09f3882e942209278"
+        }
+      ],
+      "source_reference": "https://github.com/yituanxing/minic-toolchain/pull/710#issuecomment-7232520739"
+    }
+  ]
+}
