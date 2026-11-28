@@ -67,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
         "mission_id": policy["mission_id"],
         "expected_epoch": original["epoch"],
         "slice_id": "C01",
-        "to_status": "MAPPED",
+        "to_status": "MAPPING_PROPOSED",
         "actor_role": "mapper",
         "actor_id": "independent-mapper-01",
         "evidence": {
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     after = fresh_process(script, root, "resume")
     assert after.returncode == 0, after.stderr
     restored = json.loads(after.stdout)
-    assert restored["coverage_status"]["MAPPED"] == 1
+    assert restored["coverage_status"]["MAPPING_PROPOSED"] == 1
     assert restored["coverage_status"]["PLANNED"] == 9
     assert restored["selected"]["id"] == "C02"
     assert restored["global_task_completed"] is False
@@ -102,6 +102,10 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     assert restored["source_baseline"] == first["source_baseline"]
 
     state = json.loads(sup.paths(root)[1].read_text(encoding="utf-8"))
+    assert state["slices"][0]["status"] == "MAPPING_PROPOSED"
+    assert not state["slices"][0]["verified"]
+    assert state["slices"][0]["audit_stage"] == "S1_FUNCTIONAL_MAP"
+
     refuse(lambda: sup.transition(policy, state, proposal),
            "replay of earlier epoch")
 
