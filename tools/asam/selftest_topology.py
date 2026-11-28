@@ -19,6 +19,10 @@ assert a["tracked_c_h_files"] >= 200
 assert a["tracked_physical_lines"] > 40000
 assert a["unique_candidate_files"] <= a["tracked_c_h_files"]
 assert a["unassigned_count"] == 0, a["unassigned_files"]
+assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
+            if x["id"] == "C10") >= 5
+assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
+            if x["id"] == "C01") >= 5
 assert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] == "PLANNED" for s in a["slice_candidates"])
@@ -28,6 +32,8 @@ def hints(slice_id):
     return next(x for x in a["slice_candidates"] if x["id"] == slice_id)["anchor_hints"]
 
 assert any(x.get("matched_locations", 0) > 0 for x in hints("C01")), "missing live compiler entry"
+assert next(x["matched_locations"] for x in hints("C01")
+            if x["symbol"] == "main") < 30, "test fixture mains polluted production anchors"
 assert any(x.get("matched_locations", 0) > 0 for x in hints("C02")), "missing frontend parse entry"
 # A historic name may have migrated: preserve it as an explicit drift clue
 # instead of inventing coverage or requiring stale source to exist.
