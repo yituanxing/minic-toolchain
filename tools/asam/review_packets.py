@@ -38,30 +38,40 @@ def bounded_source(root, endpoint, max_lines):
     }
 
 def token_references(root, endpoint, count_limit=12):
-    # Lexical usage is only a navigation aid, NOT a call-graph or live-code proof.
+    """Return bounded examples AND a digest of ALL lexical use sites.
+
+    The digest deliberately invalidates reviews on changed callsites or source
+    locations, including comments. It is conservative and NOT a call graph.
+    """
     name = endpoint["name"]
-    token = re.compile(r"\b" + re.escape(name) + r"\b")
-    results = []
+    token = re.compile(r"\\b" + re.escape(name) + r"\\b")
+    examples = []
+    count = 0
+    digest = hashlib.sha256()
     source_root = root / "src"
     if not source_root.is_dir():
-        return results
+        return examples, digest.hexdigest(), count
     for path in sorted(source_root.rglob("*")):
         if not path.is_file() or path.suffix not in {".c", ".h"}:
             continue
+        relative = path.relative_to(root).as_posix()
         for number, line in enumerate(
             path.read_text(encoding="utf-8", errors="replace").splitlines(), 1
         ):
-            if token.search(line):
-                if path.relative_to(root).as_posix() == endpoint["path"] \
-                        and endpoint["line"] <= number <= endpoint["end"]:
-                    continue
-                results.append({
-                    "path": path.relative_to(root).as_posix(),
-                    "line": number, "text": line.strip()[:200]
+            if not token.search(line):
+                continue
+            if relative == endpoint["path"] and (
+                endpoint["line"] <= number <= endpoint["end"]
+            ):
+                continue
+            count += 1
+            digest.update(json.dumps([relative, number, line], ensure_ascii=False).encode())
+            digest.update(b"\\n")
+            if len(examples) < count_limit:
+                examples.append({
+                    "path": relative, "line": number, "text": line.strip()[:200]
                 })
-                if len(results) >= count_limit:
-                    return results
-    return results
+    return examples, digest.hexdigest(), count
 
 def build(root, findings, limit, max_source_lines, dispositions=None):
     sha = git_revision(root)
@@ -71,17 +81,24 @@ def build(root, findings, limit, max_source_lines, dispositions=None):
     for index, pair in enumerate(findings, 1):
         a = bounded_source(root, pair["a"], max_source_lines)
         b = bounded_source(root, pair["b"], max_source_lines)
+        refs_a, ref_digest_a, ref_count_a = token_references(root, pair["a"])
+        refs_b, ref_digest_b, ref_count_b = token_references(root, pair["b"])
+        a["lexical_reference_sha256"] = ref_digest_a
+        b["lexical_reference_sha256"] = ref_digest_b
+        a["lexical_reference_count"] = ref_count_a
+        b["lexical_reference_count"] = ref_count_b
         members = sorted((a["path"] + ":" + a["name"],
                           b["path"] + ":" + b["name"]))
         task_id = "ASAM-" + hashlib.sha256("|".join(members).encode()).hexdigest()[:12]
         disposition = dispositions.get(task_id)
         current_signatures = sorted((
-            (a["path"], a["name"], a["content_sha256"]),
-            (b["path"], b["name"], b["content_sha256"])
+            (a["path"], a["name"], a["content_sha256"], a["lexical_reference_sha256"]),
+            (b["path"], b["name"], b["content_sha256"], b["lexical_reference_sha256"])
         ))
         if disposition and disposition.get("status") == "DISTINCT_KEEP":
             old_signatures = sorted((
-                (entry["path"], entry["name"], entry["content_sha256"])
+                (entry["path"], entry["name"], entry["content_sha256"],
+                 entry.get("lexical_reference_sha256"))
                 for entry in disposition.get("members", [])))
             if old_signatures == current_signatures:
                 skipped.append(task_id)
@@ -95,8 +112,8 @@ def build(root, findings, limit, max_source_lines, dispositions=None):
             "shared_fields": pair.get("shared_fields", []),
             "different_literals": pair.get("distinct_literal_sets", False),
             "a": a, "b": b,
-            "lexical_references_a": token_references(root, pair["a"]),
-            "lexical_references_b": token_references(root, pair["b"]),
+            "lexical_references_a": refs_a,
+            "lexical_references_b": refs_b,
             "review_status": "NEEDS_SEMANTIC_EVIDENCE",
             "stable_identity": members,
             "review_questions": [
