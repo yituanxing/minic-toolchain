@@ -60,6 +60,9 @@ jobs:
               tools/asam/verify_handoff.py|\
               tools/asam/selftest_handoff.py|\
               tools/asam/remote_evidence.py|\
+              tools/asam/remote_cas_audit.py|\
+              tools/asam/selftest_remote_cas.py|\
+              tools/asam/experiments/remote_cas_probe.json|\
               tools/asam/selftest_remote_evidence.py|\
               tools/asam/README.md|\
               .github/workflows/asam-supervisor-reset.yml) ;;
@@ -119,6 +122,15 @@ jobs:
             --step 'Index the full tracked compiler and export ten isolated work orders'
           cat asam-supervisor-out/remote-ci-metadata.json >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Independently audit real GitHub sibling-commit remote contention
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/asam/selftest_remote_cas.py
+          python3 -I tools/asam/remote_cas_audit.py
+          cat asam-supervisor-out/remote-cas-audit.json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish durable restart packet and whole-project candidate scope
         if: always()
         uses: actions/upload-artifact@v4
@@ -130,5 +142,6 @@ jobs:
             asam-supervisor-out/breadth-inventory.md
             asam-supervisor-out/work-orders.json
             asam-supervisor-out/remote-ci-metadata.json
+            asam-supervisor-out/remote-cas-audit.json
           if-no-files-found: warn
           retention-days: 14
