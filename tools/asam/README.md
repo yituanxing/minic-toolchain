@@ -34,6 +34,31 @@ all mandatory constraints, source snapshot, progress for all regions, a breadth
 frontier and the next task. It contains **no prior model conversation or
 expanded source bodies**.
 
+## Rebuild the whole-compiler Mapper handoff (CI-verified)
+
+The S0 tracked-source inventory is **derived** and may be regenerated at
+the pinned source revision; it never becomes a second authoritative issue
+register or a declaration of semantic review completion.
+
+    python3 -I tools/asam/selftest_topology.py
+    python3 -I tools/asam/topology.py --root . --output asam-supervisor-out
+
+The output contains three artifacts: breadth-inventory.json,
+breadth-inventory.md and work-orders.json. The work-orders are **ten
+independent, bounded, read-only Mapper task specifications**, not ten actual
+running AI agents. Run the Supervisor resume command to recover the original
+mission and selected slice before consuming the work orders.
+
+At S0 on main revision d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8,
+this counted 419 compiler/Driver C/H files and 1,327 test C/H files,
+with no unassigned tracked C/H paths **inside the enumerated scan roots**.
+This is not a census of all build scripts/assembly or a reviewed ownership map.
+Four historical anchor names did not occur in current production C/H scans;
+their semantic replacements require S1 source review.
+
+The latest verified execution and restart artifact can be reached through
+the experiment PR #712 CI history. Do not assume the artifact persists forever.
+
 ## Session protocol
 
 1. Close the old agent session and its huge expanded source context.
