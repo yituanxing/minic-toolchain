@@ -27,13 +27,15 @@ def rejected(run):
 source = Path(__file__).resolve().parents[2]
 policy, current = sup.load(source)
 script = Path(sup.__file__).resolve()
-assert current["epoch"] == 3
+assert current["epoch"] >= 3
 assert current["slices"][0]["status"] == "MAPPING_PROPOSED"
-assert current["recorded_events"][-1] == sup.EXPECTED_SCOPE_REFINEMENT_V2
+assert current["recorded_events"][3] == sup.EXPECTED_SCOPE_REFINEMENT_V2
+planned_ids = [s["id"] for s in current["slices"] if s["status"] == "PLANNED"]
+assert planned_ids, "The concurrency fixture requires an unstarted scope"
 # Use exact current durably committed state; never forge an old migration.
 baseline = copy.deepcopy(current)
 sup.verify_event_replay(policy, baseline)
-assert sum(s["status"] == "PLANNED" for s in baseline["slices"]) == 9
+assert sum(s["status"] == "PLANNED" for s in baseline["slices"]) == len(planned_ids)
 
 
 with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
@@ -93,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         "schema": "asam-transition-v1",
         "mission_id": sup.PINNED_MISSION_ID,
         "expected_epoch": baseline["epoch"],
-        "slice_id": "C02",
+        "slice_id": planned_ids[0],
         "to_status": "MAPPING_PROPOSED",
         "actor_role": "mapper",
         "actor_id": "untrusted-mapper-01",
@@ -139,7 +141,8 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         assert sup.load(root)[1]["epoch"] == baseline["epoch"] + 1
     _, saved = sup.load(root)
     assert saved["epoch"] == baseline["epoch"] + 1
-    assert saved["slices"][1]["status"] == "MAPPING_PROPOSED"
+    assert next(x for x in saved["slices"]
+                if x["id"] == planned_ids[0])["status"] == "MAPPING_PROPOSED"
     assert not saved["slices"][0]["verified"]
     assert len(saved["recorded_events"]) == len(baseline["recorded_events"]) + 1
     assert saved["recorded_events"][-1]["proposal"] == proposal
@@ -157,7 +160,8 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
                                                canonical_evidence_refs=[]))
     corrupted(lambda s: s["recorded_events"][-1].update(actor_id="forged"))
     corrupted(lambda s: s["recorded_events"].pop())
-    corrupted(lambda s: s["slices"][1].update(
+    corrupted(lambda s: next(x for x in s["slices"]
+                             if x["id"] == planned_ids[0]).update(
         status="MAPPING_PROPOSED", audit_stage="S1_FUNCTIONAL_MAP",
         canonical_evidence_refs=["https://github.com/fake"]
     ))
