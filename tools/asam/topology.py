@@ -128,6 +128,10 @@ def map_slices(root, policy, state, *, check_baseline=True):
                      if v["path"] == name) for name in matching
             ),
             "anchor_hints": anchors,
+            "unresolved_documented_anchors": [
+                a["symbol"] for a in anchors
+                if a["status"] == "NOT_FOUND_REQUIRES_MAPPING"
+            ],
             "evidence_needed": [
                 "verified entry and producer", "true call and consumer chains",
                 "state/ownership/lifetime invariants",
@@ -154,6 +158,9 @@ def map_slices(root, policy, state, *, check_baseline=True):
         "unassigned_files": unassigned,
         "unassigned_count": len(unassigned),
         "semantic_reviewed": 0,
+        "unresolved_documented_anchor_count": sum(
+            len(s["unresolved_documented_anchors"]) for s in slices
+        ),
         "limitations": [
             "A file can participate in several functional regions.",
             "Directory membership is inventory, not proof of responsibility.",
@@ -195,7 +202,9 @@ def main():
         "- Physical lines: " + str(result["tracked_physical_lines"]),
         "- Unique files in planned regions: " + str(result["unique_candidate_files"]),
         "- Unassigned files: " + str(result["unassigned_count"]),
-        "- Semantically reviewed: **0** (intentionally not inferred)", "",
+        "- Semantically reviewed: **0** (intentionally not inferred)",
+        "- Documented anchors absent from current C/H lexical scan: " +
+            str(result["unresolved_documented_anchor_count"]), "",
         "## Functional regions (candidate scope only)", "",
         "| Slice | Domain | Files | Lines | Lexical anchors |",
         "|---|---|---:|---:|---|"
@@ -207,6 +216,11 @@ def main():
                     str(s["tracked_file_candidates"]) + " | " +
                     str(s["physical_lines_in_candidate_files"]) + " | " +
                     descriptions + " |")
+    text += ["", "## Missing documented lexical anchors (NEEDS source review)", ""]
+    for item in result["slice_candidates"]:
+        if item["unresolved_documented_anchors"]:
+            text.append("- " + item["id"] + ": " +
+                ", ".join(item["unresolved_documented_anchors"]))
     text += ["", "## Unassigned tracked source", ""]
     text += ["- " + x for x in result["unassigned_files"][:80]]
     if len(result["unassigned_files"]) > 80:
@@ -265,6 +279,8 @@ def main():
     print("ASAM_BREADTH_LINES=" + str(result["tracked_physical_lines"]))
     print("ASAM_BREADTH_SLICES=" + str(len(result["slice_candidates"])))
     print("ASAM_UNASSIGNED_FILES=" + str(result["unassigned_count"]))
+    print("ASAM_STALE_ANCHOR_HINTS=" +
+          str(result["unresolved_documented_anchor_count"]))
     print("ASAM_SEMANTIC_COVERAGE=0_UNVERIFIED")
 
 
