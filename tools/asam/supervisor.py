@@ -105,6 +105,14 @@ def load(root, *, require_canonical=True):
          "worker cannot close or replace global mission")
     must(state.get("schedule_mode") == "BREADTH_FIRST",
          "scheduler has deviated from breadth-first mission")
+    must(state.get("work_limit") ==
+         "whole responsibility/functional subgraph; not a random file",
+         "task unit silently downgraded from functional responsibility")
+    snapshot = state.get("source_snapshot", {})
+    must(snapshot.get("ref") == "main" and
+         snapshot.get("kind") == "git-commit" and
+         snapshot.get("verified_at_run") is False,
+         "baseline source or attestation was rewritten")
     must(isinstance(state.get("epoch"), int) and state["epoch"] >= 0,
          "invalid state epoch")
     must(SHA.fullmatch(state.get("source_snapshot", {}).get(
@@ -350,6 +358,8 @@ def verify_event_replay(policy, state):
          "original migration history missing or reordered")
     must(state["epoch"] == len(events) - 1,
          "state epoch differs from event count")
+    must(len(events) <= 2000,
+         "unbounded state history; perform reviewed compaction")
     replay = copy.deepcopy(state)
     replay["epoch"] = 1
     replay["recorded_events"] = copy.deepcopy(events[:2])
