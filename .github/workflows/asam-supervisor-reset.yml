@@ -27,11 +27,17 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Publish exact Git commit DAG identity for remote append-only lease audit
+      - name: Pin actual writable branch identity (never confuse PR merge commit)
         run: |
-          printf 'ASAM_REMOTE_HEAD=%s\n' "$(git rev-parse HEAD)"
-          printf 'ASAM_REMOTE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
-          printf 'ASAM_REMOTE_PARENT=%s\n' "$(git rev-parse HEAD^)"
+          set -euo pipefail
+          git fetch --quiet origin \
+            +refs/heads/experiment/asam-supervisor-reset-20261128:refs/remotes/origin/asam-cas-readonly
+          branch_head="$(git rev-parse refs/remotes/origin/asam-cas-readonly)"
+          branch_tree="$(git rev-parse "${branch_head}^{tree}")"
+          printf 'ASAM_CHECKOUT_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'ASAM_BRANCH_HEAD=%s\n' "$branch_head"
+          printf 'ASAM_BRANCH_TREE=%s\n' "$branch_tree"
+          printf 'ASAM_BRANCH_PARENT=%s\n' "$(git rev-parse "${branch_head}^")"
           printf 'ASAM_REMOTE_CAS_WRITER=DISABLED_ON_THIS_UNPROTECTED_BRANCH\n'
 
       - name: Reject production and authority-document modifications
