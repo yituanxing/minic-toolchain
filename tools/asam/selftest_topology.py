@@ -40,6 +40,27 @@ assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
 assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
             if x["id"] == "C01") >= 12
 assert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
+# P0 scope attribution regression: the original C07 advertised a nonexistent
+# riscv/ directory. C06 also omitted the *actual* source-policy/layout owner.
+# Paths are actual pinned tracked C/H, not invented lexical hints.
+candidate_paths = {entry["path"] for entry in a["source_file_fingerprints"]}
+for required in (
+    "src/target/source_policy/language_semantics.c",
+    "src/target/source_policy/data_layout_source.c",
+    "src/target/common/core_function_plan.c",
+    "src/target/riscv32/rv32_emit.c",
+    "src/target/riscv64/codegen_function.c",
+):
+    assert required in candidate_paths, required
+c06 = next(s for s in a["slice_candidates"] if s["id"] == "C06")
+c07 = next(s for s in a["slice_candidates"] if s["id"] == "C07")
+assert "src/target/source_policy/" in c06["scope_hint"]
+assert "src/target/riscv32/" in c07["scope_hint"]
+assert "src/target/riscv64/" in c07["scope_hint"]
+assert "src/target/riscv/" not in c07["scope_hint"]
+assert c06["tracked_file_candidates"] >= 5
+assert c07["tracked_file_candidates"] >= 5
+assert state["recorded_events"][8] == sup.EXPECTED_SCOPE_REFINEMENT_V3
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] in ("PLANNED", "MAPPING_PROPOSED")
            for s in a["slice_candidates"])
