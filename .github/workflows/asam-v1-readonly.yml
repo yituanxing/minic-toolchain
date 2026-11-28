@@ -65,6 +65,22 @@ jobs:
       - name: Ensure production C sources remain unchanged
         run: git diff --exit-code -- src/ compiler/ tools/minic/ tools/minic-cc/
 
+      - name: Broader target-backend cross-file discovery
+        run: |
+          python3 tools/asam/scan.py --repo . --scope src/target --output asam-target-out
+          python3 tools/asam/near_duplicates.py --repo . --input asam-target-out/symbols.json --output asam-target-out
+          python3 tools/asam/review_packets.py --repo . --input asam-target-out/near-duplicates.json --output asam-target-out --limit 12
+          cat asam-target-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload broader target-backend evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-v1-all-target-backends-readonly
+          path: asam-target-out/
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v4
