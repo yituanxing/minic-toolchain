@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 7,
+  "epoch": 8,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -113,7 +113,11 @@
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
-        "src/target/common/"
+        "src/target/common/",
+        "src/target/source_policy/",
+        "src/target/data_layout.h",
+        "src/target/data_layout_source.h",
+        "src/target/target_info.h"
       ],
       "canonical_evidence_refs": [],
       "last_verified_revision": null,
@@ -130,7 +134,8 @@
       "scope_hint": [
         "src/target/x86_64/",
         "src/target/aarch64/",
-        "src/target/riscv/",
+        "src/target/riscv32/",
+        "src/target/riscv64/",
         "src/target/loongarch64/"
       ],
       "canonical_evidence_refs": [],
@@ -496,6 +501,47 @@
           "semantic_coverage_claimed": false
         }
       }
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V3",
+      "epoch": 8,
+      "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+      "prior_scope": {
+        "C06": [
+          "src/target/common/"
+        ],
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "scope_changes": {
+        "C06": [
+          "src/target/common/",
+          "src/target/source_policy/",
+          "src/target/data_layout.h",
+          "src/target/data_layout_source.h",
+          "src/target/target_info.h"
+        ],
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "observed_paths": [
+        "src/target/source_policy/language_semantics.c",
+        "src/target/source_policy/data_layout_source.c",
+        "src/target/common/core_function_plan.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+      ],
+      "rationale": "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+      "verified_slices": 0
     }
   ],
   "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
