@@ -87,5 +87,25 @@ reject("v3 record lies about verified progress",
        lambda v: v[8]["recorded_events"][-1].update(
            verified_slices=1))
 
-print("ASAM_GIT_HISTORY_NEGATIVE=PASS 22 rewritten/batched/fake-approved histories rejected")
+# V4 must preserve the misclassification in V3's immutable history while
+# restoring the original shared selector as a new independently audited event.
+assert len(actual) >= 10 and actual[9]["recorded_events"][-1]["kind"] == "S0_SCOPE_REFINEMENT_V4"
+reject("V4 still drops shared RISC-V selector",
+       lambda v: v[9]["slices"][6]["scope_hint"].remove(
+           "src/target/riscv/"))
+reject("V4 deletes the earlier incorrect V3 event",
+       lambda v: v[9]["recorded_events"].pop(8))
+reject("V4 claims certification for the unreviewed selector",
+       lambda v: v[9]["slices"][6].update(verified=True))
+reject("V4 silently rewrites unrelated C06 path",
+       lambda v: v[9]["slices"][5]["scope_hint"].remove(
+           "src/target/source_policy/"))
+reject("V4 source trace incorrectly attributed to other target",
+       lambda v: v[9]["recorded_events"][-1]["observed_paths"].append(
+           "src/target/nonexistent/machine_core_select.c"))
+reject("V4 corrupts old source provenance",
+       lambda v: v[9]["recorded_events"][-1].update(
+           source_baseline="f" * 40))
+
+print("ASAM_GIT_HISTORY_NEGATIVE=PASS 28 rewritten/batched/fake-approved histories rejected")
 print("ASAM_GIT_HISTORY_REAL=PASS read actual prior Git state revisions, not synthetic assumptions")
