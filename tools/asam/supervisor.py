@@ -6,6 +6,7 @@ It refuses goal drift and restores the whole-project task from durable files.
 Any 'verified' status requires independent evidence pointers, not model claims.
 """
 import argparse
+from contextlib import contextmanager
 import copy
 import hashlib
 import json
@@ -310,6 +311,28 @@ def transition(policy, state, proposal):
     return changed
 
 
+@contextmanager
+def exclusive_state_writer(root):
+    """Fail-closed cross-process lock; never overwrite another writer's epoch.
+
+    A crash may leave a lock requiring explicit operator recovery; that is
+    intentionally safer than guessing a stale writer is dead.
+    """
+    lock = tree(root) / ".asam-state-writer.lock"
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise Rejected("state writer busy; retry after current writer or operator recovery") from exc
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            out.write(str(os.getpid()) + "\n")
+            out.flush()
+            os.fsync(out.fileno())
+        yield
+    finally:
+        lock.unlink()
+
+
 def write_atomic(path, state):
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -319,6 +342,8 @@ def write_atomic(path, state):
         temp = Path(stream.name)
         json.dump(state, stream, ensure_ascii=False, indent=2)
         stream.write("\n")
+        stream.flush()
+        os.fsync(stream.fileno())
     try:
         os.replace(temp, path)
     finally:
@@ -356,8 +381,12 @@ def main():
             print(json.dumps(handoff(policy, state), indent=2, ensure_ascii=False))
             return 0
         proposed = json.loads(args.proposal.read_text(encoding="utf-8"))
-        updated = transition(policy, state, proposed)
-        write_atomic(paths(root)[1], updated)
+        # The only supported writer takes the lock BEFORE rereading the state.
+        # A second process cannot reuse an epoch from before the first commit.
+        with exclusive_state_writer(root):
+            policy, state = load(root)
+            updated = transition(policy, state, proposed)
+            write_atomic(paths(root)[1], updated)
         print("ASAM_TRANSITION=PASS epoch=" + str(updated["epoch"]) +
               " (global mission remains ACTIVE)")
         return 0
