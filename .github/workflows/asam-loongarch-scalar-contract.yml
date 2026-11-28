@@ -1,0 +1,72 @@
+name: ASAM LoongArch scalar-contract fix verification
+
+on:
+  push:
+    branches:
+      - fix/asam-loongarch-scalar-contract-20261128
+  pull_request:
+    paths:
+      - 'src/target/loongarch64/**'
+      - 'tests/target/loongarch64/machine_scalar_type_test.c'
+      - '.github/workflows/asam-loongarch-scalar-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Isolated LoongArch scalar gate and real selector regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify source change boundaries and whitespace
+        run: |
+          git diff --check
+          git diff --name-only origin/main...HEAD > /tmp/asam-loong-paths
+          cat /tmp/asam-loong-paths
+          while IFS= read -r path; do
+            case "$path" in
+              src/target/loongarch64/machine_scalar_type.h|\
+              src/target/loongarch64/machine_scalar_source_select.c|\
+              src/target/loongarch64/machine_select.c|\
+              src/target/loongarch64/machine_llsc_select.c|\
+              src/target/loongarch64/machine_pte_select.c|\
+              tests/target/loongarch64/machine_scalar_type_test.c|\
+              .github/workflows/asam-loongarch-scalar-contract.yml)
+                ;;
+              *) echo "Unexpected modified path: $path" >&2; exit 1;;
+            esac
+          done < /tmp/asam-loong-paths
+
+      - name: New real CoreType forged-input regression
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Wpedantic -Wconversion -Wshadow \
+            -Wstrict-prototypes -Wmissing-prototypes -Werror \
+            -Iinclude -Isrc -ffunction-sections -fdata-sections \
+            tests/target/loongarch64/machine_scalar_type_test.c \
+            src/core/core_type.c src/target/common/lp64_scalar.c \
+            -Wl,--gc-sections -o /tmp/asam-loong-scalar-type
+          /tmp/asam-loong-scalar-type
+
+      - name: Existing real LoongArch machine selector regressions
+        run: |
+          make -j2 MODE=release \
+            check-loong-machine-mir-select \
+            check-loong-machine-core-select
+
+      - name: Full MiniC compiler build (strict warnings)
+        run: |
+          make -j4 MODE=release CFLAGS=-Werror
+
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-loongarch-scalar-verification
+          path: /tmp/asam-loong-paths
+          if-no-files-found: warn
+          retention-days: 14
