@@ -85,6 +85,10 @@ attack("work-order disclaimer replaced", lambda p,s,r,i,o:
        o.update(note="Ten autonomous AI agents completed"))
 attack("source tool revision changed", lambda p,s,r,i,o:
        i.update(current_head_commit="a" * 40))
+attack("missing whole-repo public headers", lambda p,s,r,i,o:
+       i.update(repository_outside_scan_roots=[]))
+attack("fake whole-repo C/H count", lambda p,s,r,i,o:
+       i.update(repository_total_tracked_c_h=1746))
 attack("untrusted old-agent event text reintroduced", lambda p,s,r,i,o:
        r.update(recent_history_pointers_only=s["recorded_events"][-8:]))
 attack("history fingerprint fabricated", lambda p,s,r,i,o:
@@ -112,6 +116,6 @@ try:
 finally:
     candidate.write_bytes(original)
 
-print("ASAM_INDEPENDENT_HANDOFF=PASS 32 adversarial payload mutations rejected")
+print("ASAM_INDEPENDENT_HANDOFF=PASS 34 adversarial payload mutations rejected")
 print("ASAM_HANDOFF_DIRTY_SOURCE=PASS source changed after export rejected")
 print("ASAM_FRESH_CONTEXT=PASS all ten bounded work orders retain original global mission")
