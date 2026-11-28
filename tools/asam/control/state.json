@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 3,
+  "epoch": 4,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -37,14 +37,16 @@
     {
       "id": "C02",
       "name": "Frontend C/GNU C syntax, types and semantics",
-      "status": "PLANNED",
-      "audit_stage": "S0_BASELINE",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
         "src/frontend/"
       ],
-      "canonical_evidence_refs": [],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
       "last_verified_revision": null,
       "unresolved": [],
       "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
@@ -278,6 +280,57 @@
       },
       "canonical_claim": "Candidate file inventory only. No production code modified, no LLM-mapping verified, previously submitted C01 mapping remains provisional and needs expanded boundary review.",
       "verified_slices": 0
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C02",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c02-source-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 4,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 3,
+        "slice_id": "C02",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c02-source-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: Compiler minic_compile_preprocessed_file_for_target owns source buffer, AST Program and CoreSet; forwards same explicit source/machine target invocation into Parser minic_parse_c0_program_for_target, whose Lexer/Parser constructs Program-owned source entities.",
+          "consumers": [
+            "src/frontend/parser_function.c Parser manages TU-local source, target, lexer and private tables; dispatches top-level GNU C declarations, then resolves pending aliases and tentative arrays",
+            "src/compiler/compiler.c verifies parsed AST and FunctionBody ownership, invokes normalization, verifies normalized AST, then inline specialization and Core lowering",
+            "src/frontend/ast_verifier.c validates Program/target syntax contracts; src/frontend/cast_normalization.c owns normalized expression-ID remapping",
+            "src/frontend/parser_core.c and lexer.c implement scoped parser traversal and lexical tokenization; src/frontend/function_body.c checks source FunctionBody owner views",
+            "tests/frontend/ast_contract_test.c exercises AST traversal and mutation/ownership boundary; canonical function-contract register records FN-F01 and related exceptions"
+          ],
+          "functional_path": "PROVISIONAL C02 chain: Compiler-owned preprocessed source and invocation policy -> frontend Lexer and TU Parser -> declaration/expression/type/tag/enum/GNU attribute helpers -> Program-owned AST plus Parser-private scopes/tags/caches -> deferred aliases and tentative-array completion -> parsed AST/FunctionBody verification -> cast normalization with stable ExpressionId remapping -> normalized verifier -> Compiler inline/Core consumers. Distinguish source language policy from machine ABI/layout. No complete C02 review claimed.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_function.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_internal.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_core.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/lexer.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast_verifier.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/cast_normalization.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/function_body.c"
+          ],
+          "limitations": [
+            "UNTRUSTED map only: sampled real files and canonical docs, NOT every function/callee/branch or independent semantic verification.",
+            "Independently challenge all Parser early exits/resource cleanup, shallow-copied MinicParser probes and alias/array postprocessing.",
+            "Recheck existing canonical MC-009/MC-017/MC-023 and arena pointer invalidation; do not create new defects from stale names or unproven text similarity.",
+            "C02 overlaps C03 AST ownership and C06 Target source-policy/ABI responsibilities; no module is certified covered here.",
+            "The pinned GitHub source links are provenance pointers, not proof of code behavior."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
     }
   ],
   "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
