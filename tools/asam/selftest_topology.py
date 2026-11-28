@@ -14,11 +14,11 @@ policy, state = sup.load(root)
 a = topo.map_slices(root, policy, state)
 assert a["mission_id"] == policy["mission_id"]
 assert a["semantic_reviewed"] == 0
-assert len(a["slice_candidates"]) == len(state["slices"]) == 9
+assert len(a["slice_candidates"]) == len(state["slices"]) == 10
 assert a["tracked_c_h_files"] >= 200
 assert a["tracked_physical_lines"] > 40000
 assert a["unique_candidate_files"] <= a["tracked_c_h_files"]
-assert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
+assert a["unassigned_count"] == 0, a["unassigned_files"]\nassert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] == "PLANNED" for s in a["slice_candidates"])
 assert set(a["canonical_documents"]) == set(policy["authoritative_sources"])
