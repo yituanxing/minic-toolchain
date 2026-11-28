@@ -85,6 +85,17 @@ attack("work-order disclaimer replaced", lambda p,s,r,i,o:
        o.update(note="Ten autonomous AI agents completed"))
 attack("source tool revision changed", lambda p,s,r,i,o:
        i.update(current_head_commit="a" * 40))
+attack("untrusted old-agent event text reintroduced", lambda p,s,r,i,o:
+       r.update(recent_history_pointers_only=s["recorded_events"][-8:]))
+attack("history fingerprint fabricated", lambda p,s,r,i,o:
+       r["recent_history_commitments_only"][0].update(
+           content_sha256="f" * 64))
+attack("selected raw evidence link leaked", lambda p,s,r,i,o:
+       r["selected"].update(
+           canonical_evidence_refs=s["slices"][1]["canonical_evidence_refs"]))
+attack("pending map wrongly advertised as completed review", lambda p,s,r,i,o:
+       r["selected"].update(status="MAPPED"))
+
 
 # Loading the correctly versioned report after a local source modification is
 # also illegal, even though HEAD:src and the exported filenames did not change.
@@ -101,6 +112,6 @@ try:
 finally:
     candidate.write_bytes(original)
 
-print("ASAM_INDEPENDENT_HANDOFF=PASS 28 adversarial payload mutations rejected")
+print("ASAM_INDEPENDENT_HANDOFF=PASS 32 adversarial payload mutations rejected")
 print("ASAM_HANDOFF_DIRTY_SOURCE=PASS source changed after export rejected")
 print("ASAM_FRESH_CONTEXT=PASS all ten bounded work orders retain original global mission")
