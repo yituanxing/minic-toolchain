@@ -34,10 +34,11 @@ EXPECTED_HINTS = {
     "C09": ["tests/compiler/", "tests/target/"],
     "C10": ["src/common/"]
 }
-STATUSES = ("PLANNED", "MAPPED", "INVESTIGATING", "CONFIRMED",
+STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
 ALLOWED = {
-    "PLANNED": ("MAPPED",),
+    "PLANNED": ("MAPPING_PROPOSED",),
+    "MAPPING_PROPOSED": ("MAPPED",),
     "MAPPED": ("INVESTIGATING", "VERIFIED"),
     "INVESTIGATING": ("CONFIRMED", "VERIFIED"),
     "CONFIRMED": ("FIXED_UNVERIFIED",),
@@ -45,7 +46,8 @@ ALLOWED = {
     "VERIFIED": (),
 }
 ROLE_FOR = {
-    "MAPPED": "mapper", "INVESTIGATING": "scout",
+    "MAPPING_PROPOSED": "mapper", "MAPPED": "validator",
+    "INVESTIGATING": "scout",
     "CONFIRMED": "challenger", "FIXED_UNVERIFIED": "fixer",
     "VERIFIED": "verifier",
 }
@@ -133,10 +135,14 @@ def load(root, *, require_canonical=True):
         must(status in STATUSES, "illegal slice state for " + ident)
         # Terminal completion requires an authenticated CI/owner attestation
         # which the present prototype intentionally does not implement.
-        must(status != "VERIFIED", "terminal verified state is not trusted yet")
+        must(status not in ("MAPPED", "INVESTIGATING", "CONFIRMED",
+                            "FIXED_UNVERIFIED", "VERIFIED"),
+             "semantic audit progression requires an authenticated proof gate")
         expected_stage = {
             "PLANNED": "S0_BASELINE",
-            "MAPPED": "S1_FUNCTIONAL_MAP",
+            "MAPPING_PROPOSED": "S1_FUNCTIONAL_MAP",
+            "MAPPING_PROPOSED": "S1_FUNCTIONAL_MAP",
+        "MAPPED": "S1_FUNCTIONAL_MAP",
             "INVESTIGATING": "S2_BREADTH_DISCOVERY",
             "CONFIRMED": "S3_INDEPENDENT_COUNTEREVIDENCE",
             "FIXED_UNVERIFIED": "S4_ROOT_CAUSE_FIX",
@@ -166,8 +172,8 @@ def load(root, *, require_canonical=True):
     must(ids == set(EXPECTED_HINTS),
          "functional region was swapped or lost")
     active = state.get("active_task")
-    must(active is None or (isinstance(active, dict)
-         and active.get("slice_id") in ids), "active task points outside graph")
+    must(active is None,
+         "untrusted active_task override is disabled until leases are authenticated")
     return policy, state
 
 
@@ -184,11 +190,7 @@ def handoff(policy, state):
     planned = [x for x in remaining if x["status"] == "PLANNED"]
     # Map all domains before deep-diving into the same one forever.
     breadth = planned if planned else remaining
-    selected = next((x for x in slices if state.get("active_task")
-                     and x["id"] == state["active_task"]["slice_id"]),
-                    None)
-    if selected is None:
-        selected = breadth[0] if breadth else None
+    selected = breadth[0] if breadth else None
     return {
         "schema": "asam-resume-packet-v1",
         "policy_id": policy["mission_id"],
@@ -244,8 +246,8 @@ def transition(policy, state, proposal):
     # Evidence URLs and reviewer names can be forged by untrusted workers.
     # This prototype deliberately REFUSES terminal VERIFIED until an external
     # trusted verifier checks CI provenance, source SHA and project-owner grant.
-    must(target != "VERIFIED",
-         "VERIFIED disabled until externally authenticated evidence gate exists")
+    must(target == "MAPPING_PROPOSED",
+         "only provisional mapping is permitted without independent trusted evidence")
     must(proposal["actor_role"] == ROLE_FOR[target], "wrong worker role")
     must(isinstance(proposal["actor_id"], str) and len(
          proposal["actor_id"].strip()) >= 3, "worker identity missing")
@@ -259,9 +261,9 @@ def transition(policy, state, proposal):
          ev["link"].startswith("https://github.com/") or
          ev["link"].startswith("docs/architecture/")),
          "traceable evidence pointer required")
-    if target == "MAPPED":
+    if target == "MAPPING_PROPOSED":
         must(bool(ev.get("producer")) and bool(ev.get("consumers")) and
-             bool(ev.get("functional_path")), "functional map incomplete")
+             bool(ev.get("functional_path")), "functional map proposal incomplete")
     elif target == "CONFIRMED":
         must(ev.get("counterevidence_checked") is True and
              proposal["actor_id"] != ev.get("scout_actor"),
