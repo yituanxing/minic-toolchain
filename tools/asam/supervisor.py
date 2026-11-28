@@ -102,7 +102,7 @@ ROLE_FOR = {
 SHA = re.compile(r"^[0-9a-f]{40}$")
 ACTOR_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,95}$")
 SOURCE_LINK = re.compile(
-    r"^https://github\\.com/yituanxing/minic-toolchain/blob/"
+    r"^https://github\.com/yituanxing/minic-toolchain/blob/"
     r"([0-9a-f]{40})/(src|tools|tests|docs)/"
     r"[A-Za-z0-9_./-]+$"
 )
