@@ -25,17 +25,27 @@ def rejected(run):
 
 
 source = Path(__file__).resolve().parents[2]
-policy, baseline = sup.load(source)
+policy, current = sup.load(source)
 script = Path(sup.__file__).resolve()
-assert baseline["epoch"] == 1
+assert current["epoch"] == 2
+assert current["slices"][0]["status"] == "MAPPING_PROPOSED"
+# Reconstruct initial S0 fixture from current trusted event history; no second
+# authoritative state copy is stored or needed.
+baseline = copy.deepcopy(current)
+baseline["epoch"] = 1
+baseline["recorded_events"] = copy.deepcopy(current["recorded_events"][:2])
+baseline["slices"][0]["status"] = "PLANNED"
+baseline["slices"][0]["audit_stage"] = "S0_BASELINE"
+baseline["slices"][0]["canonical_evidence_refs"] = []
+sup.verify_event_replay(policy, baseline)
 assert all(s["status"] == "PLANNED" for s in baseline["slices"])
 
 
 with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
     root = Path(dirname)
     sup.tree(root).mkdir(parents=True)
-    for file in sup.paths(source):
-        shutil.copy2(file, sup.tree(root) / file.name)
+    shutil.copy2(sup.paths(source)[0], sup.paths(root)[0])
+    sup.write_atomic(sup.paths(root)[1], baseline)
     for doc in policy["authoritative_sources"].values():
         dest = root / doc
         dest.parent.mkdir(parents=True, exist_ok=True)
