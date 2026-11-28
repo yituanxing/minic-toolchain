@@ -25,7 +25,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # PR's implicit HEAD is a GitHub-generated merge SHA, not the
+          # candidate branch source snapshot. Always inspect exact branch
+          # code; do not attribute a synthetic merge to the reviewed head.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Pin actual writable branch identity (never confuse PR merge commit)
         run: |
@@ -38,6 +43,11 @@ jobs:
           printf 'ASAM_BRANCH_HEAD=%s\n' "$branch_head"
           printf 'ASAM_BRANCH_TREE=%s\n' "$branch_tree"
           printf 'ASAM_BRANCH_PARENT=%s\n' "$(git rev-parse "${branch_head}^")"
+          if [ "$branch_head" != "$(git rev-parse HEAD)" ]; then
+            echo "ASAM_GIT_HEAD_MISMATCH=BLOCKED: checkout is stale or synthetic" >&2
+            exit 1
+          fi
+          printf 'ASAM_GIT_HEAD_IDENTITY=PASS exact candidate branch ref\n'
           printf 'ASAM_REMOTE_CAS_WRITER=DISABLED_ON_THIS_UNPROTECTED_BRANCH\n'
 
       - name: Reject production and authority-document modifications
