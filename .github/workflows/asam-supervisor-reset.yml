@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   immutable-mission:
@@ -43,6 +44,8 @@ jobs:
               tools/asam/selftest_adversarial.py|\
               tools/asam/verify_handoff.py|\
               tools/asam/selftest_handoff.py|\
+              tools/asam/remote_evidence.py|\
+              tools/asam/selftest_remote_evidence.py|\
               tools/asam/README.md|\
               .github/workflows/asam-supervisor-reset.yml) ;;
               *) echo "Forbidden path in Supervisor prototype: $path" >&2; exit 1;;
@@ -84,6 +87,19 @@ jobs:
           python3 -I tools/asam/selftest_handoff.py
           cat asam-supervisor-out/breadth-inventory.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Verify actual completed GitHub CI metadata via read-only API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I tools/asam/selftest_remote_evidence.py
+          python3 -I tools/asam/remote_evidence.py \
+            --run 46106246261 \
+            --commit 9a223597ca5d44612561cf45c3a0b4f8ec0795c5 \
+            --step 'Verify mission locks and all ten pending domains' \
+            --step 'Test independent process restoration and forbidden transitions' \
+            --step 'Index the full tracked compiler and export ten isolated work orders'
+          cat asam-supervisor-out/remote-ci-metadata.json >> "$GITHUB_STEP_SUMMARY"
+
       - name: Publish durable restart packet and whole-project candidate scope
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,5 +110,6 @@ jobs:
             asam-supervisor-out/breadth-inventory.json
             asam-supervisor-out/breadth-inventory.md
             asam-supervisor-out/work-orders.json
+            asam-supervisor-out/remote-ci-metadata.json
           if-no-files-found: warn
           retention-days: 14
