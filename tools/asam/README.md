@@ -13,7 +13,7 @@ experiment, not yet an autonomous multi-agent engine.
    records linked in policy.json. They alone own technical facts, established
    problems and exclusions. ASAM must NOT duplicate the issue register.
 3. tools/asam/control/state.json — **scheduling and coverage cursor only**.
-   C01–C09 are planning-level functional regions; all start as PLANNED.
+   C01–C10 are planning-level functional regions; all start as PLANNED.
    No region has been claimed verified by this experiment.
 4. Actual versioned source, CI logs, test matrix and external runtime oracles
    determine code correctness. An AI assertion is not runtime evidence.
