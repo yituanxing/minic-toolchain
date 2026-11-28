@@ -168,7 +168,7 @@ def handoff(policy, state):
                             "record uncovered paths. Do NOT substitute a "
                             "single-file clean-up for global coverage.")
         } if selected else None),
-        "historical_reference_only": state["recorded_events"],
+        "recent_history_pointers_only": state["recorded_events"][-8:],
         "temporary_context": [],
         "reset_contract": "This packet is sufficient to restart a new AI task. "
                           "Do not rely on earlier model messages. "
@@ -191,6 +191,11 @@ def transition(policy, state, proposal):
     must(item is not None, "unknown functional subgraph")
     target = proposal["to_status"]
     must(target in ALLOWED[item["status"]], "illegal lifecycle transition")
+    # Evidence URLs and reviewer names can be forged by untrusted workers.
+    # This prototype deliberately REFUSES terminal VERIFIED until an external
+    # trusted verifier checks CI provenance, source SHA and project-owner grant.
+    must(target != "VERIFIED",
+         "VERIFIED disabled until externally authenticated evidence gate exists")
     must(proposal["actor_role"] == ROLE_FOR[target], "wrong worker role")
     must(isinstance(proposal["actor_id"], str) and len(
          proposal["actor_id"].strip()) >= 3, "worker identity missing")
