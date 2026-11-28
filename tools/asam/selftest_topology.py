@@ -38,7 +38,7 @@ assert a["unassigned_count"] == 0, a["unassigned_files"]
 assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
             if x["id"] == "C10") >= 5
 assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
-            if x["id"] == "C01") >= 5
+            if x["id"] == "C01") >= 12
 assert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] in ("PLANNED", "MAPPING_PROPOSED")
