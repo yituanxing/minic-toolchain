@@ -267,6 +267,49 @@ def check_s0_scope_v3(before, after):
             "third migration retroactively certified C06/C07")
 
 
+def check_s0_scope_v4(before, after):
+    """Correct the V3 omitted *existing* shared RISC-V machine selector."""
+    event = check_transition(before, after, kind="S0_SCOPE_REFINEMENT_V4")
+    require(before["epoch"] == 8 and after["epoch"] == 9 and
+            event.get("source_baseline") ==
+            before["source_snapshot"]["observed_commit"] and
+            event.get("verified_slices") == 0,
+            "fourth scope migration not at pinned S0 state")
+    old = ["src/target/x86_64/", "src/target/aarch64/",
+           "src/target/riscv32/", "src/target/riscv64/",
+           "src/target/loongarch64/"]
+    new = ["src/target/x86_64/", "src/target/aarch64/",
+           "src/target/riscv/", "src/target/riscv32/",
+           "src/target/riscv64/", "src/target/loongarch64/"]
+    require(event.get("prior_scope") == {"C07": old} and
+            event.get("scope_changes") == {"C07": new} and
+            event.get("observed_paths") == [
+                "src/target/riscv/machine_core_select.c",
+                "src/target/riscv/machine_core_select.h",
+                "src/target/riscv/machine_target_state.h",
+                "src/target/riscv/machine_gnu_asm.c",
+                "src/target/riscv32/rv32_emit.c",
+                "src/target/riscv64/codegen_function.c"
+            ] and event.get("rationale") ==
+            "Correct S0-v3 false assertion: src/target/riscv/ is a real shared RISC-V machine implementation that BOTH RV32 and RV64 consume. V3 correctly added separate ABI directories but incorrectly removed their common selector. Restore all three directories, retain the historical error and never claim review completion.",
+            "shared RISC-V machine implementation correction was forged")
+    before_rows, after_rows = before["slices"], after["slices"]
+    require(len(before_rows) == len(after_rows) == 10 and
+            [x["id"] for x in before_rows] ==
+            [x["id"] for x in after_rows],
+            "fourth migration changed task count, order, or identity")
+    for a, b in zip(before_rows, after_rows):
+        if a["id"] == "C07":
+            require(a["scope_hint"] == old and b["scope_hint"] == new and
+                    {k: v for k, v in a.items() if k != "scope_hint"} ==
+                    {k: v for k, v in b.items() if k != "scope_hint"} and
+                    a["status"] == "PLANNED",
+                    "fourth migration changed unreviewed C07 authority")
+        else:
+            require(a == b,
+                    "fourth migration changed an unrelated function area")
+
+
 def verify_versions(versions):
     require(len(versions) >= 4, "incomplete original state history")
     verify_initial(versions[0])
@@ -277,6 +320,8 @@ def verify_versions(versions):
             check_s0_expansion(before, after)
         elif i == 8:
             check_s0_scope_v3(before, after)
+        elif i == 9:
+            check_s0_scope_v4(before, after)
         else:
             check_mapping_proposal(before, after)
     require(versions[-1]["epoch"] == len(versions) - 1,
