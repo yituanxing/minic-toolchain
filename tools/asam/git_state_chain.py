@@ -210,6 +210,63 @@ def check_s0_expansion(before, after):
             require(a == b, "unrelated region changed in S0 v2")
 
 
+def check_s0_scope_v3(before, after):
+    """Independently check the real C06/C07 source-boundary correction.
+
+    In particular, an already proposed C01-C05 must not lose status,
+    evidence, or task identity when the scope coverage is corrected.
+    """
+    event = check_transition(before, after, kind="S0_SCOPE_REFINEMENT_V3")
+    require(before["epoch"] == 7 and after["epoch"] == 8,
+            "third scope migration at unexpected epoch")
+    baseline = before["source_snapshot"]["observed_commit"]
+    require(event.get("source_baseline") == baseline and
+            event.get("verified_slices") == 0,
+            "scope migration asserts wrong source baseline or review status")
+    old_scope = {
+        "C06": ["src/target/common/"],
+        "C07": ["src/target/x86_64/", "src/target/aarch64/",
+                "src/target/riscv/", "src/target/loongarch64/"]
+    }
+    revised = {
+        "C06": ["src/target/common/", "src/target/source_policy/",
+                "src/target/data_layout.h", "src/target/data_layout_source.h",
+                "src/target/target_info.h"],
+        "C07": ["src/target/x86_64/", "src/target/aarch64/",
+                "src/target/riscv32/", "src/target/riscv64/",
+                "src/target/loongarch64/"]
+    }
+    require(event.get("prior_scope") == old_scope and
+            event.get("scope_changes") == revised and
+            event.get("observed_paths") == [
+                "src/target/source_policy/language_semantics.c",
+                "src/target/source_policy/data_layout_source.c",
+                "src/target/common/core_function_plan.c",
+                "src/target/riscv32/rv32_emit.c",
+                "src/target/riscv64/codegen_function.c"
+            ] and event.get("rationale") ==
+            "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+            "third migration changes boundaries without full recorded justification")
+    before_slices, after_slices = before["slices"], after["slices"]
+    require([x["id"] for x in before_slices] ==
+            [x["id"] for x in after_slices] and
+            len(before_slices) == len(after_slices) == 10,
+            "third migration changed functional region identity/order")
+    for old, new in zip(before_slices, after_slices):
+        ident = old["id"]
+        if ident in revised:
+            require(old["scope_hint"] == old_scope[ident] and
+                    new["scope_hint"] == revised[ident] and
+                    {k: v for k, v in old.items() if k != "scope_hint"} ==
+                    {k: v for k, v in new.items() if k != "scope_hint"},
+                    "third migration secretly changed semantic authority: " + ident)
+        else:
+            require(old == new,
+                    "third migration changed unrelated coverage: " + ident)
+    require(all(x["status"] == "PLANNED" for x in after_slices[5:7]),
+            "third migration retroactively certified C06/C07")
+
+
 def verify_versions(versions):
     require(len(versions) >= 4, "incomplete original state history")
     verify_initial(versions[0])
@@ -218,6 +275,8 @@ def verify_versions(versions):
             check_s0_migration(before, after)
         elif i == 3:
             check_s0_expansion(before, after)
+        elif i == 8:
+            check_s0_scope_v3(before, after)
         else:
             check_mapping_proposal(before, after)
     require(versions[-1]["epoch"] == len(versions) - 1,
