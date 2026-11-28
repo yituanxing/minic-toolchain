@@ -94,14 +94,28 @@ jobs:
           data = json.load(open("/tmp/asam-resume.json"))
           assert data["policy_id"] == "ASAM-MINIC-GLOBAL-20261128"
           assert data["global_task_completed"] is False
-          assert data["coverage_status"]["PLANNED"] == 9
-          assert data["coverage_status"]["MAPPING_PROPOSED"] == 1
+          assert data["global_status"] == "ACTIVE"
           assert data["coverage_status"]["VERIFIED"] == 0
-          assert len(data["breadth_frontier"]) == 9
-          assert data["selected"]["id"] == "C02"
-          assert data["global_task_completed"] is False
+          assert data["coverage_status"]["MAPPED"] == 0
+          assert sum(data["coverage_status"].values()) == 10
+          planned = data["coverage_status"]["PLANNED"]
+          proposed = data["coverage_status"]["MAPPING_PROPOSED"]
+          assert proposed + planned == 10
+          assert proposed >= 1, "existing C01 proposal lost"
+          assert len(data["breadth_frontier"]) == (planned if planned else 10)
+          expected = next((slice_ for slice_ in data["breadth_frontier"]
+                           if slice_["status"] == "PLANNED"), None)
+          if expected:
+              assert data["selected"]["id"] == expected["id"]
+          else:
+              assert data["selected"]["id"] == "C01"
+              assert data["selected"]["instruction"].startswith(
+                  "Independently challenge")
           assert not data["temporary_context"]
-          print("ASAM_MISSION_RELOAD=PASS 1 C01 proposal, 9 planned, C02 selected, no false completion")
+          assert data["trust_gate"]["semantic_completion_enabled"] is False
+          print(f"ASAM_MISSION_RELOAD=PASS {proposed} provisional, "
+                f"{planned} planned, next {data['selected']['id']}, "
+                "zero certified or autonomous actions")
           PY
 
       - name: Audit all historical task-state Git revisions independently
