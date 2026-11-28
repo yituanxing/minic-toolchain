@@ -28,7 +28,7 @@ jobs:
       - name: Install deterministic C symbol indexer
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends universal-ctags
+          sudo apt-get install -y --no-install-recommends universal-ctags cflow
           ctags --version
 
       - name: Verify scanner on synthetic C input
@@ -56,6 +56,14 @@ jobs:
           python3 tools/asam/review_packets.py --repo . --input asam-out/near-duplicates.json --output asam-out --limit 12
           python3 tools/asam/scout_api.py --input asam-out/scout-packets.json --output asam-out
           cat asam-out/scout-queue.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Generate partial source-call graph evidence
+        run: |
+          python3 -m py_compile tools/asam/cflow_probe.py
+          python3 tools/asam/cflow_probe.py --repo . --output asam-out
+
+      - name: Ensure production C sources remain unchanged
+        run: git diff --exit-code -- src/ compiler/ tools/minic/ tools/minic-cc/
 
       - name: Upload scan evidence
         if: always()
