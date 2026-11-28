@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 0,
+  "epoch": 1,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -23,13 +23,13 @@
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
-        "tools/minic/main.c",
-        "tools/minic-cc/main.c"
+        "tools/minic/",
+        "tools/minic-cc/"
       ],
       "canonical_evidence_refs": [],
       "last_verified_revision": null,
       "unresolved": [],
-      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+      "note": "Planning-level. Include all driver and invocation units, not only main.c. No semantic coverage claimed."
     },
     {
       "id": "C02",
@@ -158,6 +158,21 @@
       "last_verified_revision": null,
       "unresolved": [],
       "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C10",
+      "name": "Cross-stage common contracts and shared primitives",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/common/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Discovered by full tracked inventory: source_location, calling_convention, integer_bits, call_frame_address and machine builtin effect interfaces cross layer ownership. All semantic responsibility UNVERIFIED."
     }
   ],
   "active_task": null,
@@ -167,6 +182,19 @@
       "source": "https://github.com/yituanxing/minic-toolchain/pull/711",
       "evidence": "LoongArch local scalar gate consolidation; merged, does not imply C07 verified",
       "issue_record": "refer to existing canonical MiniC issues; no new authoritative ASAM issue number"
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT",
+      "epoch": 1,
+      "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46103545658",
+      "evidence": "8 unassigned C/H files in whole-repo tracked inventory. C01 expanded to all driver translation units; C10 added for five src/common C/H interfaces. No semantic coverage or source-code edits claimed.",
+      "added": [
+        "C10"
+      ],
+      "refined": [
+        "C01"
+      ],
+      "expected_unassigned_after_refinement": 0
     }
   ],
   "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
