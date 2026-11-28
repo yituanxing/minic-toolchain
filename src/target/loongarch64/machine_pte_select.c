@@ -1,4 +1,5 @@
 #include "target/loongarch64/machine_pte_select.h"
+#include "target/loongarch64/machine_scalar_type.h"
 
 #include "target/common/core_machine_asm.h"
 #include "target/common/lp64_scalar.h"
@@ -14,23 +15,6 @@ static MinicMachineOperand pte_memory(unsigned base) {
                                       "+m", "buddy");
 }
 
-static bool pte_unsigned_word(const MinicCoreFunction *fn,
-    MinicCoreValueId value, bool address) {
-    MinicCoreTypeId type_id;
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
-        value >= fn->value_count) return false;
-    type_id = fn->values[value].core_type_id;
-    if (address && !minic_lp64_core_pointer_pointee(
-            fn->type_context, type_id, &type_id)) return false;
-    type_id = minic_core_type_unqualified(fn->type_context, type_id);
-    type = minic_core_type_get(fn->type_context, type_id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
-        type->has_layout && type->size == 8U &&
-        !type->value.integer.is_bool &&
-        !type->value.integer.is_signed &&
-        type->value.integer.bit_width == 64U;
-}
 
 static bool pte_source(const MinicCoreInlineAsm *source) {
     return source != NULL &&
@@ -91,7 +75,8 @@ bool minic_loongarch64_machine_select_pte(
              * sealed GNU `=&r` is an independent physical constraint. */
             roles[i].physical_early_clobber != (i == 1U) ||
             roles[i].physical_read_write != (i == 0U) ||
-            !pte_unsigned_word(fn, roles[i].value, i < 2U))
+            !minic_loong_core_integer_operand(fn, roles[i].value,
+                i < 2U, 8U, 0))
             return false;
     }
     /* Physical source contract: original LL/SC memory lives at t1, the
