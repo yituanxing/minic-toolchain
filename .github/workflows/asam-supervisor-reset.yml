@@ -1,0 +1,75 @@
+name: ASAM Supervisor mission and context-reset acceptance
+
+on:
+  push:
+    branches:
+      - experiment/asam-supervisor-reset-20261128
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-supervisor-reset.yml'
+  pull_request:
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-supervisor-reset.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-mission:
+    name: Verify permanent mission and fresh-process resume
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reject production and authority-document modifications
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check origin/main...HEAD
+          git diff --name-only origin/main...HEAD > /tmp/asam-supervisor-touched.txt
+          while IFS= read -r path; do
+            case "$path" in
+              tools/asam/control/policy.json|\
+              tools/asam/control/state.json|\
+              tools/asam/supervisor.py|\
+              tools/asam/selftest_supervisor.py|\
+              tools/asam/README.md|\
+              .github/workflows/asam-supervisor-reset.yml) ;;
+              *) echo "Forbidden path in Supervisor prototype: $path" >&2; exit 1;;
+            esac
+          done < /tmp/asam-supervisor-touched.txt
+
+      - name: Verify mission locks and all nine pending domains
+        run: |
+          python3 -I tools/asam/supervisor.py --root . check
+          python3 -I tools/asam/supervisor.py --root . status
+          python3 -I tools/asam/supervisor.py --root . resume > /tmp/asam-resume.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open("/tmp/asam-resume.json"))
+          assert data["policy_id"] == "ASAM-MINIC-GLOBAL-20261128"
+          assert data["global_task_completed"] is False
+          assert data["coverage_status"]["PLANNED"] == 9
+          assert data["coverage_status"]["VERIFIED"] == 0
+          assert len(data["breadth_frontier"]) == 9
+          assert not data["temporary_context"]
+          print("ASAM_MISSION_RELOAD=PASS 9 pending functional regions, no false completion")
+          PY
+
+      - name: Test independent process restoration and forbidden transitions
+        run: |
+          python3 -I tools/asam/selftest_supervisor.py
+
+      - name: Publish bounded restart packet for ChatGPT controller
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-supervisor-fresh-context-packet
+          path: /tmp/asam-resume.json
+          if-no-files-found: warn
+          retention-days: 14
