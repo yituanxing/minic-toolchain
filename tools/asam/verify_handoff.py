@@ -176,7 +176,7 @@ def check(root, policy, state, resume, inventory, orders):
     for ident, state_slice in slices.items():
         wanted = [
             name for name in tracked if any(
-                name == hint if not hint.endswith("/") else name.startswith(hint)
+                name == hint if not hint.endswith(("/", "-")) else name.startswith(hint)
                 for hint in state_slice["scope_hint"])
         ]
         assigned.update(wanted)
