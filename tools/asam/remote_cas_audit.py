@@ -98,12 +98,11 @@ def evaluate(probe, base, win, lose, ref, compares):
     wt = compares["winner_to_tip"]
     lt = compares["loser_to_tip"]
     wl = compares["winner_to_loser"]
-    require(wt.get("status") == (
-                "identical" if tip == winner else "ahead") and
-            wt.get("behind_by") == 0 and
-            wt.get("ahead_by") == (0 if tip == winner else
-                                  wt.get("ahead_by")) and
-            (tip == winner or wt.get("ahead_by", 0) >= 1),
+    require(wt.get("behind_by") == 0 and
+            (wt.get("status") == "identical" and
+             wt.get("ahead_by") == 0 if tip == winner else
+             wt.get("status") == "ahead" and
+             type(wt.get("ahead_by")) is int and wt["ahead_by"] >= 1),
             "winning contender was no longer in current branch ancestry")
     require(lt.get("status") == "diverged" and
             lt.get("behind_by", 0) >= 1 and
