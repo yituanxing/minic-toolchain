@@ -44,7 +44,7 @@ def token_references(root, endpoint, count_limit=12):
     locations, including comments. It is conservative and NOT a call graph.
     """
     name = endpoint["name"]
-    token = re.compile(r"\\b" + re.escape(name) + r"\\b")
+    token = re.compile(r"\b" + re.escape(name) + r"\b")
     examples = []
     count = 0
     digest = hashlib.sha256()
@@ -66,7 +66,7 @@ def token_references(root, endpoint, count_limit=12):
                 continue
             count += 1
             digest.update(json.dumps([relative, number, line], ensure_ascii=False).encode())
-            digest.update(b"\\n")
+            digest.update(b"\n")
             if len(examples) < count_limit:
                 examples.append({
                     "path": relative, "line": number, "text": line.strip()[:200]
