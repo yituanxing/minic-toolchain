@@ -20,10 +20,18 @@ assert a["repository_total_tracked_c_h"] >= a["tracked_c_h_files"]
 assert a["repository_outside_scan_roots_count"] == len(
     a["repository_outside_scan_roots"]
 )
-# These two known genuine MiniC interfaces/driver tests were absent from the
-# old 1,746-file scoped tally. Stop mistaking scoped zero for whole-repo zero.
-assert "include/minic/compiler.h" in a["repository_outside_scan_roots"]
-assert "tests/driver/staged-target-forward-test.c" in a["repository_outside_scan_roots"]
+# The old inventory omitted 153 in-scope C/H files. Full repo contains
+# separately owned external tools/libraries; classify every external root
+# rather than claiming those files are MiniC production implementation.
+assert a["tracked_c_h_files"] == 1899
+assert a["repository_total_tracked_c_h"] == 1983
+assert a["repository_excluded_external_c_h_count"] == 84
+assert a["repository_unclassified_c_h_count"] == 0
+assert a["repository_outside_scan_roots"] == a["repository_excluded_external_c_h"]
+assert "include/minic/compiler.h" not in a["repository_outside_scan_roots"]
+assert "tests/driver/staged-target-forward-test.c" not in a["repository_outside_scan_roots"]
+assert all(name.startswith(tuple(a["explicit_external_roots"]))
+           for name in a["repository_outside_scan_roots"])
 assert a["tracked_physical_lines"] > 40000
 assert a["unique_candidate_files"] <= a["tracked_c_h_files"]
 assert a["unassigned_count"] == 0, a["unassigned_files"]
