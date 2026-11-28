@@ -60,5 +60,24 @@ with tempfile.TemporaryDirectory() as tmp:
     assert p["review_status"] == "NEEDS_SEMANTIC_EVIDENCE"
     assert p["id"].startswith("ASAM-")
     assert len(json.dumps(result)) < 12000
+    ledger = {p["id"]: {"status": "DISTINCT_KEEP", "members": [
+        {"path": p[side]["path"], "name": p[side]["name"],
+         "content_sha256": p[side]["content_sha256"]} for side in ("a", "b")
+    ]}}
+    replay = rp.build(root, [packet], limit=2, max_source_lines=12,
+                      dispositions=ledger)
+    assert replay["candidate_count"] == 0
+    assert replay["unchanged_distinct_candidates_skipped"] == [p["id"]]
+    src.write_text(src.read_text() + "int additional_state = 1;\n", encoding="utf-8")
+    # Changing code *outside* the reviewed function must not lose the disposition.
+    unchanged = rp.build(root, [packet], limit=2, max_source_lines=12,
+                         dispositions=ledger)
+    assert unchanged["candidate_count"] == 0
+    src.write_text(src.read_text().replace("int line_4 = 4;", "int line_4 = 99;"),
+                   encoding="utf-8")
+    stale = rp.build(root, [packet], limit=2, max_source_lines=12,
+                     dispositions=ledger)
+    assert stale["candidate_count"] == 1, "changed source must be re-reviewed"
+    assert stale["packets"][0]["id"] == p["id"], "identity must survive source edits"
 
-print("ASAM v1.1 PASS: anchor-aware ranking, separate pattern queue, bounded packets")
+print("ASAM v1.1 PASS: ranking, pattern queue, packets, stable IDs and digest-aware replay")
