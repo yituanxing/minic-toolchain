@@ -6,6 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import handoff_gate as gate
+import scout_api as api
+from unittest.mock import patch
 
 contract = {
     "schema": "asam-v1-task-contract-1",
@@ -90,4 +92,55 @@ tampered = copy.deepcopy(model)
 tampered["status"] = "MODEL_ERROR"
 blocked("model error should not pass", changed_model=tampered)
 
-print("ASAM gate selftest PASS: 2 valid states and 9 fail-closed cases")
+# Mock only the network boundary. This does NOT constitute a real model call.
+class FakeHTTP:
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, traceback):
+        return False
+    def read(self, size=-1):
+        return b""
+
+verdict = model["results"][0]["triage"]
+mock_result = {
+    "status": "completed",
+    "output": [{"type": "message", "content": [{
+        "type": "output_text", "text": __import__("json").dumps(verdict)
+    }]}],
+    "usage": {"total_tokens": 157}
+}
+class FakeResponse(FakeHTTP):
+    def __iter__(self):
+        return iter([])
+    def read(self, size=-1):
+        return __import__("json").dumps(mock_result).encode()
+
+def fake_urlopen(request, timeout=0):
+    payload = __import__("json").loads(request.data.decode("utf-8"))
+    assert payload["store"] is False
+    assert payload["model"] == "mock-review-model"
+    assert payload["max_output_tokens"] <= 800
+    assert "READ_ONLY" not in request.full_url or request.full_url.startswith("https://")
+    assert request.full_url == "https://api.openai.com/v1/responses"
+    assert payload["text"]["format"]["type"] == "json_schema"
+    return FakeResponse()
+
+with patch.object(api.urllib.request, "urlopen", fake_urlopen):
+    reviewed, usage = api.run_one(packet["packets"][0], "mock-key", "mock-review-model")
+    assert reviewed == verdict
+    assert usage["total_tokens"] == 157
+
+# Strict schema: an AI that smuggles patch metadata must be rejected.
+corrupt = dict(verdict)
+corrupt["patch"] = "remove all code"
+mock_result["output"][0]["content"][0]["text"] = __import__("json").dumps(corrupt)
+with patch.object(api.urllib.request, "urlopen", fake_urlopen):
+    try:
+        api.run_one(packet["packets"][0], "mock-key", "mock-review-model")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("model adapter accepted a patch field")
+
+print("ASAM gate selftest PASS: safety rejections and mocked API protocol")
+
