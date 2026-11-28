@@ -16,6 +16,12 @@ def git_revision(root):
                        capture_output=True, text=True, check=False)
     return p.stdout.strip() if p.returncode == 0 else "unknown"
 
+def source_tree_revision(root):
+    """Stable across ASAM script edits, invalidated by production src edits."""
+    p = subprocess.run(["git", "rev-parse", "HEAD:src"], cwd=root,
+                       capture_output=True, text=True, check=False)
+    return p.stdout.strip() if p.returncode == 0 else "unknown"
+
 def bounded_source(root, endpoint, max_lines):
     path = (root / endpoint["path"]).resolve()
     if not (root in path.parents and path.is_file()):
@@ -74,7 +80,8 @@ def token_references(root, endpoint, count_limit=12):
     return examples, digest.hexdigest(), count
 
 def build(root, findings, limit, max_source_lines, dispositions=None):
-    sha = git_revision(root)
+    sha = source_tree_revision(root)
+    analysis_commit = git_revision(root)
     results = []
     skipped = []
     dispositions = dispositions or {}
@@ -128,7 +135,9 @@ def build(root, findings, limit, max_source_lines, dispositions=None):
             break
     return {
         "schema": "asam-v1-scout-packet-1",
-        "source_revision": sha, "scope": "read-only semantic hypothesis review",
+        "source_revision": sha, "analysis_commit": analysis_commit,
+        "source_revision_kind": "git-tree:src",
+        "scope": "read-only semantic hypothesis review",
         "candidate_count": len(results),
         "unchanged_distinct_candidates_skipped": skipped,
         "required_conclusion": ["DUPLICATE_PROVEN", "DISTINCT_KEEP", "INVESTIGATE"],
@@ -167,7 +176,8 @@ def main():
     (dest / "scout-packets.json").write_text(
         json.dumps(packets, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     out = ["# ASAM Scout review queue (not proven defects)", "",
-           "- Commit: " + packets["source_revision"],
+           "- Production source tree: " + packets["source_revision"],
+           "- Analysis checkout commit: " + packets["analysis_commit"],
            "- Packets: " + str(packets["candidate_count"]),
            "- Unchanged, reviewed DISTINCT_KEEP pairs skipped: " +
                str(len(packets["unchanged_distinct_candidates_skipped"])),
@@ -191,7 +201,8 @@ def main():
     (dest / "scout-queue.md").write_text("\n".join(out) + "\n", encoding="utf-8")
     print("ASAM Scout evidence packets:", packets["candidate_count"])
     print("ASAM unchanged distinct pairs skipped:", len(packets["unchanged_distinct_candidates_skipped"]))
-    print("ASAM revision:", packets["source_revision"])
+    print("ASAM source tree:", packets["source_revision"])
+    print("ASAM analysis commit:", packets["analysis_commit"])
 
 if __name__ == "__main__":
     main()
