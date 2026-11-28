@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 6,
+  "epoch": 7,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -90,15 +90,17 @@
     {
       "id": "C05",
       "name": "Core reachability, global objects and invariants",
-      "status": "PLANNED",
-      "audit_stage": "S0_BASELINE",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
         "src/core/",
         "src/compiler/compiler.c"
       ],
-      "canonical_evidence_refs": [],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
       "last_verified_revision": null,
       "unresolved": [],
       "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
@@ -438,6 +440,57 @@
             "TypeId is owned by per-TU CoreTypeContext; target DataLayout is input to source ingress but physical target ABI plans remain backend-owned.",
             "Need cross-function/ISA tests for error draft cleanup, reentry cache fallback, recursive type import, relocation owner-label and source/ModuleIR lifetime; do not remove these as syntactic duplication.",
             "Historical core-type ingress design document has a dated old-baseline status; only current source and canonical architecture/issue records should authorize any change."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C05",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c05-core-closure-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 7,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 6,
+        "slice_id": "C05",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c05-core-closure-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/compiler/module_ir_build.c snapshots Program function/object/ASM/label alias identities into Core ModuleIR, while src/compiler/core_function_set.c creates Source-independent Core FunctionSet and one Core lowering result slot per FunctionId.",
+          "consumers": [
+            "src/compiler/core_reachability.c:minic_core_function_set_close_reachability computes Core/Module-only fixed-point reachability through function/global queues, canonical storage owners, aliases, relocation references, per-block Core CALL/function/global-address instructions and qualified versus opaque GNU inline ASM",
+            "src/compiler/core_function_set.c:minic_complete_core_function_set_reachability uses closure verdict to identify a previously skipped source function that became live, lowers it with the same private Core draft transaction, and recomputes until no late-live source function remains",
+            "src/compiler/module_ir_build.c:minic_core_module_materialize_live_payloads materializes only closure-live global bytes/fragments after source DataLayout admission and validates independent ModuleIR",
+            "src/core/module_ir.c verifies fragment offsets/sizes, symbol uniqueness, object storage extent, and exact correspondence between pre-closure reference edges and emitted relocation fragments",
+            "src/compiler/compiler.c performs Core closure -> Core/result validation -> target layout validation -> ModuleIR payload publication -> frees source Program before Target assembly emission"
+          ],
+          "functional_path": "C05 PROVISIONAL responsibility graph: Source AST identity is snapshotted once into ModuleIR and sealed CoreFunctionSet -> module true roots include definitions, file-scope ASM, aliases, global objects, function local-static storage owners and label relocations -> FIFO queue closure traverses live object reference edges and live Core CALL/FUNCTION_ADDRESS/GLOBAL_ADDRESS/INLINE_ASM effects; indirect branches conservatively retain possible blocks -> assign live functions/global emittable flags transactionally -> rerun source-to-Core ingress only for newly live but unattempted source functions, repeat until no new FunctionId -> materialize live global payload and verify ModuleIR before freeing C source state. Not three independent source-level prune passes.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_reachability.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_reachability.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/module_ir_build.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/symbol_identity.h"
+          ],
+          "limitations": [
+            "MAPPING_PROPOSED only; not all Core reachability branches, ASM matcher edge cases, error-injection paths or tests reviewed; no independent control root or semantic-verifier approval.",
+            "An assembler mnemonic matching a C function name is NOT necessarily a relocation. Target-qualified operand forms versus opaque ASM intentionally have different conservative handling; cannot delete without GNU behavior comparison.",
+            "An unattempted static function and a failed Core lowering are distinct statuses. Initial source emission hints are not authoritative dead-code proof when Core relocation/call/label roots can revive that body.",
+            "Global object relocation may refer to assembler spelling resolved to multiple source declarations; canonical owner label relocation retains the original source FunctionBody, not an unrelated clone.",
+            "Need exact tests for computed goto, static initializers, file ASM, alias chains, OOM error paths and same-source all-ISA runtime before making any prune simplification."
           ],
           "independent_review": false,
           "semantic_coverage_claimed": false
