@@ -2839,6 +2839,13 @@ check-loong-machine-core-select:
 	  src/target/loongarch64/simd_asm.c \
 	  -o "$(BUILD_DIR)/tests/loong-machine-core-select"
 	"$(BUILD_DIR)/tests/loong-machine-core-select"
+	$(CC) $(CPPFLAGS) $(MINIC_INCLUDES) $(MINIC_CFLAGS) -Werror \
+	  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+	  tests/target/loongarch64/machine_scalar_type_test.c \
+	  src/core/core_type.c src/target/common/lp64_scalar.c \
+	  $(MINIC_LDFLAGS) \
+	  -o "$(BUILD_DIR)/tests/loong-machine-scalar-type"
+	"$(BUILD_DIR)/tests/loong-machine-scalar-type"
 
 .PHONY: check-a64-machine-source-asm
 check-a64-machine-source-asm:
