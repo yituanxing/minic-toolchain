@@ -52,15 +52,20 @@ def enforce(contract, packets, model):
             ):
                 raise GateError("missing function or reference fingerprint")
     status = model.get("status")
-    if status not in {"DRY_RUN", "NOT_CONFIGURED", "TRIAGED_NO_EDITS"}:
+    if status not in {"DRY_RUN", "NOT_CONFIGURED", "TRIAGED_NO_EDITS",
+                      "CONTROLLER_TRIAGE_NO_EDITS"}:
         raise GateError("model report not complete and safe")
     results = model.get("results", [])
     if not isinstance(results, list) or len(results) > contract["max_model_packets"]:
         raise GateError("model exceeded task budget")
     if model.get("reviewed_count") != len(results):
         raise GateError("model count does not match results")
-    if status != "TRIAGED_NO_EDITS" and results:
-        raise GateError("non-triage status contains model decisions")
+    if status not in ("TRIAGED_NO_EDITS", "CONTROLLER_TRIAGE_NO_EDITS") and results:
+        raise GateError("non-triage status contains decisions")
+    if status == "CONTROLLER_TRIAGE_NO_EDITS" and (
+        model.get("reviewer_type") != "CHATGPT_CONTROLLER"
+    ):
+        raise GateError("controller verdict missing explicit provenance")
     seen = set()
     queue = []
     for result in results:
@@ -99,8 +104,9 @@ def enforce(contract, packets, model):
         })
     return {
         "schema": "asam-v1-handoff-gate-1",
-        "status": "NO_MODEL_CONNECTED" if status in ("DRY_RUN", "NOT_CONFIGURED")
-                  else "TRIAGE_ONLY",
+        "status": ("NO_MODEL_CONNECTED" if status in ("DRY_RUN", "NOT_CONFIGURED")
+                   else "CONTROLLER_TRIAGE_ONLY" if status == "CONTROLLER_TRIAGE_NO_EDITS"
+                   else "TRIAGE_ONLY"),
         "source_revision": packets["source_revision"],
         "contract_mode": contract["mode"],
         "candidate_count": len(available),
