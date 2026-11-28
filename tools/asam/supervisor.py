@@ -316,6 +316,7 @@ def transition(policy, state, proposal):
     target_item = next(x for x in changed["slices"] if x["id"] == ident)
     target_item["status"] = target
     target_item["audit_stage"] = {
+        "MAPPING_PROPOSED": "S1_FUNCTIONAL_MAP",
         "MAPPED": "S1_FUNCTIONAL_MAP",
         "INVESTIGATING": "S2_BREADTH_DISCOVERY",
         "CONFIRMED": "S3_INDEPENDENT_COUNTEREVIDENCE",
