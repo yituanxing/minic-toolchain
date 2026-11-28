@@ -47,6 +47,19 @@ def check(root, policy, state, resume, inventory, orders):
             "canonical document authority redirected")
     require(resume["work_unit"] == state["work_limit"],
             "complete functional work unit replaced")
+    require(resume["schema"] == "asam-resume-packet-v1" and
+            resume["global_status"] == state["global_status"] == "ACTIVE",
+            "invalid resume schema or changed global status")
+    require(resume["audit_stages"] == policy["audit_stages"],
+            "audit-stage definitions rewritten")
+    require(resume["reset_contract"] ==
+            "This packet is sufficient to restart a new AI task. "
+            "Do not rely on earlier model messages. "
+            "The model cannot mark the global mission done.",
+            "forgetfulness contract replaced")
+    require(resume["recent_history_pointers_only"] ==
+            state["recorded_events"][-8:],
+            "restored history not bound to persisted task record")
     require(resume["project"] == state["project"], "project boundary drift")
     require(not resume["temporary_context"], "temporary model context smuggled in")
     require(resume["source_baseline"] == state["source_snapshot"],
@@ -55,6 +68,15 @@ def check(root, policy, state, resume, inventory, orders):
     require(commit == inventory["pinned_main_commit"] ==
             orders["source_revision"] == sh(root, "rev-parse", "origin/main"),
             "stale or swapped source revision")
+    # Must not accept a packet against dirty local source, even after the
+    # packet was generated from a clean checkout.
+    dirty = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", "src",
+         "tools/minic", "tools/minic-cc", "tests/compiler",
+         "tests/target", "docs/architecture"],
+        cwd=root, check=False, capture_output=True
+    )
+    require(dirty.returncode == 0, "source or authority docs changed after export")
     source_tree = sh(root, "rev-parse", "HEAD:src")
     require(inventory["source_tree"] == source_tree,
             "different actual compiler source tree")
@@ -95,9 +117,21 @@ def check(root, policy, state, resume, inventory, orders):
          "scope_hint": s["scope_hint"]} for s in front
     ], "restart frontier re-ordered or narrowed")
     if front:
-        require(resume["selected"]["id"] == front[0]["id"] and
-                resume["selected"]["scope_hint"] == front[0]["scope_hint"],
-                "new agent steered away from breadth-first next task")
+        expected = front[0]
+        require(resume["selected"] == {
+            "id": expected["id"], "name": expected["name"],
+            "current_stage": expected["audit_stage"],
+            "status": expected["status"],
+            "scope_hint": expected["scope_hint"],
+            "canonical_evidence_refs": expected["canonical_evidence_refs"],
+            "instruction": (
+                "Read existing canonical docs and real code; "
+                "map entrance/producer/consumers/ownership, "
+                "record uncovered paths. Do NOT substitute a "
+                "single-file clean-up for global coverage.")
+        }, "new agent received altered task or instructions")
+    else:
+        require(resume["selected"] is None, "unexpected selected work")
 
     work = orders["work_orders"]
     require(len(work) == len(slices) and
@@ -133,6 +167,13 @@ def check(root, policy, state, resume, inventory, orders):
         require(one["status_after_generation"] == "NOT_MAPPED" and
                 one["requires_independent_review"] is True,
                 "a Mapper proposed its own semantic certification")
+        require(one["outputs_required"] == [
+            "real_feature_entrypoints", "producer_and_consumers",
+            "owner_and_lifetime_invariants", "cross_layer_boundary",
+            "ISA_and_build_configuration_differences",
+            "source_line_evidence", "counterevidence_and_uncovered_paths",
+            "canonical_issue_register_matches"
+        ], "work product instructions removed or replaced")
     return len(work)
 
 
