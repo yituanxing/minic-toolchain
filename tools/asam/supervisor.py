@@ -28,9 +28,12 @@ EXPECTED_HINTS = {
     "C03": ["src/frontend/", "src/compiler/compiler.c"],
     "C04": ["src/compiler/", "src/core/"],
     "C05": ["src/core/", "src/compiler/compiler.c"],
-    "C06": ["src/target/common/"],
+    "C06": ["src/target/common/", "src/target/source_policy/",
+            "src/target/data_layout.h", "src/target/data_layout_source.h",
+            "src/target/target_info.h"],
     "C07": ["src/target/x86_64/", "src/target/aarch64/",
-            "src/target/riscv/", "src/target/loongarch64/"],
+            "src/target/riscv32/", "src/target/riscv64/",
+            "src/target/loongarch64/"],
     "C08": ["src/compiler/", "src/target/"],
     "C09": ["tests/"],
     "C10": ["src/common/", "include/minic/"]
@@ -114,6 +117,29 @@ EXPECTED_SCOPE_REFINEMENT_V2 = {
   },
   "canonical_claim": "Candidate file inventory only. No production code modified, no LLM-mapping verified, previously submitted C01 mapping remains provisional and needs expanded boundary review.",
   "verified_slices": 0
+}
+EXPECTED_SCOPE_REFINEMENT_V3 = {
+    "kind": "S0_SCOPE_REFINEMENT_V3",
+    "epoch": 8,
+    "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "prior_scope": {
+        "C06": ["src/target/common/"],
+        "C07": ["src/target/x86_64/", "src/target/aarch64/",
+                "src/target/riscv/", "src/target/loongarch64/"]
+    },
+    "scope_changes": {
+        "C06": EXPECTED_HINTS["C06"],
+        "C07": EXPECTED_HINTS["C07"]
+    },
+    "observed_paths": [
+        "src/target/source_policy/language_semantics.c",
+        "src/target/source_policy/data_layout_source.c",
+        "src/target/common/core_function_plan.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+    ],
+    "rationale": "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+    "verified_slices": 0
 }
 STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
@@ -521,6 +547,8 @@ def verify_event_replay(policy, state):
          "historic evidence or scope migration changed without review")
     must(len(events) >= 4 and events[3] == EXPECTED_SCOPE_REFINEMENT_V2,
          "second S0 scope migration missing, out of order or altered")
+    must(len(events) >= 9 and events[8] == EXPECTED_SCOPE_REFINEMENT_V3,
+         "third S0 scope migration missing, out of order or altered")
     must(state["epoch"] == len(events) - 1,
          "state epoch differs from event count")
     must(len(events) <= 2000,
@@ -539,6 +567,13 @@ def verify_event_replay(policy, state):
             must(event == EXPECTED_SCOPE_REFINEMENT_V2 and
                  replay["epoch"] == 2,
                  "unapproved or reordered S0 expansion")
+            replay["epoch"] += 1
+            replay["recorded_events"].append(copy.deepcopy(event))
+            continue
+        if isinstance(event, dict) and event.get("kind") == "S0_SCOPE_REFINEMENT_V3":
+            must(event == EXPECTED_SCOPE_REFINEMENT_V3 and
+                 replay["epoch"] == 7,
+                 "unapproved or reordered C06/C07 scope boundary correction")
             replay["epoch"] += 1
             replay["recorded_events"].append(copy.deepcopy(event))
             continue
