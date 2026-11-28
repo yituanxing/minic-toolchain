@@ -1,0 +1,48 @@
+{
+  "schema": "asam-transition-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "expected_epoch": 12,
+  "slice_id": "C09",
+  "to_status": "MAPPING_PROPOSED",
+  "actor_role": "mapper",
+  "actor_id": "chatgpt-c09-verification-matrix-scout-20261128",
+  "evidence": {
+    "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "canonical_ref": "docs/architecture/minic-issue-register.md",
+    "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md",
+    "producer": "PROVISIONAL: Makefile and tests/compiler/c0/native-matrix.json define compiler configurations, source fixtures and target-selective checks; C0 runtime runners, frontend/core contract tests and GitHub target workflows contribute independent kinds of evidence. The canonical issue register distinguishes actual runtime, GNU differential, ASAN, ELF oracle, SOURCE-TRACE, ASM-only and static checks.",
+    "consumers": [
+      "tests/compiler/c0/check-minic-target-boundaries.sh is a structural source/ownership guard using file presence and grep; it can detect forbidden cross-layer dependencies but cannot prove compiler runtime correctness.",
+      "tests/compiler/mir-migration/check-production-seal.sh checks all five typed MachineIR production-wiring points and separately says complete runtime/effect coverage belongs to other tests; the default/current vs --final modes impose different removal requirements.",
+      ".github/workflows/minic-runtime-fourarch.yml runs selected four-architecture runtime profiles and has broad source-path triggers; its name and triggers do not establish five-architecture equivalence or a universal all-test matrix.",
+      "tests/compiler/c0/native-matrix.json contains per-case host compiler, target, GNU flag, native flag, positive/negative and assembly/object test claims; only the exact invocation and returned oracle decide what was verified.",
+      "tests/compiler/c0/probe-program-emit-transaction.c covers staged output failure and old-result preservation; tests/compiler/c0/probe-module-emit-preflight-contract.c rejects foreign CoreType arena, forged module and invalid function count.",
+      "tests/frontend/ast_contract_test.c and tests/core/core_type_import_test.c exercise AST physical constness and source-to-Core type snapshot on five target identities; passing these unit probes is narrower than full target ELF/QEMU runtime.",
+      "docs/architecture/minic-issue-register.md explicitly tracks older MC-011 and MC-012 verification/reporting blind spots; every future close must cite actual exact Git SHA, config, toolchain, source input and independent oracle."
+    ],
+    "functional_path": "C09 PROVISIONAL verification graph: specific source or issue -> target configuration and compiler build -> compile/sema/core test or source-only -S output -> optional external GNU assembler and ELF relocation assertions -> optional host native or target QEMU execution -> GNU reference differential and sanitizer where applicable -> exact run metadata, negative cases, architecture limits and issue status. Never flatten static grep, success to emit assembly, assembler acceptance, ELF object verification and actual execution into a single green label. Test trigger and artifact provenance require independent check against the exact candidate commit.",
+    "source_links": [
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/Makefile",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/check-minic-target-boundaries.sh",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/mir-migration/check-production-seal.sh",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/native-matrix.json",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/run-native-matrix.sh",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-program-emit-transaction.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-module-emit-preflight-contract.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/frontend/ast_contract_test.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/core/core_type_import_test.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/.github/workflows/minic-runtime-fourarch.yml",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-function-contract-register.md",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md"
+    ],
+    "limitations": [
+      "UNTRUSTED C09 map only: no runtime verification was executed for the entire MiniC in this ASAM scout pass.",
+      "Do not claim GNU-ELF-QEMU from .s string checks; do not claim all five architectures when a CI workflow covers four, or when target feature subsets differ.",
+      "Pending work: run normalized same-input baseline-vs-candidate GNU/MiniC differential tests and record stderr, exit status, emitted symbols/ELF relocations, native/QEMU output, toolchain version, commit and performance.",
+      "Use canonical MC issue evidence; historical fixed-unverified changes are not promoted to VERIFIED by green ASAM controller CI.",
+      "Verify CI path triggers do not omit changing backend dependencies, runtime libraries, Makefile or source policy; failure to trigger is independent verification debt."
+    ],
+    "independent_review": false,
+    "semantic_coverage_claimed": false
+  }
+}
