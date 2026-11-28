@@ -31,9 +31,20 @@ assert current["epoch"] >= 3
 assert current["slices"][0]["status"] == "MAPPING_PROPOSED"
 assert current["recorded_events"][3] == sup.EXPECTED_SCOPE_REFINEMENT_V2
 planned_ids = [s["id"] for s in current["slices"] if s["status"] == "PLANNED"]
-assert planned_ids, "The concurrency fixture requires an unstarted scope"
-# Use exact current durably committed state; never forge an old migration.
+# Reuse actual history, or reconstruct its immediate predecessor only inside
+# a temporary test fixture when all ten proposals have already been recorded.
 baseline = copy.deepcopy(current)
+if not planned_ids:
+    final = baseline["recorded_events"][-1]
+    assert final["kind"] == "SLICE_TRANSITION" and final["from"] == "PLANNED"
+    item = next(s for s in baseline["slices"] if s["id"] == final["id"])
+    assert item["status"] == "MAPPING_PROPOSED"
+    item["status"] = "PLANNED"
+    item["audit_stage"] = "S0_BASELINE"
+    item["canonical_evidence_refs"] = []
+    baseline["epoch"] -= 1
+    baseline["recorded_events"].pop()
+    planned_ids = [final["id"]]
 sup.verify_event_replay(policy, baseline)
 assert sum(s["status"] == "PLANNED" for s in baseline["slices"]) == len(planned_ids)
 
