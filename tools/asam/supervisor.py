@@ -23,7 +23,7 @@ EXPECTED_SOURCE = "yituanxing/minic-toolchain"
 # never audited responsibility ownership. Any expansion is an explicit
 # versioned scope migration rather than a worker silently reshaping the goal.
 EXPECTED_HINTS = {
-    "C01": ["tools/minic/", "tools/minic-cc/"],
+    "C01": ["tools/minic/", "tools/minic-cc/", "tools/minic-"],
     "C02": ["src/frontend/"],
     "C03": ["src/frontend/", "src/compiler/compiler.c"],
     "C04": ["src/compiler/", "src/core/"],
@@ -32,8 +32,8 @@ EXPECTED_HINTS = {
     "C07": ["src/target/x86_64/", "src/target/aarch64/",
             "src/target/riscv/", "src/target/loongarch64/"],
     "C08": ["src/compiler/", "src/target/"],
-    "C09": ["tests/compiler/", "tests/target/"],
-    "C10": ["src/common/"]
+    "C09": ["tests/"],
+    "C10": ["src/common/", "include/minic/"]
 }
 EXPECTED_NAMES = {
     "C01": "Driver and invocation target contracts",
@@ -50,7 +50,7 @@ EXPECTED_NAMES = {
 EXPECTED_STATE_KEYS = set(["schema","policy_id","policy_sha256","epoch","global_status","mission_complete","project","source_snapshot","schedule_mode","work_limit","slices","active_task","recorded_events","guidance"])
 EXPECTED_GUIDANCE = "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
 EXPECTED_NOTES = {
-  "C01": "Planning-level. Include all driver and invocation units, not only main.c. No semantic coverage claimed.",
+  "C01": "Planning-level. Includes all MiniC driver, minic-cc and thin tool integration entrypoints, not only main.c. Existing proposal remains untrusted and incomplete until independently reviewed.",
   "C02": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
   "C03": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
   "C04": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
@@ -58,8 +58,8 @@ EXPECTED_NOTES = {
   "C06": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
   "C07": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
   "C08": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
-  "C09": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
-  "C10": "Discovered by full tracked inventory: source_location, calling_convention, integer_bits, call_frame_address and machine builtin effect interfaces cross layer ownership. All semantic responsibility UNVERIFIED."
+  "C09": "Planning-level. All tests/ are inventory and verification inputs; vendor and other-tool fixtures are not MiniC production implementation.",
+  "C10": "Cross-stage src/common and public include/minic interfaces own shared type, calling convention and contract boundaries. All semantic responsibility UNVERIFIED."
 }
 EXPECTED_BOOTSTRAP = [
   {
@@ -82,6 +82,39 @@ EXPECTED_BOOTSTRAP = [
     "expected_unassigned_after_refinement": 0
   }
 ]
+EXPECTED_SCOPE_REFINEMENT_V2 = {
+  "kind": "S0_SCOPE_REFINEMENT_V2",
+  "epoch": 3,
+  "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46107725208",
+  "observed_repository_c_h": 1983,
+  "previous_scanned_c_h": 1746,
+  "new_in_scope_c_h": 153,
+  "external_c_h_excluded": 84,
+  "external_prefixes": [
+    "archiver/",
+    "assembler/",
+    "elf/",
+    "linker/",
+    "preprocessor/",
+    "third_party/"
+  ],
+  "scope_changes": {
+    "C01": [
+      "tools/minic/",
+      "tools/minic-cc/",
+      "tools/minic-"
+    ],
+    "C09": [
+      "tests/"
+    ],
+    "C10": [
+      "src/common/",
+      "include/minic/"
+    ]
+  },
+  "canonical_claim": "Candidate file inventory only. No production code modified, no LLM-mapping verified, previously submitted C01 mapping remains provisional and needs expanded boundary review.",
+  "verified_slices": 0
+}
 STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
 ALLOWED = {
@@ -478,6 +511,8 @@ def verify_event_replay(policy, state):
          "event history truncated")
     must(events[:2] == EXPECTED_BOOTSTRAP,
          "historic evidence or scope migration changed without review")
+    must(len(events) >= 4 and events[3] == EXPECTED_SCOPE_REFINEMENT_V2,
+         "second S0 scope migration missing, out of order or altered")
     must(state["epoch"] == len(events) - 1,
          "state epoch differs from event count")
     must(len(events) <= 2000,
@@ -492,6 +527,13 @@ def verify_event_replay(policy, state):
         row["canonical_evidence_refs"] = []
         row["last_verified_revision"] = None
     for event in events[2:]:
+        if isinstance(event, dict) and event.get("kind") == "S0_SCOPE_REFINEMENT_V2":
+            must(event == EXPECTED_SCOPE_REFINEMENT_V2 and
+                 replay["epoch"] == 2,
+                 "unapproved or reordered S0 expansion")
+            replay["epoch"] += 1
+            replay["recorded_events"].append(copy.deepcopy(event))
+            continue
         must(isinstance(event, dict) and
              event.get("kind") == "SLICE_TRANSITION",
              "unrecognized state-history entry")
