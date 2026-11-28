@@ -9,12 +9,15 @@ experiment, not yet an autonomous multi-agent engine.
 1. tools/asam/control/policy.json — **L0 locked mission**: whole MiniC compiler,
    breadth-first coverage, original constraints, S0–S5 audit stages, agent roles.
    The Supervisor pins its complete SHA-256; changes require an explicit review.
+   **This is NOT a cryptographic trust root**: the prototype code and policy
+   live on the same mutable experimental branch.
 2. Existing canonical MiniC architecture / issues / function-contract / refactor
    records linked in policy.json. They alone own technical facts, established
    problems and exclusions. ASAM must NOT duplicate the issue register.
 3. tools/asam/control/state.json — **scheduling and coverage cursor only**.
-   C01–C10 are planning-level functional regions; all start as PLANNED.
-   No region has been claimed verified by this experiment.
+   C01–C10 are planning-level functional regions. The actual checkpoint has
+   **C01 MAPPING_PROPOSED**, nine others PLANNED, and zero verified.
+   S0 v2 evidence-based scope refinement is pinned at epoch 3.
 4. Actual versioned source, CI logs, test matrix and external runtime oracles
    determine code correctness. An AI assertion is not runtime evidence.
 
@@ -49,10 +52,18 @@ independent, bounded, read-only Mapper task specifications**, not ten actual
 running AI agents. Run the Supervisor resume command to recover the original
 mission and selected slice before consuming the work orders.
 
-At S0 on main revision d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8,
-this counted 419 compiler/Driver C/H files and 1,327 test C/H files,
-with no unassigned tracked C/H paths **inside the enumerated scan roots**.
-This is not a census of all build scripts/assembly or a reviewed ownership map.
+At pinned MiniC main revision d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8,
+the entire repository has **1,983 tracked C/H files**. The initial scan
+missed 237 paths. The S0 v2 migration explicitly adds **153 MiniC public
+interfaces, thin driver integration entrypoints and additional test fixtures**:
+1,899 tracked C/H inputs are now in the ten candidate regions and **84
+C/H files belong to other tool implementations or third_party libraries**.
+Every out-of-scope C/H path is required to match an explicit excluded root;
+an unexplained new path fails the inventory and independent handoff checks.
+
+These are repository C/H inventory figures, NOT semantic coverage,
+NOT a complete build-script/assembler inventory, and NOT permission to
+modify vendor or external-tool sources. 
 Four historical anchor names did not occur in current production C/H scans;
 their semantic replacements require S1 source review.
 
@@ -78,9 +89,10 @@ A proposed transition has exactly these fields:
 schema, mission_id, expected_epoch, slice_id, to_status, actor_role,
 actor_id, evidence.
 
-Allowed stages: PLANNED -> MAPPED -> INVESTIGATING -> CONFIRMED ->
-FIXED_UNVERIFIED -> VERIFIED, plus limited direct verified exits with full
-evidence for a completely reviewed slice with no fix.
+The current executable transition gate only allows
+**PLANNED -> MAPPING_PROPOSED**, which is UNTRUSTED and must be independently
+challenged. MAPPED, INVESTIGATING, CONFIRMED, FIXED_UNVERIFIED and VERIFIED
+are ALL DISABLED pending authenticated evidence and trusted controller rights.
 
 Functional mapping requires producers, consumers and full path evidence.
 Confirmation requires a separate challenger. Fixes need exact commits.
@@ -145,7 +157,7 @@ validator **does not import Supervisor or Topology**:
 The validator independently re-checks all tracked C/H file bytes, line
 counts, source-tree identity, live canonical document digests, all ten
 functional scopes, the exact selected next task and all worker permissions.
-The second test injects 28 malformed/stale/redirected work-order payloads
+The second test injects 36 malformed/stale/redirected work-order payloads
 and checks that code modified **after** export is also rejected.
 
 **What these tests cannot prove:** a fresh *model* instance's comprehension,
@@ -157,6 +169,37 @@ still submit false provisional Mapper data. Remote GitHub writes require
 branch protection, code ownership and authenticated evidence verification
 before accepting MAPPED or VERIFIED. Keep this Draft PR unmerged until those
 permissions/trust decisions have been reviewed.
+
+## No model-to-model instruction inheritance
+
+Model-generated event fields and evidence URLs may contain malicious prompts
+even when their JSON is structurally valid. Supervisor **must not copy** a
+prior worker's raw prose into the next LLM prompt. The restart packet exports
+only fixed-schema **SHA-256 event commitments and evidence-reference hashes**.
+These commitments support provenance comparison, not semantic truth or
+authentication. Original untrusted text remains available only by deliberate
+review from the versioned event store.
+
+    python3 -I tools/asam/selftest_context_isolation.py
+
+This test writes nine adversarial proposed mappings into a temporary state,
+including deliberate hostile prior-agent instructions, then starts a clean
+Python process. Raw hostile text must not appear, and the report remains
+bounded. When all ten mappings are proposed, the next task must be independent
+counterevidence, not redoing C01 Mapper. It is **NOT** a fresh LLM instance.
+
+Proposals are size-bounded, use a strict allowlist schema, and canonical
+evidence links must exactly match this repo and source revision. Neither a
+plausible link nor a worker identifier authenticates a reviewer. The
+`trust_gate` field of every restart packet explicitly marks controller
+protection, independent LLM restoration, worker authentication, semantic
+certification and autonomous source edits **FALSE**. A successful CI on
+this experiment branch cannot turn those flags true.
+
+GitHub REST CI metadata is checked independently for repo, run, source SHA,
+branch, job steps and artifact, but it is **only metadata**: it does not
+prove semantic correctness, protected branch policy, or human reviewer
+authorization.
 
 ## Limitations
 
