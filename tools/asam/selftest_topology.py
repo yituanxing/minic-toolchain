@@ -60,6 +60,6 @@ assert all(len(x["sha256"]) == 64 and x["path"].endswith((".c", ".h"))
 assert all(not x["canonical_evidence_refs"] and x["status"] == "PLANNED"
            for x in state["slices"])
 
-print("ASAM_BREADTH_INVENTORY=PASS full tracked sources and nine provisional function regions")
+print("ASAM_BREADTH_INVENTORY=PASS full tracked sources and ten provisional function regions")
 print("ASAM_FALSE_COVERAGE_GUARD=PASS lexical discovery never implies semantic completion")
 print("ASAM_STALE_SOURCE_GUARD=PASS rejects revised main without S0 rebaseline")
