@@ -1,0 +1,38 @@
+{
+  "schema": "asam-transition-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "expected_epoch": 1,
+  "slice_id": "C01",
+  "to_status": "MAPPING_PROPOSED",
+  "actor_role": "mapper",
+  "actor_id": "chatgpt-c01-source-mapper-20261128",
+  "evidence": {
+    "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+    "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+    "producer": "PROPOSED from actual code: tools/minic/driver_cli.c:minic_driver_cli_parse constructs invocation; tools/minic-cc/main.c:main constructs invocation-local target",
+    "consumers": [
+      "tools/minic/main.c:main passes invocation to minic_driver_execute",
+      "tools/minic/driver_pipeline.c:minic_driver_execute dispatches -S to minic-cc or staged CPP/AS/LD",
+      "tools/minic-cc/main.c:main forwards invocation to minic_compile_preprocessed_file_for_target",
+      "src/compiler/compiler.c:minic_compile_preprocessed_file_for_target owns source buffer, AST Program and CoreSet"
+    ],
+    "functional_path": "PROPOSED: minic CLI -> driver_cli parse -> driver_pipeline execute (-S direct minic-cc; -c/link only catalog-qualified staged route) -> minic-cc target invocation -> Compiler AST/Core/Target. No ownership/completeness certification.",
+    "source_links": [
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/main.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/driver_cli.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/driver_pipeline.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic-cc/main.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c"
+    ],
+    "limitations": [
+      "This is current ChatGPT source reading, not independent challenge or verified C01 coverage.",
+      "The canonical MiniC architecture register remains the only authority for technical facts.",
+      "MiniPP MiniAS MiniLD are external projects; integration boundary only, not in-scope refactoring.",
+      "Need independent review of all CLI error exits, resource ownership, data flow and staged target capabilities.",
+      "Do not infer five-target link or runtime capability from -S support."
+    ],
+    "independent_review": false,
+    "semantic_coverage_claimed": false
+  }
+}
