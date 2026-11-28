@@ -36,11 +36,16 @@ jobs:
               src/target/loongarch64/machine_llsc_select.c|\
               src/target/loongarch64/machine_pte_select.c|\
               tests/target/loongarch64/machine_scalar_type_test.c|\
+              docs/architecture/minic-backend-review-ledger.json|\
               .github/workflows/asam-loongarch-scalar-contract.yml)
                 ;;
               *) echo "Unexpected modified path: $path" >&2; exit 1;;
             esac
           done < /tmp/asam-loong-paths
+
+      - name: Respect canonical backend review ledger
+        run: |
+          python3 tools/ci/minic-backend-review-ledger.py --check
 
       - name: New real CoreType forged-input regression
         run: |
