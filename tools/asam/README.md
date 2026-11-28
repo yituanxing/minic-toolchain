@@ -106,6 +106,58 @@ global goal, source baseline and remaining scope survive, and tries forbidden
 goal replacement, false completion, fabricated verification, dropped coverage
 and policy tampering. Failure to reject any case fails CI.
 
+## Adversarial recovery acceptance (mandatory)
+
+The original global goal remains pinned, but worker statements are now split
+into **MAPPING_PROPOSED** (untrusted, may be scheduled for independent review)
+and **MAPPED** (trusted S1 completion, currently DISABLED). Similarly, all
+terminal semantic stages remain disabled until authenticated independent
+review evidence exists. A Mapper saying "producer/consumer" in a JSON field is
+not evidence that the code has actually been audited.
+
+The Supervisor uses exclusive local write locking plus state epoch/CAS.
+All transitions persist replayable event proposals. On load it reconstructs
+state from the original S0 bootstrap, validates history and checks the live
+snapshot. It refuses forced active-task priority, changes to the ten planning
+regions, altered historical evidence, altered mission instructions and
+snapshot-only synthetic progress. A crash can leave a lock file; **do not
+automatically steal or delete it** without operator review of the writer.
+
+Test in an isolated checkout on GitHub Actions:
+
+    python3 -I tools/asam/selftest_supervisor.py
+    python3 -I tools/asam/selftest_adversarial.py
+    python3 -I tools/asam/selftest_topology.py
+
+The adversarial test runs 12 actual **two-process** races; exactly one write
+may succeed in each. It also modifies and restores synthetic states to test
+fabricated work, role drift, damaged event history and scope injection.
+
+After emitting the resume, breadth inventory and Mapper orders, a separate
+validator **does not import Supervisor or Topology**:
+
+    python3 -I tools/asam/verify_handoff.py --root . \
+      --resume /tmp/asam-resume.json \
+      --inventory asam-supervisor-out/breadth-inventory.json \
+      --orders asam-supervisor-out/work-orders.json
+    python3 -I tools/asam/selftest_handoff.py
+
+The validator independently re-checks all tracked C/H file bytes, line
+counts, source-tree identity, live canonical document digests, all ten
+functional scopes, the exact selected next task and all worker permissions.
+The second test injects 28 malformed/stale/redirected work-order payloads
+and checks that code modified **after** export is also rejected.
+
+**What these tests cannot prove:** a fresh *model* instance's comprehension,
+semantic correctness, genuine independent LLM verification, and a protected
+remote trust root. Current testing uses separate programs/processes, NOT
+separate AI subagents. A malicious actor allowed to modify both this
+experiment's Supervisor code and its tests can forge the result. A model can
+still submit false provisional Mapper data. Remote GitHub writes require
+branch protection, code ownership and authenticated evidence verification
+before accepting MAPPED or VERIFIED. Keep this Draft PR unmerged until those
+permissions/trust decisions have been reviewed.
+
 ## Limitations
 
 - This is not yet a full source-level functional and ownership graph.
