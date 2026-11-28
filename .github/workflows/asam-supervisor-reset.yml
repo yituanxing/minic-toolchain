@@ -27,6 +27,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Publish exact Git commit DAG identity for remote append-only lease audit
+        run: |
+          printf 'ASAM_REMOTE_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'ASAM_REMOTE_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf 'ASAM_REMOTE_PARENT=%s\n' "$(git rev-parse HEAD^)"
+          printf 'ASAM_REMOTE_CAS_WRITER=DISABLED_ON_THIS_UNPROTECTED_BRANCH\n'
+
       - name: Reject production and authority-document modifications
         shell: bash
         run: |
