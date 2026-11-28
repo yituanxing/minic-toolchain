@@ -1,0 +1,26 @@
+{
+  "schema": "asam-v1-task-contract-1",
+  "project": "yituanxing/minic-toolchain",
+  "goal": "Discover existing semantic/structural implementation problems in target backends without changing compiler behavior or production source code.",
+  "scope": [
+    "src/target/"
+  ],
+  "mode": "READ_ONLY_TRIAGE",
+  "min_evidence": [
+    "versioned_source",
+    "function_body_hash",
+    "lexical_reference_hash",
+    "independent_callsite_contract_review"
+  ],
+  "max_model_packets": 3,
+  "forbidden_actions": [
+    "production_source_edits",
+    "delete_for_line_count",
+    "disable_tests",
+    "reduce_regressions",
+    "approve_own_change",
+    "merge_without_independent_verification"
+  ],
+  "success_condition": "Produce version-pinned candidate evidence, a conservative triage queue, and explicit unresolved risks. No production diff.",
+  "verifier": "Independent verifier and real compiler regression gates are REQUIRED for future source-changing tasks. Not enabled in this trial."
+}
