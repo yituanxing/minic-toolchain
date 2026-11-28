@@ -79,7 +79,10 @@ def evaluate(run, jobs, artifacts, *, run_id, commit, branch,
     require(run.get("head_sha") == commit and
             run.get("head_branch") == branch,
             "run does not match the EXACT pinned source/branch")
-    require(run.get("event") == "push", "only pinned push CI evidence accepted")
+    require(run.get("event") in ("push", "pull_request"),
+            "unapproved CI event; only push or pull_request is permitted")
+    # Both events remain UNTRUSTED until a separate protected controller
+    # validates branch rules, review identity, and the exact workflow source.
     require(run.get("status") == "completed" and
             run.get("conclusion") == "success",
             "run has not independently completed successfully")
@@ -135,6 +138,7 @@ def evaluate(run, jobs, artifacts, *, run_id, commit, branch,
         "repo": REPO,
         "run_id": run_id, "run_attempt": run["run_attempt"],
         "branch": branch, "head_sha": commit,
+        "event": run["event"],
         "workflow_path": wf, "job_id": job["id"],
         "job_name": job_name, "required_steps": step_matches,
         "artifact": {
