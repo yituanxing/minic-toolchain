@@ -1,4 +1,5 @@
 #include "target/loongarch64/machine_llsc_select.h"
+#include "target/loongarch64/machine_scalar_type.h"
 
 #include "target/common/core_machine_asm.h"
 #include "target/common/lp64_scalar.h"
@@ -19,22 +20,6 @@ static MinicMachineOperand ll_memory(unsigned base,
                                       constraint, name);
 }
 
-static bool ll_integer(const MinicCoreFunction *fn,
-    MinicCoreValueId value, bool pointee, size_t bytes) {
-    MinicCoreTypeId id;
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
-        value >= fn->value_count) return false;
-    id = fn->values[value].core_type_id;
-    if (pointee && !minic_lp64_core_pointer_pointee(
-            fn->type_context, id, &id)) return false;
-    id = minic_core_type_unqualified(fn->type_context, id);
-    type = minic_core_type_get(fn->type_context, id);
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
-        type->has_layout && type->size == bytes &&
-        !type->value.integer.is_bool &&
-        type->value.integer.bit_width == bytes * 8U;
-}
 
 static bool ll_source(const MinicCoreInlineAsm *source, unsigned int id,
     size_t clobbers) {
@@ -82,7 +67,8 @@ static bool ll_roles(const MinicCoreFunction *fn,
             roles[i].has_tied_output || roles[i].early_clobber ||
             roles[i].physical_early_clobber != expect_early ||
             roles[i].physical_read_write != expect_readwrite ||
-            !ll_integer(fn, roles[i].value, pointee, widths[i]))
+            !minic_loong_core_integer_operand(fn, roles[i].value,
+                pointee, widths[i], -1))
             return false;
     }
     return true;
