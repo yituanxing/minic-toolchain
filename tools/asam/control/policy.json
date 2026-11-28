@@ -1,0 +1,105 @@
+{
+  "schema": "asam-governance-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "revision": 1,
+  "purpose": "Continuously audit and improve the existing MiniC compiler as a whole by mapping its complete functional and ownership chains, discovering systemic semantic/architecture defects at breadth, grouping shared root causes, repairing complete responsibility clusters, independently verifying changes, and resuming without depending on any past agent conversation.",
+  "scope": {
+    "included": [
+      "MiniC compiler driver",
+      "frontend C and GNU C semantics",
+      "compiler orchestration and AST transformations",
+      "Core IR semantics and lifetime",
+      "Target common ABI/layout/Machine IR",
+      "x86-64 AArch64 RV32 RV64 LoongArch64 backends",
+      "compiler output and real software verification"
+    ],
+    "excluded": [
+      "MiniPP",
+      "MiniAS",
+      "MiniLD",
+      "NaSeed"
+    ],
+    "boundary": "Do not expand project scope implicitly."
+  },
+  "authoritative_sources": {
+    "architecture": "docs/architecture/minic-global-contract-map.md",
+    "issues": "docs/architecture/minic-issue-register.md",
+    "function_contracts": "docs/architecture/minic-function-contract-register.md",
+    "refactor": "docs/architecture/minic-refactor-ledger.md",
+    "principles": "docs/architecture/principles.md",
+    "onboarding": "docs/architecture/README.md"
+  },
+  "nonnegotiable": [
+    "Global mission is immutable to Scouts Fixers and Verifiers; a task cannot replace it.",
+    "Map full functional and semantic responsibility chains before marking a slice reviewed.",
+    "Optimize for confirmed root-cause clusters, not deleted LOC, PR count, or candidate count.",
+    "Find D1-D9 defects by responsibility and behavior, not just duplicate syntax.",
+    "Do not remove valid optimizations or legitimate ISA ABI hardware or compatibility differences without independent equivalence and relevant performance evidence.",
+    "Do not treat lexical similarity or a missing reference as proof of a defect or dead code.",
+    "Evidence first: producers consumers callers callees lifetime identity invariants and counterevidence.",
+    "Independent challenge must precede unsafe edits; independent real verification follows edits.",
+    "Reuse existing architecture maps issues contracts and ledgers; never create a parallel authoritative defect register.",
+    "Never promote fixed-unverified to verified based on editing or partial CI.",
+    "All facts must carry source revisions, configurations, traceable evidence and validity dependencies.",
+    "Keep mission map coverage decisions exclusions unresolved work and test evidence durable.",
+    "Discard task-local source context and exploratory model dialogue after a safe handoff; not durable engineering facts.",
+    "Closing one slice or merging a PR cannot close the global mission or select a new mission.",
+    "No autonomous AI inference on GitHub Runner without a separately authorized inference provider.",
+    "Supervisor must fail closed when policy evidence dependencies or state transitions are inconsistent."
+  ],
+  "audit_stages": [
+    "S0_BASELINE",
+    "S1_FUNCTIONAL_MAP",
+    "S2_BREADTH_DISCOVERY",
+    "S3_INDEPENDENT_COUNTEREVIDENCE",
+    "S4_ROOT_CAUSE_FIX",
+    "S5_SAME_INPUT_VERIFICATION"
+  ],
+  "finding_classes": [
+    "D1_DUPLICATE_RESPONSIBILITY",
+    "D2_MULTIPLE_SOURCES_OF_TRUTH",
+    "D3_LAYER_VIOLATION",
+    "D4_PATCH_STACKING",
+    "D5_HALF_MIGRATION",
+    "D6_UNREACHABLE_IMPLEMENTATION",
+    "D7_CONTRACT_DRIFT",
+    "D8_REAL_VERIFICATION_GAP",
+    "D9_UNNECESSARY_COMPLEXITY",
+    "KEEP_JUSTIFIED_DIFFERENCE"
+  ],
+  "roles": {
+    "supervisor": "deterministic non-model controller owns goal state gate reset and schedule",
+    "mapper": "read-only whole-path structure and uncovered-area map",
+    "scout": "read-only breadth-first discovery by responsibility",
+    "challenger": "independently read and disprove or confirm hypotheses",
+    "fixer": "isolated edits only to confirmed responsibility clusters",
+    "verifier": "independent exact-revision build runtime ABI and performance evidence"
+  },
+  "execution": {
+    "preferred": "GitHub Actions Runner",
+    "controller": "ChatGPT conversation via authorized GitHub tools",
+    "alternative": "local CLI",
+    "model_api_required": false,
+    "chatgpt_is_not_unattended_runner_model": true
+  },
+  "success": {
+    "global": "Only explicit external owner approval after durable coverage and independent verification of the declared whole-scope mission; no child completion implies global completion.",
+    "slice": "Every entry producer owner consumers invariants negative evidence test configuration and verified revision recorded in canonical source plus evidence link.",
+    "metrics": [
+      "functional_coverage",
+      "confirmed_clusters",
+      "closed_verified_clusters",
+      "excluded_false_positives",
+      "verification_matrix",
+      "source_and_performance_delta_secondary"
+    ]
+  },
+  "guardrails": {
+    "prohibit_goal_replacement": true,
+    "prohibit_fabricated_coverage": true,
+    "prohibit_self_verification": true,
+    "require_context_reset_test": true,
+    "require_exact_source_revision": true,
+    "require_original_records": true
+  }
+}
