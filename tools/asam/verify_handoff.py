@@ -84,8 +84,7 @@ def check(root, policy, state, resume, inventory, orders):
     # packet was generated from a clean checkout.
     dirty = subprocess.run(
         ["git", "diff", "--quiet", "HEAD", "--", "src",
-         "tools/minic", "tools/minic-cc", "tests/compiler",
-         "tests/target", "docs/architecture"],
+         "tools", "include/minic", "tests", "docs/architecture"],
         cwd=root, check=False, capture_output=True
     )
     require(dirty.returncode == 0, "source or authority docs changed after export")
@@ -96,7 +95,11 @@ def check(root, policy, state, resume, inventory, orders):
     # Verify the reported file scope from Git and the bytes on disk. Unlike
     # Topology, this checker does not import its scanning functions.
     scan_roots = ("src/", "tools/minic/", "tools/minic-cc/",
-                  "tests/compiler/", "tests/target/")
+                  "tools/minic-", "include/minic/", "tests/")
+    explicitly_external_roots = (
+        "archiver/", "assembler/", "elf/", "linker/",
+        "preprocessor/", "third_party/"
+    )
     tracked = sh(root, "ls-files", "-z").split("\0")
     tracked = sorted(name for name in tracked if name and
                      name.endswith((".c", ".h")) and
@@ -115,10 +118,19 @@ def check(root, policy, state, resume, inventory, orders):
     entire = sorted(n for n in sh(root, "ls-files", "-z").split("\0")
                     if n and n.endswith((".c", ".h")))
     excluded_from_roots = sorted(set(entire) - set(tracked))
-    require(inventory["repository_total_tracked_c_h"] == len(entire) and
+    external = sorted(p for p in excluded_from_roots
+                      if p.startswith(explicitly_external_roots))
+    unexpected = sorted(set(excluded_from_roots) - set(external))
+    require(not unexpected and
+            inventory["repository_total_tracked_c_h"] == len(entire) and
             inventory["repository_outside_scan_roots"] == excluded_from_roots and
-            inventory["repository_outside_scan_roots_count"] == len(excluded_from_roots),
-            "whole-repository C/H blind spots omitted or manipulated")
+            inventory["repository_outside_scan_roots_count"] == len(excluded_from_roots) and
+            inventory["explicit_external_roots"] == list(explicitly_external_roots) and
+            inventory["repository_excluded_external_c_h"] == external and
+            inventory["repository_excluded_external_c_h_count"] == len(external) and
+            inventory["repository_unclassified_c_h"] == unexpected and
+            inventory["repository_unclassified_c_h_count"] == 0,
+            "unclassified or falsely excluded whole-repository C/H sources")
     require(inventory["inventory_scope"] == list(scan_roots) and
             inventory["source_file_fingerprints"] == observed_files and
             inventory["tracked_c_h_files"] == len(tracked) and
