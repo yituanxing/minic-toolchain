@@ -1,0 +1,46 @@
+{
+  "schema": "asam-transition-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "expected_epoch": 11,
+  "slice_id": "C08",
+  "to_status": "MAPPING_PROPOSED",
+  "actor_role": "mapper",
+  "actor_id": "chatgpt-c08-output-transaction-scout-20261128",
+  "evidence": {
+    "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+    "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+    "producer": "PROVISIONAL: Compiler releases Program and source buffer at sealed Core/Module boundary and invokes a registered backend on immutable Core functions, ModuleIR and machine TargetInfo. The backend facade requires the expected registered target and preflight-valid module.",
+    "consumers": [
+      "src/target/common/program_emit.c:minic_program_emit_module_preflight rejects invalid finalized Module, mismatched live CoreTypeContext and function counts, without confusing an un-emitted declaration with a live definition",
+      "src/target/common/program_emit.c:minic_program_emit_write_module opens a unique .minic-XXXXXX staging file adjacent to destination, performs optional prefix, undefined ELF bindings, globals, file-scope ASM, prepared functions, trailer, fclose and optional target finalize before rename",
+      "The same writer removes the temporary on any failed stage, close, finalizer or rename; final .s output is not replaced on failure. A deliberate diagnostic/census continue_after_failure mode may still scan functions but cannot commit unsuccessful results",
+      "src/target/common/program_visit.c creates/destroys each temporary CoreFunctionPlan around the target callback, while src/target/common/machine_production_preflight.h requires entire typed MachineIR body and GNU ASM binding to be checked before emitting function bytes",
+      "src/target/common/direct_program_emit.c adapts A64/Loong direct emitters to the common transaction, but target-specific ELF directives, symbol syntax, global relocation and ISA finalizer callback remain explicit owners",
+      "tests/compiler/c0/probe-program-emit-transaction.c injects staged prefix/global/between/function/finalize failures; probe-module-emit-preflight-contract.c exercises forged module and foreign type arenas"
+    ],
+    "functional_path": "C08 PROVISIONAL output ownership chain: Compiler verifies and seals CoreFunctionSet+ModuleIR -> destroys C Program and source buffer -> target backend catalog validates architecture and a common preflight snapshot -> Target/common creates private same-directory .s staging file -> predeclare undefined weak/hidden actual references, globals/aliases, copied Module file ASM, prepared Core functions -> per-function target ABI→typed MachineIR complete preflight -> output close and optional target finalization -> atomic rename into requested path; any failure removes private file and leaves old public result intact. Output transaction is common; semantic ISA directives remain private per target.",
+    "source_links": [
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/backend.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_emit.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_emit.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_visit.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_program_emit.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/machine_production_preflight.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-program-emit-transaction.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-module-emit-preflight-contract.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/aarch64/codegen.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/loongarch64/codegen.c"
+    ],
+    "limitations": [
+      "UNTRUSTED C08 proposal, not all five per-target file finalizers/ELF relocation paths or error injection configurations reviewed.",
+      "Provenance of .s public transaction must not be confused with real .o ELF assembler/linker or QEMU execution success.",
+      "Preserve SOURCE file ASM bytes and GNU undefined weak/visibility behavior; removing extra symbol-use checks without proofs can introduce silent link differences.",
+      "Need same-input failure-injection tests for fopen/fclose/rename, cleanup of temp files, valid old output intact, ABI/target finalizer failures and platform-specific assembler oracles.",
+      "No correctness or performance equivalence claim made; do not certify C08 as MAPPED/VERIFIED."
+    ],
+    "independent_review": false,
+    "semantic_coverage_claimed": false
+  }
+}
