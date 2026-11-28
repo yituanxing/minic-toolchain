@@ -35,6 +35,18 @@ EXPECTED_HINTS = {
     "C09": ["tests/compiler/", "tests/target/"],
     "C10": ["src/common/"]
 }
+EXPECTED_NAMES = {
+    "C01": "Driver and invocation target contracts",
+    "C02": "Frontend C/GNU C syntax, types and semantics",
+    "C03": "AST ownership, normalization and inline specialization",
+    "C04": "AST to Core IR lowering and identity/lifetime",
+    "C05": "Core reachability, global objects and invariants",
+    "C06": "Target-common DataLayout, calling ABI and fact ownership",
+    "C07": "Per-ISA machine semantics and instruction selection",
+    "C08": "Assembly output, finalization and error transaction",
+    "C09": "Real software, differential oracles and verification gaps",
+    "C10": "Cross-stage common contracts and shared primitives"
+}
 STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
 ALLOWED = {
@@ -132,6 +144,15 @@ def load(root, *, require_canonical=True):
         ids.add(ident)
         must(item.get("scope_hint") == EXPECTED_HINTS.get(ident),
              "functional boundaries changed without scope migration for " + ident)
+        must(item.get("name") == EXPECTED_NAMES.get(ident),
+             "functional name changed or reassigned")
+        must(item.get("owner") == "unassigned" and item.get("unresolved") == [],
+             "unauthorized ownership or unresolved-fact injection")
+        must(set(item) == {"id", "name", "status", "audit_stage",
+              "verified", "owner", "scope_hint",
+              "canonical_evidence_refs", "last_verified_revision",
+              "unresolved", "note"},
+             "unexpected metadata in scope")
         status = item.get("status")
         must(status in STATUSES, "illegal slice state for " + ident)
         # Terminal completion requires an authenticated CI/owner attestation
@@ -175,6 +196,7 @@ def load(root, *, require_canonical=True):
     active = state.get("active_task")
     must(active is None,
          "untrusted active_task override is disabled until leases are authenticated")
+    verify_event_replay(policy, state)
     return policy, state
 
 
@@ -306,9 +328,50 @@ def transition(policy, state, proposal):
         "kind": "SLICE_TRANSITION", "id": ident,
         "from": item["status"], "to": target,
         "actor_id": proposal["actor_id"], "source": ev["link"],
-        "epoch": changed["epoch"]
+        "epoch": changed["epoch"],
+        "proposal": copy.deepcopy(proposal)
     })
     return changed
+
+
+def verify_event_replay(policy, state):
+    """Replay persistent transitions instead of trusting snapshot labels.
+
+    This catches accidental state tampering and missing events; a malicious
+    writer of the whole repository still requires an external trust anchor.
+    """
+    events = state.get("recorded_events")
+    must(isinstance(events, list) and len(events) >= 2,
+         "event history truncated")
+    must(isinstance(events[0], dict) and isinstance(events[1], dict) and
+         events[0].get("kind") == "HISTORICAL_EXEMPLAR_NOT_GLOBAL_COMPLETION" and
+         events[1].get("kind") == "S0_SCOPE_REFINEMENT" and
+         events[1].get("epoch") == 1,
+         "original migration history missing or reordered")
+    must(state["epoch"] == len(events) - 1,
+         "state epoch differs from event count")
+    replay = copy.deepcopy(state)
+    replay["epoch"] = 1
+    replay["recorded_events"] = copy.deepcopy(events[:2])
+    for row in replay["slices"]:
+        row["status"] = "PLANNED"
+        row["audit_stage"] = "S0_BASELINE"
+        row["verified"] = False
+        row["canonical_evidence_refs"] = []
+        row["last_verified_revision"] = None
+    for event in events[2:]:
+        must(isinstance(event, dict) and
+             event.get("kind") == "SLICE_TRANSITION",
+             "unrecognized state-history entry")
+        proposal = event.get("proposal")
+        must(isinstance(proposal, dict), "no replayable transition proposal")
+        replay = transition(policy, replay, proposal)
+        must(replay["recorded_events"][-1] == event,
+             "recorded transition has changed")
+    must(replay["epoch"] == state["epoch"] and
+         replay["slices"] == state["slices"] and
+         replay["recorded_events"] == events,
+         "current state differs from its event replay")
 
 
 @contextmanager
