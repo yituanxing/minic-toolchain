@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 8,
+  "epoch": 9,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -134,6 +134,7 @@
       "scope_hint": [
         "src/target/x86_64/",
         "src/target/aarch64/",
+        "src/target/riscv/",
         "src/target/riscv32/",
         "src/target/riscv64/",
         "src/target/loongarch64/"
@@ -541,6 +542,40 @@
         "src/target/riscv64/codegen_function.c"
       ],
       "rationale": "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+      "verified_slices": 0
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V4",
+      "epoch": 9,
+      "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+      "prior_scope": {
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "scope_changes": {
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "observed_paths": [
+        "src/target/riscv/machine_core_select.c",
+        "src/target/riscv/machine_core_select.h",
+        "src/target/riscv/machine_target_state.h",
+        "src/target/riscv/machine_gnu_asm.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+      ],
+      "rationale": "Correct S0-v3 false assertion: src/target/riscv/ is a real shared RISC-V machine implementation that BOTH RV32 and RV64 consume. V3 correctly added separate ABI directories but incorrectly removed their common selector. Restore all three directories, retain the historical error and never claim review completion.",
       "verified_slices": 0
     }
   ],
