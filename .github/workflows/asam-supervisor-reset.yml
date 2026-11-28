@@ -74,6 +74,8 @@ jobs:
               tools/asam/trust_readiness.py|\
               tools/asam/selftest_trust_readiness.py|\
               tools/asam/selftest_remote_cas.py|\
+              tools/asam/git_state_chain.py|\
+              tools/asam/selftest_git_state_chain.py|\
               tools/asam/experiments/remote_cas_probe.json|\
               tools/asam/selftest_remote_evidence.py|\
               tools/asam/README.md|\
@@ -101,6 +103,12 @@ jobs:
           assert not data["temporary_context"]
           print("ASAM_MISSION_RELOAD=PASS 1 C01 proposal, 9 planned, C02 selected, no false completion")
           PY
+
+      - name: Audit all historical task-state Git revisions independently
+        run: |
+          set -euo pipefail
+          python3 -I tools/asam/git_state_chain.py --root .
+          python3 -I tools/asam/selftest_git_state_chain.py
 
       - name: Test independent process restoration and forbidden transitions
         run: |
