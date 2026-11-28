@@ -62,7 +62,9 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(json.dumps(result)) < 12000
     ledger = {p["id"]: {"status": "DISTINCT_KEEP", "members": [
         {"path": p[side]["path"], "name": p[side]["name"],
-         "content_sha256": p[side]["content_sha256"]} for side in ("a", "b")
+         "content_sha256": p[side]["content_sha256"],
+         "lexical_reference_sha256": p[side]["lexical_reference_sha256"]}
+        for side in ("a", "b")
     ]}}
     replay = rp.build(root, [packet], limit=2, max_source_lines=12,
                       dispositions=ledger)
@@ -73,6 +75,12 @@ with tempfile.TemporaryDirectory() as tmp:
     unchanged = rp.build(root, [packet], limit=2, max_source_lines=12,
                          dispositions=ledger)
     assert unchanged["candidate_count"] == 0
+    # A new caller reference outside both functions invalidates the old
+    # disposition even though neither reviewed body changed.
+    src.write_text(src.read_text() + "int new_caller = same_a(3);\n", encoding="utf-8")
+    caller_changed = rp.build(root, [packet], limit=2, max_source_lines=12,
+                              dispositions=ledger)
+    assert caller_changed["candidate_count"] == 1, "new callsite must trigger review"
     src.write_text(src.read_text().replace("int line_4 = 4;", "int line_4 = 99;"),
                    encoding="utf-8")
     stale = rp.build(root, [packet], limit=2, max_source_lines=12,
