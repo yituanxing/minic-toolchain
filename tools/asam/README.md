@@ -15,9 +15,11 @@ experiment, not yet an autonomous multi-agent engine.
    records linked in policy.json. They alone own technical facts, established
    problems and exclusions. ASAM must NOT duplicate the issue register.
 3. tools/asam/control/state.json — **scheduling and coverage cursor only**.
-   C01–C10 are planning-level functional regions. The actual checkpoint has
-   **C01 MAPPING_PROPOSED**, nine others PLANNED, and zero verified.
-   S0 v2 evidence-based scope refinement is pinned at epoch 3.
+   C01–C10 are planning-level functional regions. C01 and C02 have submitted
+   source-grounded **untrusted** mapping proposals, not independent reviews.
+   The S0 v2 scope migration is pinned at epoch 3. Current epoch, pending
+   counts and next task MUST always be derived from `supervisor.py resume`,
+   not frozen into a README, test assertion or AI conversation.
 4. Actual versioned source, CI logs, test matrix and external runtime oracles
    determine code correctness. An AI assertion is not runtime evidence.
 
@@ -69,6 +71,29 @@ their semantic replacements require S1 source review.
 
 The latest verified execution and restart artifact can be reached through
 the experiment PR #712 CI history. Do not assume the artifact persists forever.
+
+## Progress must be data-driven, not a test-code change
+
+At the first real C02 advance, older tests still asserted `epoch == 3`,
+`PLANNED == 9` and `next == C02`. That design would require editing
+the Supervisor test suite on every new mapping proposal, defeating autonomous
+breadth-first progress.
+
+The current acceptance suite derives actual pending counts, the selected
+region and the next region from the **recorded state**, while still pinning
+the immutable mission, original migrations, zero verified status and
+source provenance. The `selftest_context_isolation.py` fixture advances
+all remaining regions using **untrusted** test proposals, proving the restart
+becomes an independent-challenge instruction when no PLANNED region remains.
+The recovery and concurrency tests use the immediate event predecessor
+in throwaway fixtures when all ten have proposals, rather than locking
+the program to C02 forever.
+
+`tools/asam/experiments/c02_mapping_proposal.json` records a real source
+inspection of Compiler -> Parser -> Program/AST -> normalization/verifier
+consumers, at the pinned source revision. It is **not** a certified C02
+semantic review or proof that all frontend code has been read. No full
+source correctness or autonomous Fixer capability has been enabled.
 
 ## Session protocol
 
