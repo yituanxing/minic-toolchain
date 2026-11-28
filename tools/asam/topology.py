@@ -75,6 +75,14 @@ def map_slices(root, policy, state, *, check_baseline=True):
     if dirty.returncode != 0:
         raise ValueError("dirty tracked source or canonical documents: refuse attribution to pinned commit")
     tracked = source_snapshot(root)
+    # This second census is deliberately *repository-wide*, to detect C/H
+    # files excluded by the initial narrowly scoped inventory roots.
+    entire_repo = sorted(
+        p for p in git(root, "ls-files", "-z").decode(
+            "utf-8", "replace").split("\0")
+        if p and Path(p).suffix in C_SUFFIXES
+    )
+    outside_scan = sorted(set(entire_repo) - set(tracked))
     counts = collections.Counter()
     inventory = []
     patterns = {word: re.compile(r"\b" + re.escape(word) + r"\s*\(")
@@ -165,6 +173,9 @@ def map_slices(root, policy, state, *, check_baseline=True):
         "source_tree": git(root, "rev-parse", "HEAD:src").decode().strip(),
         "canonical_documents": docs,
         "tracked_c_h_files": len(inventory),
+        "repository_total_tracked_c_h": len(entire_repo),
+        "repository_outside_scan_roots": outside_scan,
+        "repository_outside_scan_roots_count": len(outside_scan),
         "tracked_physical_lines": total_lines,
         "file_prefix_counts": dict(sorted(counts.items())),
         "inventory_scope": list(SCAN_ROOTS),
@@ -216,7 +227,12 @@ def main():
         "",
         "- Mission: " + result["mission_id"],
         "- Pinned main: " + result["pinned_main_commit"],
-        "- Tracked C/H files: " + str(result["tracked_c_h_files"]),
+        "- Tracked C/H files in initial scan roots: " +
+            str(result["tracked_c_h_files"]),
+        "- Tracked C/H files across WHOLE REPOSITORY: " +
+            str(result["repository_total_tracked_c_h"]),
+        "- C/H files outside initial scan roots (NOT COVERED): " +
+            str(result["repository_outside_scan_roots_count"]),
         "- Physical lines: " + str(result["tracked_physical_lines"]),
         "- Unique files in planned regions: " + str(result["unique_candidate_files"]),
         "- Unassigned files: " + str(result["unassigned_count"]),
@@ -239,7 +255,11 @@ def main():
         if item["unresolved_documented_anchors"]:
             text.append("- " + item["id"] + ": " +
                 ", ".join(item["unresolved_documented_anchors"]))
-    text += ["", "## Unassigned tracked source", ""]
+    text += ["", "## Repository C/H missing from the initial scan roots", ""]
+    text += ["- " + x for x in result["repository_outside_scan_roots"][:100]]
+    if result["repository_outside_scan_roots_count"] > 100:
+        text.append("- ... additional paths in JSON")
+    text += ["", "## Unassigned tracked source WITHIN scan roots", ""]
     text += ["- " + x for x in result["unassigned_files"][:80]]
     if len(result["unassigned_files"]) > 80:
         text.append("- ... additional entries available in JSON")
@@ -297,6 +317,12 @@ def main():
     print("ASAM_BREADTH_LINES=" + str(result["tracked_physical_lines"]))
     print("ASAM_BREADTH_SLICES=" + str(len(result["slice_candidates"])))
     print("ASAM_UNASSIGNED_FILES=" + str(result["unassigned_count"]))
+    print("ASAM_REPO_TOTAL_C_H=" +
+          str(result["repository_total_tracked_c_h"]))
+    print("ASAM_REPO_OUTSIDE_SCAN_ROOTS=" +
+          str(result["repository_outside_scan_roots_count"]))
+    for name in result["repository_outside_scan_roots"][:40]:
+        print("ASAM_UNSCANNED=" + name)
     print("ASAM_STALE_ANCHOR_HINTS=" +
           str(result["unresolved_documented_anchor_count"]))
     print("ASAM_SEMANTIC_COVERAGE=0_UNVERIFIED")
