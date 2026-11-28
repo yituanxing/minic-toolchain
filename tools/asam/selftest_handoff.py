@@ -89,6 +89,10 @@ attack("missing whole-repo public headers", lambda p,s,r,i,o:
        i.update(repository_outside_scan_roots=[]))
 attack("fake whole-repo C/H count", lambda p,s,r,i,o:
        i.update(repository_total_tracked_c_h=1746))
+attack("fake protected controller status", lambda p,s,r,i,o:
+       r["trust_gate"].update(controller_protected=True))
+attack("unauthorized autonomous fixer permission", lambda p,s,r,i,o:
+       r["trust_gate"].update(autonomous_code_modification_allowed=True))
 attack("untrusted old-agent event text reintroduced", lambda p,s,r,i,o:
        r.update(recent_history_pointers_only=s["recorded_events"][-8:]))
 attack("history fingerprint fabricated", lambda p,s,r,i,o:
@@ -116,6 +120,6 @@ try:
 finally:
     candidate.write_bytes(original)
 
-print("ASAM_INDEPENDENT_HANDOFF=PASS 34 adversarial payload mutations rejected")
+print("ASAM_INDEPENDENT_HANDOFF=PASS 36 adversarial payload mutations rejected")
 print("ASAM_HANDOFF_DIRTY_SOURCE=PASS source changed after export rejected")
 print("ASAM_FRESH_CONTEXT=PASS all ten bounded work orders retain original global mission")
