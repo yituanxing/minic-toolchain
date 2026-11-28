@@ -59,8 +59,11 @@ evidence for a completely reviewed slice with no fix.
 
 Functional mapping requires producers, consumers and full path evidence.
 Confirmation requires a separate challenger. Fixes need exact commits.
-Verification requires separate verifier and tested commit, real input/oracle
-matrix and negative evidence. An unverified change is NEVER marked verified.
+Verification requires a separate verifier and tested commit, real
+input/oracle matrix and negative evidence. **Terminal VERIFIED is currently
+DISABLED** until external CI evidence can be authenticated by a trusted
+integration: model-generated links/names could otherwise forge "success".
+An unverified change is NEVER marked verified.
 
 Run a reviewed transition locally with:
 
