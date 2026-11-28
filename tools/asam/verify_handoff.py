@@ -57,9 +57,21 @@ def check(root, policy, state, resume, inventory, orders):
             "Do not rely on earlier model messages. "
             "The model cannot mark the global mission done.",
             "forgetfulness contract replaced")
-    require(resume["recent_history_pointers_only"] ==
-            state["recorded_events"][-8:],
-            "restored history not bound to persisted task record")
+    # Independently recompute opaque historical commitments. No proposal
+    # text, untrusted URL, or actor claim may become an instruction at resume.
+    expected_commits = []
+    for event in state["recorded_events"][-8:]:
+        canonical = json.dumps(event, sort_keys=True, ensure_ascii=False,
+                               separators=(",", ":")).encode("utf-8")
+        expected_commits.append({
+            "kind": event["kind"], "epoch": event.get("epoch", 0),
+            "slice_id": event.get("id"),
+            "content_sha256": hashlib.sha256(canonical).hexdigest(),
+        })
+    require(resume["recent_history_commitments_only"] == expected_commits,
+            "history commitments altered or raw task content injected")
+    require("recent_history_pointers_only" not in resume,
+            "untrusted prior worker text leaked into restart")
     require(resume["project"] == state["project"], "project boundary drift")
     require(not resume["temporary_context"], "temporary model context smuggled in")
     require(resume["source_baseline"] == state["source_snapshot"],
@@ -171,7 +183,10 @@ def check(root, policy, state, resume, inventory, orders):
             "current_stage": expected["audit_stage"],
             "status": expected["status"],
             "scope_hint": expected["scope_hint"],
-            "canonical_evidence_refs": expected["canonical_evidence_refs"],
+            "evidence_reference_sha256": [
+                hashlib.sha256(ref.encode("utf-8")).hexdigest()
+                for ref in expected["canonical_evidence_refs"]
+            ],
             "instruction": (
                 "Read existing canonical docs and real code; "
                 "map entrance/producer/consumers/ownership, "
