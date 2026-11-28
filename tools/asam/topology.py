@@ -216,6 +216,51 @@ def main():
     (dest / "breadth-inventory.md").write_text(
         "\n".join(text) + "\n", encoding="utf-8"
     )
+    # Nine bounded, independent read-only Mapper work orders. This is a
+    # restartable multi-worker *protocol*, not nine launched LLM agents.
+    packets = []
+    for item in result["slice_candidates"]:
+        packets.append({
+            "schema": "asam-mapper-work-order-v1",
+            "mission_id": result["mission_id"],
+            "policy_sha256": state["policy_sha256"],
+            "role": "mapper",
+            "permissions": ["read_current_source", "read_canonical_docs",
+                            "propose_evidence_only"],
+            "prohibited": ["close_global_mission", "edit_source",
+                           "claim_semantic_coverage_from_file_inventory",
+                           "create_parallel_issue_register"],
+            "source_revision": result["pinned_main_commit"],
+            "source_tree": result["source_tree"],
+            "slice_id": item["id"], "slice_name": item["name"],
+            "slice_status": item["supervisor_status"],
+            "candidate_file_count": item["tracked_file_candidates"],
+            "source_paths_to_inspect": item["scope_hint"],
+            "anchor_hints_not_semantic_proof": item["anchor_hints"],
+            "canonical_doc_digests": result["canonical_documents"],
+            "outputs_required": [
+                "real_feature_entrypoints", "producer_and_consumers",
+                "owner_and_lifetime_invariants", "cross_layer_boundary",
+                "ISA_and_build_configuration_differences",
+                "source_line_evidence", "counterevidence_and_uncovered_paths",
+                "canonical_issue_register_matches"
+            ],
+            "status_after_generation": "NOT_MAPPED",
+            "requires_independent_review": True
+        })
+    bundle = {
+        "schema": "asam-breadth-work-orders-v1",
+        "mission_id": result["mission_id"],
+        "source_revision": result["pinned_main_commit"],
+        "global_goal_completed": False,
+        "state_epoch": state["epoch"],
+        "work_orders": packets,
+        "note": "Independent task specifications only; no new AI agents run."
+    }
+    (dest / "work-orders.json").write_text(
+        json.dumps(bundle, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8"
+    )
     print("ASAM_BREADTH_FILES=" + str(result["tracked_c_h_files"]))
     print("ASAM_BREADTH_LINES=" + str(result["tracked_physical_lines"]))
     print("ASAM_BREADTH_SLICES=" + str(len(result["slice_candidates"])))
