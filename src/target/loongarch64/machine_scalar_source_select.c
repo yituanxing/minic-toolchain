@@ -1,4 +1,5 @@
 #include "target/loongarch64/machine_scalar_source_select.h"
+#include "target/loongarch64/machine_scalar_type.h"
 
 #include "target/common/core_machine_asm.h"
 #include "target/loongarch64/asm_contract_internal.h"
@@ -31,29 +32,6 @@ static MinicMachineOperand scalar_address(unsigned base, const char *constraint)
 /* Width/sign and output-lvalue checks are Core-typed, not recovered C AST
  * spelling. The original C source has already been sealed by TargetPolicy;
  * the Machine selector must nevertheless independently verify its roles. */
-static bool scalar_integer(const MinicCoreFunction *fn,
-    MinicCoreValueId value, bool pointee, size_t width, int signed_mode) {
-    MinicCoreTypeId id;
-    const MinicCoreType *type;
-    if (fn == NULL || fn->type_context == NULL || fn->values == NULL ||
-        value >= fn->value_count) return false;
-    id = minic_core_type_unqualified(fn->type_context,
-        fn->values[value].core_type_id);
-    type = minic_core_type_get(fn->type_context, id);
-    if (pointee) {
-        if (type == NULL || type->kind != MINIC_CORE_TYPE_POINTER)
-            return false;
-        id = minic_core_type_unqualified(fn->type_context,
-            type->value.pointer.pointee);
-        type = minic_core_type_get(fn->type_context, id);
-    }
-    return type != NULL && type->kind == MINIC_CORE_TYPE_INTEGER &&
-        type->has_layout && type->size == width &&
-        !type->value.integer.is_bool &&
-        type->value.integer.bit_width == width * 8U &&
-        (signed_mode < 0 ||
-         type->value.integer.is_signed == (signed_mode != 0));
-}
 
 static bool scalar_integer_any(const MinicCoreFunction *fn,
     MinicCoreValueId value) {
@@ -124,7 +102,7 @@ static bool scalar_cacop(LoongScalarSourceContext *s) {
             MINIC_CORE_STRUCTURED_INLINE_ASM_MEMORY_INPUT, false, false) ||
         !scalar_constant(fn, s->roles[0].value, &opcode) ||
         opcode < 8 || opcode > 13 ||
-        !scalar_integer(fn, s->roles[1].value, true, 1U, 0) ||
+        !minic_loong_core_integer_operand(fn, s->roles[1].value, true, 1U, 0) ||
         !s->load(s->opaque, s->roles[1].value, SCALAR_T0, true))
         return false;
     operands[0] = minic_loong_machine_imm(opcode, "i");
@@ -145,14 +123,14 @@ static bool scalar_frametrace_csr(LoongScalarSourceContext *s) {
         !scalar_role(s, 0U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
             false, false) ||
-        !(scalar_integer(fn, s->roles[0].value, true, 4U, 0) ||
-          scalar_integer(fn, s->roles[0].value, true, 8U, 0)))
+        !(minic_loong_core_integer_operand(fn, s->roles[0].value, true, 4U, 0) ||
+          minic_loong_core_integer_operand(fn, s->roles[0].value, true, 8U, 0)))
         return false;
     operand = minic_loong_machine_gp(SCALAR_T0, MINIC_MACHINE_REGISTER_WRITE,
         "=r", NULL);
     return scalar_emit(s, 0U, &operand, 1U, NULL, 0U) &&
         s->store(s->opaque, s->roles[0].value, SCALAR_T0,
-            scalar_integer(fn, s->roles[0].value, true, 8U, 0)
+            minic_loong_core_integer_operand(fn, s->roles[0].value, true, 8U, 0)
                 ? 8U : 4U);
 }
 
@@ -167,7 +145,7 @@ static bool scalar_cpucfg(LoongScalarSourceContext *s) {
         !scalar_role(s, 1U,
             MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
             false, false) ||
-        !scalar_integer(fn, s->roles[0].value, true, 4U, 0) ||
+        !minic_loong_core_integer_operand(fn, s->roles[0].value, true, 4U, 0) ||
         !scalar_integer_any(fn, s->roles[1].value) ||
         !s->load(s->opaque, s->roles[1].value, SCALAR_T1, true))
         return false;
@@ -194,7 +172,7 @@ static bool scalar_fpr_transfer(LoongScalarSourceContext *s) {
             ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
             : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
             false, false) ||
-        !scalar_integer(s->ctx->fn, s->roles[0].value, read, 8U, 0))
+        !minic_loong_core_integer_operand(s->ctx->fn, s->roles[0].value, read, 8U, 0))
         return false;
     fpr.reg = minic_loong_machine_reg((form - 1U) % 32U, 64U, MINIC_MACHINE_REGISTER_FLOAT);
     fpr.access = read ? MINIC_MACHINE_REGISTER_READ :
@@ -236,7 +214,7 @@ static bool scalar_clock(LoongScalarSourceContext *s) {
         if (!scalar_role(s, i,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT,
                 early, false) ||
-            !scalar_integer(s->ctx->fn, s->roles[i].value,
+            !minic_loong_core_integer_operand(s->ctx->fn, s->roles[i].value,
                 true, widths[i], word32 ? 1 : 0)) return false;
         operands[i] = minic_loong_machine_gp(i == 0U ? SCALAR_T0 : SCALAR_T1,
             MINIC_MACHINE_REGISTER_WRITE, early ? "=&r" : "=r",
@@ -274,7 +252,7 @@ static bool scalar_invtlb(LoongScalarSourceContext *s) {
         if (!scalar_role(s, i,
                 MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT,
                 false, false)) return false;
-        if (i != 0U && !scalar_integer(fn, s->roles[i].value,
+        if (i != 0U && !minic_loong_core_integer_operand(fn, s->roles[i].value,
                 false, (form == 1U && i == 1U) || form == 3U
                     ? 4U : 8U, -1)) return false;
     }
