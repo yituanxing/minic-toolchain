@@ -200,6 +200,7 @@ def main():
         "eligible_functions": len(items),
         "pairs_considered": pairs,
         "shared_implementation_candidates": len(all_findings),
+        "cross_file_candidates": sum(1 for x in all_findings if x["a"]["path"] != x["b"]["path"]),
         "pattern_only_candidates": len(patterns),
         "ranked_pairs": selected,
         "pattern_examples": patterns[:12],
@@ -213,6 +214,7 @@ def main():
              "- Eligible functions: " + str(len(items)),
              "- Compared candidate pairs: " + str(pairs),
              "- Shared-implementation hypotheses: " + str(len(all_findings)),
+             "- Cross-file hypotheses: " + str(sum(1 for x in all_findings if x["a"]["path"] != x["b"]["path"])),
              "- Pattern-only (separate queue): " + str(len(patterns)),
              "- Diverse main queue: " + str(len(selected)), "",
              "Structural similarity is not equivalence. Check callers, effects,",
@@ -236,6 +238,7 @@ def main():
     print("ASAM v1.1 compared pairs:", pairs)
     print("ASAM v1.1 shared-implementation hypotheses:", len(all_findings))
     print("ASAM v1.1 pattern-only hypotheses:", len(patterns))
+    print("ASAM v1.1 cross-file hypotheses:", sum(1 for x in all_findings if x["a"]["path"] != x["b"]["path"]))
     print("ASAM v1.1 diverse queue:", len(selected))
     for item in selected[:8]:
         print(item["score"], item["a"]["name"], "<->", item["b"]["name"])
