@@ -47,6 +47,41 @@ EXPECTED_NAMES = {
     "C09": "Real software, differential oracles and verification gaps",
     "C10": "Cross-stage common contracts and shared primitives"
 }
+EXPECTED_STATE_KEYS = set(["schema","policy_id","policy_sha256","epoch","global_status","mission_complete","project","source_snapshot","schedule_mode","work_limit","slices","active_task","recorded_events","guidance"])
+EXPECTED_GUIDANCE = "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
+EXPECTED_NOTES = {
+  "C01": "Planning-level. Include all driver and invocation units, not only main.c. No semantic coverage claimed.",
+  "C02": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C03": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C04": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C05": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C06": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C07": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C08": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C09": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage.",
+  "C10": "Discovered by full tracked inventory: source_location, calling_convention, integer_bits, call_frame_address and machine builtin effect interfaces cross layer ownership. All semantic responsibility UNVERIFIED."
+}
+EXPECTED_BOOTSTRAP = [
+  {
+    "kind": "HISTORICAL_EXEMPLAR_NOT_GLOBAL_COMPLETION",
+    "source": "https://github.com/yituanxing/minic-toolchain/pull/711",
+    "evidence": "LoongArch local scalar gate consolidation; merged, does not imply C07 verified",
+    "issue_record": "refer to existing canonical MiniC issues; no new authoritative ASAM issue number"
+  },
+  {
+    "kind": "S0_SCOPE_REFINEMENT",
+    "epoch": 1,
+    "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46103545658",
+    "evidence": "8 unassigned C/H files in whole-repo tracked inventory. C01 expanded to all driver translation units; C10 added for five src/common C/H interfaces. No semantic coverage or source-code edits claimed.",
+    "added": [
+      "C10"
+    ],
+    "refined": [
+      "C01"
+    ],
+    "expected_unassigned_after_refinement": 0
+  }
+]
 STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
 ALLOWED = {
@@ -99,6 +134,10 @@ def load(root, *, require_canonical=True):
     must(state.get("policy_id") == PINNED_MISSION_ID, "queue switched mission")
     must(state.get("policy_sha256") == digest, "queue has wrong mission digest")
     must(state.get("schema") == "asam-control-state-v1", "wrong queue schema")
+    must(set(state) == EXPECTED_STATE_KEYS,
+         "unapproved persistent state field injection or loss")
+    must(state.get("guidance") == EXPECTED_GUIDANCE,
+         "handoff instructions changed without reviewed governance migration")
     must(state.get("project") == EXPECTED_SOURCE, "project scope changed")
     must(state.get("global_status") == "ACTIVE" and
          state.get("mission_complete") is False,
@@ -154,6 +193,8 @@ def load(root, *, require_canonical=True):
              "functional boundaries changed without scope migration for " + ident)
         must(item.get("name") == EXPECTED_NAMES.get(ident),
              "functional name changed or reassigned")
+        must(item.get("note") == EXPECTED_NOTES.get(ident),
+             "planning notes changed without reviewed scope migration")
         must(item.get("owner") == "unassigned" and item.get("unresolved") == [],
              "unauthorized ownership or unresolved-fact injection")
         must(set(item) == {"id", "name", "status", "audit_stage",
@@ -352,11 +393,8 @@ def verify_event_replay(policy, state):
     events = state.get("recorded_events")
     must(isinstance(events, list) and len(events) >= 2,
          "event history truncated")
-    must(isinstance(events[0], dict) and isinstance(events[1], dict) and
-         events[0].get("kind") == "HISTORICAL_EXEMPLAR_NOT_GLOBAL_COMPLETION" and
-         events[1].get("kind") == "S0_SCOPE_REFINEMENT" and
-         events[1].get("epoch") == 1,
-         "original migration history missing or reordered")
+    must(events[:2] == EXPECTED_BOOTSTRAP,
+         "historic evidence or scope migration changed without review")
     must(state["epoch"] == len(events) - 1,
          "state epoch differs from event count")
     must(len(events) <= 2000,
