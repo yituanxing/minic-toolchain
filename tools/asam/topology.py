@@ -16,7 +16,11 @@ import sys
 
 C_SUFFIXES = {".c", ".h"}
 SCAN_ROOTS = ("src/", "tools/minic/", "tools/minic-cc/",
-              "tests/compiler/", "tests/target/")
+              "tools/minic-", "include/minic/", "tests/")
+# These belong to distinct tools or vendored libraries, not the MiniC
+# compiler's production code. Integration boundaries still belong to C01/C09.
+EXTERNAL_ROOTS = ("archiver/", "assembler/", "elf/", "linker/",
+                  "preprocessor/", "third_party/")
 # Original whole compiler chain, across areas. Each symbol is only an anchor
 # to inspect, not a proof of its effect or ownership.
 ANCHORS = {
@@ -66,8 +70,8 @@ def map_slices(root, policy, state, *, check_baseline=True):
             raise ValueError("source checkout differs from pinned main")
     # Never attribute dirty working-tree code or documentation to the
     # pinned Git commit. The scan reads actual working files, not git blobs.
-    protected = ("src", "tools/minic", "tools/minic-cc",
-                 "tests/compiler", "tests/target", "docs/architecture")
+    protected = ("src", "tools", "include/minic",
+                 "tests", "docs/architecture")
     dirty = subprocess.run(
         ["git", "diff", "--quiet", "HEAD", "--", *protected],
         cwd=root, capture_output=True, check=False
@@ -83,6 +87,15 @@ def map_slices(root, policy, state, *, check_baseline=True):
         if p and Path(p).suffix in C_SUFFIXES
     )
     outside_scan = sorted(set(entire_repo) - set(tracked))
+    explicitly_external = sorted(
+        p for p in outside_scan if p.startswith(EXTERNAL_ROOTS)
+    )
+    unclassified = sorted(set(outside_scan) - set(explicitly_external))
+    if unclassified:
+        raise ValueError(
+            "S0 global coverage BLOCKED: unclassified C/H source(s): " +
+            ", ".join(unclassified[:15])
+        )
     counts = collections.Counter()
     inventory = []
     patterns = {word: re.compile(r"\b" + re.escape(word) + r"\s*\(")
@@ -101,7 +114,7 @@ def map_slices(root, policy, state, *, check_baseline=True):
         # Test fixture main() functions must not inflate compiler entry
         # anchors: inventory tests, but resolve production pipeline symbols
         # only in the compiler/driver source roots.
-        if name.startswith(("tests/compiler/", "tests/target/")):
+        if name.startswith("tests/"):
             continue
         for number, line in enumerate(lines, 1):
             for word, pattern in patterns.items():
@@ -176,6 +189,11 @@ def map_slices(root, policy, state, *, check_baseline=True):
         "repository_total_tracked_c_h": len(entire_repo),
         "repository_outside_scan_roots": outside_scan,
         "repository_outside_scan_roots_count": len(outside_scan),
+        "repository_excluded_external_c_h": explicitly_external,
+        "repository_excluded_external_c_h_count": len(explicitly_external),
+        "repository_unclassified_c_h": unclassified,
+        "repository_unclassified_c_h_count": len(unclassified),
+        "explicit_external_roots": list(EXTERNAL_ROOTS),
         "tracked_physical_lines": total_lines,
         "file_prefix_counts": dict(sorted(counts.items())),
         "inventory_scope": list(SCAN_ROOTS),
@@ -231,8 +249,10 @@ def main():
             str(result["tracked_c_h_files"]),
         "- Tracked C/H files across WHOLE REPOSITORY: " +
             str(result["repository_total_tracked_c_h"]),
-        "- C/H files outside initial scan roots (NOT COVERED): " +
-            str(result["repository_outside_scan_roots_count"]),
+        "- Out-of-scope external projects / libraries (EXPLICIT): " +
+            str(result["repository_excluded_external_c_h_count"]),
+        "- UNCLASSIFIED C/H files (MUST BE ZERO): " +
+            str(result["repository_unclassified_c_h_count"]),
         "- Physical lines: " + str(result["tracked_physical_lines"]),
         "- Unique files in planned regions: " + str(result["unique_candidate_files"]),
         "- Unassigned files: " + str(result["unassigned_count"]),
@@ -255,7 +275,7 @@ def main():
         if item["unresolved_documented_anchors"]:
             text.append("- " + item["id"] + ": " +
                 ", ".join(item["unresolved_documented_anchors"]))
-    text += ["", "## Repository C/H missing from the initial scan roots", ""]
+    text += ["", "## Explicitly excluded external project C/H files", ""]
     text += ["- " + x for x in result["repository_outside_scan_roots"][:100]]
     if result["repository_outside_scan_roots_count"] > 100:
         text.append("- ... additional paths in JSON")
@@ -321,6 +341,10 @@ def main():
           str(result["repository_total_tracked_c_h"]))
     print("ASAM_REPO_OUTSIDE_SCAN_ROOTS=" +
           str(result["repository_outside_scan_roots_count"]))
+    print("ASAM_REPO_EXCLUDED_EXTERNAL_C_H=" +
+          str(result["repository_excluded_external_c_h_count"]))
+    print("ASAM_REPO_UNCLASSIFIED_C_H=" +
+          str(result["repository_unclassified_c_h_count"]))
     for name in result["repository_outside_scan_roots"][:40]:
         print("ASAM_UNSCANNED=" + name)
     print("ASAM_STALE_ANCHOR_HINTS=" +
