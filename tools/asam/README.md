@@ -201,6 +201,54 @@ branch, job steps and artifact, but it is **only metadata**: it does not
 prove semantic correctness, protected branch policy, or human reviewer
 authorization.
 
+## Real remote GitHub writer-contention experiment (non-autonomous)
+
+The local lock / epoch tests cannot certify cross-host remote writes. On this
+same **unprotected Draft experiment branch**, two real Git commit objects
+were created with the **same parent and the exact same file tree**; each
+candidate has zero source or test changes:
+
+- Base: `5b5266bc5fd88f47a510aaa48904177c2acf1831`
+- Candidate A: `32d095374ee50badef8b40908dba8b0464f16bc4`
+- Candidate B: `d57abbf807c93e3c711d14e5bfee8e49e0725d3a`
+
+Two remote `update_ref(force=false, expected_sha=base)` operations
+were submitted concurrently through the connected GitHub tool.
+A succeeded, B returned a generic GraphQL error. Independently querying the
+ref showed A as the winner; retrying the stale candidate did not overwrite
+A. A no-op update with A as expected SHA succeeded, but the same no-op
+with stale expected base failed. **The GraphQL error's exact rejection cause
+was NOT exposed**, so this is observed non-overwrite, not a mathematical
+proof of cross-host atomicity.
+
+A separate read-only REST verifier re-fetches both Git objects, their
+parents and trees, the current branch head, and GitHub comparisons. It
+accepts only a branch where A remains in ancestry and the B sibling
+remains outside it, and runs 16 negative-DAG attacks:
+
+    python3 -I tools/asam/selftest_remote_cas.py
+    GH_TOKEN=... python3 -I tools/asam/remote_cas_audit.py
+
+This probe is durable in
+`tools/asam/experiments/remote_cas_probe.json`.
+The verifier is READ-ONLY and never grants MAPPED/VERIFIED status or
+production write rights. A PR checkout can be a synthetic merge commit:
+the workflow now explicitly checks out the PR's exact head SHA and
+requires it to match GitHub's live branch ref.
+
+The GitHub REST branch listing observed `protected=false` for the
+experiment branch **and main**, and no visible repository rulesets.
+The read-only observer records this instead of guessing protection:
+
+    python3 -I tools/asam/selftest_trust_readiness.py
+    GH_TOKEN=... python3 -I tools/asam/trust_readiness.py
+
+The result must stay **BLOCKED** even if a branch is later marked
+`protected=true`, until a separate controller, verified owner review,
+restricted credentials, authenticated CI and an actual independent new
+LLM run are established. Neither GitHub CI success nor a generic
+GraphQL error can grant these authorities.
+
 ## Limitations
 
 - This is not yet a full source-level functional and ownership graph.
