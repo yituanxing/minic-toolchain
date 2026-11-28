@@ -84,8 +84,13 @@ reject("wrong head sha", lambda r,j,a,p:
        r.update(head_sha="f" * 40))
 reject("unrelated branch", lambda r,j,a,p:
        r.update(head_branch="main"))
-reject("PR event", lambda r,j,a,p:
-       r.update(event="pull_request"))
+reject("unapproved scheduled event", lambda r,j,a,p:
+       r.update(event="schedule"))
+pr_run = copy.deepcopy(run)
+pr_run["event"] = "pull_request"
+pr_metadata = gate.evaluate(pr_run, jobs, artifacts, **params)
+assert pr_metadata["event"] == "pull_request"
+assert pr_metadata["trusted_runner_deployed_on_protected_ref"] is False
 reject("queued run", lambda r,j,a,p:
        r.update(status="in_progress"))
 reject("run failure", lambda r,j,a,p:
