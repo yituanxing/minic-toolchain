@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 13,
+  "epoch": 14,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -186,15 +186,17 @@
     {
       "id": "C10",
       "name": "Cross-stage common contracts and shared primitives",
-      "status": "PLANNED",
-      "audit_stage": "S0_BASELINE",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
         "src/common/",
         "include/minic/"
       ],
-      "canonical_evidence_refs": [],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
       "last_verified_revision": null,
       "unresolved": [],
       "note": "Cross-stage src/common and public include/minic interfaces own shared type, calling convention and contract boundaries. All semantic responsibility UNVERIFIED."
@@ -811,6 +813,62 @@
             "Pending work: run normalized same-input baseline-vs-candidate GNU/MiniC differential tests and record stderr, exit status, emitted symbols/ELF relocations, native/QEMU output, toolchain version, commit and performance.",
             "Use canonical MC issue evidence; historical fixed-unverified changes are not promoted to VERIFIED by green ASAM controller CI.",
             "Verify CI path triggers do not omit changing backend dependencies, runtime libraries, Makefile or source policy; failure to trigger is independent verification debt."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C10",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c10-cross-layer-contract-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 14,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 13,
+        "slice_id": "C10",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c10-cross-layer-contract-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/common/ owns deliberately small cross-layer identities and pure numeric helpers; include/minic/compiler.h owns public translation-unit entrypoint and diagnostic type. Those contracts are not a second owner of Frontend C semantics, Core verification or physical target ABI.",
+          "consumers": [
+            "src/common/integer_bits.h:minic_integer_mask64/minic_integer_sign_extend64 define pure bit geometry, consumed by Frontend integer/const parsing, Compiler local facts/lowering, Core Module fragment verification and Target source-policy/global serialization; callers own signed overflow and C-type width policy.",
+            "src/common/calling_convention.h defines an execution identity enum DEFAULT vs MS_X64 shared by frontend/type.h, core/core_type.h and target/target_info.h. Source C prototype legality remains Frontend; actual register-bank placement remains x86 Target, not Common.",
+            "src/common/call_frame_address.h defines return/frame builtin category used by source builtin admission, Core semantics and target support gates, without introducing a Core dependency on a concrete AST.",
+            "src/common/machine_builtin_effect.h defines sealed read/write effect identities for target machine builtins; Core CALL effects do not carry architecture-specific C builtin spellings.",
+            "include/minic/compiler.h supplies the stable public minic_compile_preprocessed_file compatibility path, explicit-target for_target entrypoint, function-sections policy and diagnostic schema. src/compiler/compiler.c implements these as one actual compiler transaction and a default-target wrapper, not duplicate compiler backends.",
+            "src/frontend/type.h and src/core/core_type.h consume Common calling-convention identity but keep independently owned C source type descriptors versus immutable per-TU Core execution types. src/target/target_info.h uses the same small shared identity without adopting frontend source representation."
+          ],
+          "functional_path": "C10 PROVISIONAL common contract graph: public compile API/Diagnostic -> driver and Compiler's one whole-TU transaction; shared enum identities in src/common give SourcePolicy, Frontend, Core and Target a stable cross-stage vocabulary, without assigning shared ownership of C syntax or physical ABI. Pure integer bit geometry flows into Frontend/Compiler/Core/Target, but target-specific storage widths, signedness, overflow traps and machine instructions remain at their owning layers. Legacy public wrappers remain semantically active for default target; do not delete as textual duplicates.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/integer_bits.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/calling_convention.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/call_frame_address.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/machine_builtin_effect.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/include/minic/compiler.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/type.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_type.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/target_info.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/language_semantics.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/local_facts.c"
+          ],
+          "limitations": [
+            "UNTRUSTED C10 proposal only. This is initial cross-layer identity sampling, not a complete dependency-graph, ABI compatibility or header audit.",
+            "A common enum or pure helper does NOT prove same physical ABI/ISA behavior; source C calling convention legality and machine register plan are deliberately distinct owners.",
+            "Stable numeric C type kinds and public default-target wrappers have existing ABI/serialized compatibility obligations; do not remove or renumber due to apparent obsolescence.",
+            "Potential duplicate arithmetic helpers require true producer/consumer policy comparison and negative tests before consolidating; no bug or dead-code claim was established.",
+            "Separately audit include/minic public API backwards compatibility, C11/C++ linkage, compile modes and header dependency boundaries."
           ],
           "independent_review": false,
           "semantic_coverage_claimed": false
