@@ -82,6 +82,12 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         evidence="Everything was fully audited already"))
     malicious(lambda s: s["recorded_events"][1].update(
         expected_unassigned_after_refinement=999))
+    malicious(lambda s: s["recorded_events"][3].update(
+        external_c_h_excluded=0))
+    malicious(lambda s: s["slices"][8].update(
+        scope_hint=["tests/compiler/", "tests/target/"]))
+    malicious(lambda s: s["slices"][9].update(
+        scope_hint=["src/common/"]))
 
     proposal = {
         "schema": "asam-transition-v1",
