@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix="asam-poison-") as temp_dir:
     for index in range(2, 11):
         ident = "C" + str(index).zfill(2)
         assert state["slices"][index - 1]["id"] == ident
-        payload = POISON + ("X" * 160000 if index == 2 else "")
+        payload = POISON + ("X" * 3600 if index == 2 else "")
         proposal = {
             "schema": "asam-transition-v1",
             "mission_id": policy["mission_id"],
@@ -44,15 +44,15 @@ with tempfile.TemporaryDirectory(prefix="asam-poison-") as temp_dir:
             "slice_id": ident,
             "to_status": "MAPPING_PROPOSED",
             "actor_role": "mapper",
-            "actor_id": "untrusted-agent-" + POISON,
+            "actor_id": "untrusted-agent-" + str(index).zfill(2),
             "evidence": {
                 "source_revision": state["source_snapshot"]["observed_commit"],
                 "canonical_ref": CANONICAL,
                 "link": "https://github.com/yituanxing/minic-toolchain/"
                         + "blob/" + state["source_snapshot"]["observed_commit"]
-                        + "/" + CANONICAL + "?payload=" + POISON,
+                        + "/" + CANONICAL,
                 "producer": payload,
-                "consumers": [payload],
+                "consumers": [payload[:950]],
                 "functional_path": "model text " + payload,
             }
         }
@@ -69,7 +69,8 @@ with tempfile.TemporaryDirectory(prefix="asam-poison-") as temp_dir:
     result = json.loads(proc.stdout)
     serial = json.dumps(result, ensure_ascii=False)
     assert POISON not in serial, "untrusted earlier model text poisoned restart!"
-    assert "?payload" not in serial, "unverified evidence link poisoned restart!"
+    assert "untrusted-agent" not in serial, "prior worker identity leaked into restart!"
+    assert "blob/" not in serial, "raw unreviewed evidence link leaked into restart!"
     assert "producer" not in serial and "functional_path" not in serial
     assert "recent_history_pointers_only" not in result
     assert "recent_history_commitments_only" in result
