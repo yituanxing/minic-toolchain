@@ -63,7 +63,7 @@ an unexplained new path fails the inventory and independent handoff checks.
 
 These are repository C/H inventory figures, NOT semantic coverage,
 NOT a complete build-script/assembler inventory, and NOT permission to
-modify vendor or external-tool sources. 
+modify vendor or external-tool sources.
 Four historical anchor names did not occur in current production C/H scans;
 their semantic replacements require S1 source review.
 
