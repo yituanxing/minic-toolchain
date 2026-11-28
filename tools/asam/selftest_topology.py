@@ -25,7 +25,12 @@ assert next(x["tracked_file_candidates"] for x in a["slice_candidates"]
             if x["id"] == "C01") >= 5
 assert a["unassigned_count"] + a["unique_candidate_files"] == a["tracked_c_h_files"]
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
-assert all(s["supervisor_status"] == "PLANNED" for s in a["slice_candidates"])
+assert all(s["supervisor_status"] in ("PLANNED", "MAPPING_PROPOSED")
+           for s in a["slice_candidates"])
+assert sum(s["supervisor_status"] == "MAPPING_PROPOSED"
+           for s in a["slice_candidates"]) == 1
+assert sum(s["supervisor_status"] == "PLANNED"
+           for s in a["slice_candidates"]) == 9
 assert set(a["canonical_documents"]) == set(policy["authoritative_sources"])
 
 def hints(slice_id):
@@ -78,8 +83,11 @@ finally:
 # Source code fingerprints must remain distinct from architecture/issue facts.
 assert all(len(x["sha256"]) == 64 and x["path"].endswith((".c", ".h"))
            for x in a["source_file_fingerprints"])
-assert all(not x["canonical_evidence_refs"] and x["status"] == "PLANNED"
+assert all(not x["verified"] and x["last_verified_revision"] is None
            for x in state["slices"])
+assert state["slices"][0]["canonical_evidence_refs"]
+assert all(not x["canonical_evidence_refs"] and x["status"] == "PLANNED"
+           for x in state["slices"][1:])
 
 print("ASAM_BREADTH_INVENTORY=PASS full tracked sources and ten provisional function regions")
 print("ASAM_FALSE_COVERAGE_GUARD=PASS lexical discovery never implies semantic completion")
