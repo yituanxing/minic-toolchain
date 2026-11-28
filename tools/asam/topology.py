@@ -64,6 +64,16 @@ def map_slices(root, policy, state, *, check_baseline=True):
         source_main = git(root, "rev-parse", "refs/remotes/origin/main:src").decode().strip()
         if source_head != source_main:
             raise ValueError("source checkout differs from pinned main")
+    # Never attribute dirty working-tree code or documentation to the
+    # pinned Git commit. The scan reads actual working files, not git blobs.
+    protected = ("src", "tools/minic", "tools/minic-cc",
+                 "tests/compiler", "tests/target", "docs/architecture")
+    dirty = subprocess.run(
+        ["git", "diff", "--quiet", "HEAD", "--", *protected],
+        cwd=root, capture_output=True, check=False
+    )
+    if dirty.returncode != 0:
+        raise ValueError("dirty tracked source or canonical documents: refuse attribution to pinned commit")
     tracked = source_snapshot(root)
     counts = collections.Counter()
     inventory = []
