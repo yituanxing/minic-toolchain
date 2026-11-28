@@ -90,14 +90,20 @@ def evaluate(probe, base, win, lose, ref, compares):
             SHA.fullmatch(ref["object"].get("sha", "")),
             "wrong branch ref or invalid remote tip")
     tip = ref["object"]["sha"]
+    require(tip not in (parent, loser),
+            "remote branch points to stale base or losing contender")
     require(set(compares) == {"winner_to_tip", "loser_to_tip",
                               "winner_to_loser"},
             "remote Git comparison evidence missing")
     wt = compares["winner_to_tip"]
     lt = compares["loser_to_tip"]
     wl = compares["winner_to_loser"]
-    require(wt.get("status") in ("identical", "ahead") and
-            wt.get("behind_by") == 0,
+    require(wt.get("status") == (
+                "identical" if tip == winner else "ahead") and
+            wt.get("behind_by") == 0 and
+            wt.get("ahead_by") == (0 if tip == winner else
+                                  wt.get("ahead_by")) and
+            (tip == winner or wt.get("ahead_by", 0) >= 1),
             "winning contender was no longer in current branch ancestry")
     require(lt.get("status") == "diverged" and
             lt.get("behind_by", 0) >= 1 and
