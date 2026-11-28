@@ -48,6 +48,8 @@ for required in (
     "src/target/source_policy/language_semantics.c",
     "src/target/source_policy/data_layout_source.c",
     "src/target/common/core_function_plan.c",
+    "src/target/riscv/machine_core_select.c",
+    "src/target/riscv/machine_gnu_asm.c",
     "src/target/riscv32/rv32_emit.c",
     "src/target/riscv64/codegen_function.c",
 ):
@@ -55,12 +57,13 @@ for required in (
 c06 = next(s for s in a["slice_candidates"] if s["id"] == "C06")
 c07 = next(s for s in a["slice_candidates"] if s["id"] == "C07")
 assert "src/target/source_policy/" in c06["scope_hint"]
+assert "src/target/riscv/" in c07["scope_hint"]
 assert "src/target/riscv32/" in c07["scope_hint"]
 assert "src/target/riscv64/" in c07["scope_hint"]
-assert "src/target/riscv/" not in c07["scope_hint"]
 assert c06["tracked_file_candidates"] >= 5
 assert c07["tracked_file_candidates"] >= 5
 assert state["recorded_events"][8] == sup.EXPECTED_SCOPE_REFINEMENT_V3
+assert state["recorded_events"][9] == sup.EXPECTED_SCOPE_REFINEMENT_V4
 assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] in ("PLANNED", "MAPPING_PROPOSED")
            for s in a["slice_candidates"])
