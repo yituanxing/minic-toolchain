@@ -67,6 +67,9 @@ jobs:
               tools/asam/experiments/c05_mapping_proposal.json|\
               tools/asam/experiments/c06_mapping_proposal.json|\
               tools/asam/experiments/c07_mapping_proposal.json|\
+              tools/asam/experiments/c08_mapping_proposal.json|\
+              tools/asam/experiments/c09_mapping_proposal.json|\
+              tools/asam/experiments/c10_mapping_proposal.json|\
               tools/asam/supervisor.py|\
               tools/asam/selftest_supervisor.py|\
               tools/asam/topology.py|\
