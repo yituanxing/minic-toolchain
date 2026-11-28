@@ -37,13 +37,35 @@ script = Path(sup.__file__).resolve()
 assert original["mission_complete"] is False
 assert len(original["slices"]) == len(sup.EXPECTED_HINTS) == 10
 assert all(not x["verified"] for x in original["slices"])
+assert original["epoch"] == 2
+assert original["slices"][0]["status"] == "MAPPING_PROPOSED"
+assert sum(x["status"] == "PLANNED" for x in original["slices"]) == 9
+assert original["recorded_events"][-1]["proposal"]["slice_id"] == "C01"
+# The *actual* committed progress survives the model's temporary context.
+live = fresh_process(script, repo, "resume")
+assert live.returncode == 0, live.stderr
+live_packet = json.loads(live.stdout)
+assert live_packet["selected"]["id"] == "C02"
+assert live_packet["coverage_status"]["MAPPING_PROPOSED"] == 1
+assert live_packet["coverage_status"]["VERIFIED"] == 0
+assert live_packet["temporary_context"] == []
+
+# For negative tests, reconstruct the original initial S0 fixture from the
+# real reviewed bootstrap events; never maintain a duplicate permanent state.
+s0 = copy.deepcopy(original)
+s0["epoch"] = 1
+s0["recorded_events"] = copy.deepcopy(original["recorded_events"][:2])
+s0["slices"][0]["status"] = "PLANNED"
+s0["slices"][0]["audit_stage"] = "S0_BASELINE"
+s0["slices"][0]["canonical_evidence_refs"] = []
+sup.verify_event_replay(policy, s0)
 
 with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     root = Path(td)
     control = sup.tree(root)
     control.mkdir(parents=True)
     shutil.copy2(sup.paths(repo)[0], sup.paths(root)[0])
-    shutil.copy2(sup.paths(repo)[1], sup.paths(root)[1])
+    sup.write_atomic(sup.paths(root)[1], s0)
     for ref in policy["authoritative_sources"].values():
         # Test only the existence/pointer contract: actual facts remain in
         # their real, canonical documents in the production repository.
@@ -65,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     proposal = {
         "schema": "asam-transition-v1",
         "mission_id": policy["mission_id"],
-        "expected_epoch": original["epoch"],
+        "expected_epoch": s0["epoch"],
         "slice_id": "C01",
         "to_status": "MAPPING_PROPOSED",
         "actor_role": "mapper",
@@ -129,7 +151,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
            "smuggling extra control fields")
     refused_no_map = copy.deepcopy(proposal)
     refused_no_map["evidence"].pop("functional_path")
-    refuse(lambda: sup.transition(policy, original, refused_no_map),
+    refuse(lambda: sup.transition(policy, s0, refused_no_map),
            "mapping without functional chain")
     stale_revision = bad_proposal(
         to_status="INVESTIGATING", actor_role="scout")
