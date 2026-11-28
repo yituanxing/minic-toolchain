@@ -18,6 +18,22 @@ import tempfile
 PINNED_MISSION_ID = "ASAM-MINIC-GLOBAL-20261128"
 PINNED_POLICY_SHA256 = "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56"
 EXPECTED_SOURCE = "yituanxing/minic-toolchain"
+# Reviewed S0 planning frontier. These are functional *candidate scopes*,
+# never audited responsibility ownership. Any expansion is an explicit
+# versioned scope migration rather than a worker silently reshaping the goal.
+EXPECTED_HINTS = {
+    "C01": ["tools/minic/", "tools/minic-cc/"],
+    "C02": ["src/frontend/"],
+    "C03": ["src/frontend/", "src/compiler/compiler.c"],
+    "C04": ["src/compiler/", "src/core/"],
+    "C05": ["src/core/", "src/compiler/compiler.c"],
+    "C06": ["src/target/common/"],
+    "C07": ["src/target/x86_64/", "src/target/aarch64/",
+            "src/target/riscv/", "src/target/loongarch64/"],
+    "C08": ["src/compiler/", "src/target/"],
+    "C09": ["tests/compiler/", "tests/target/"],
+    "C10": ["src/common/"]
+}
 STATUSES = ("PLANNED", "MAPPED", "INVESTIGATING", "CONFIRMED",
             "FIXED_UNVERIFIED", "VERIFIED")
 ALLOWED = {
@@ -100,13 +116,19 @@ def load(root, *, require_canonical=True):
             must((root / path).is_file(), "missing canonical source: " + path)
     ids = set()
     slices = state.get("slices")
-    must(isinstance(slices, list) and len(slices) >= 9,
-         "breadth map was truncated")
+    must(isinstance(slices, list) and len(slices) == len(EXPECTED_HINTS),
+         "breadth map changed or was truncated without scoped migration")
+    must(any(e.get("kind") == "S0_SCOPE_REFINEMENT" and
+             e.get("epoch") == 1
+             for e in state.get("recorded_events", [])),
+         "C10 and driver scope refinement lacks historical evidence")
     for item in slices:
         ident = item.get("id")
         must(isinstance(ident, str) and re.fullmatch(r"C\d{2}", ident)
              and ident not in ids, "duplicate or missing functional slice")
         ids.add(ident)
+        must(item.get("scope_hint") == EXPECTED_HINTS.get(ident),
+             "functional boundaries changed without scope migration for " + ident)
         status = item.get("status")
         must(status in STATUSES, "illegal slice state for " + ident)
         # Terminal completion requires an authenticated CI/owner attestation
@@ -141,6 +163,8 @@ def load(root, *, require_canonical=True):
             must(item.get("verified") is False and
                  item.get("last_verified_revision") is None,
                  "non-verified slice falsely claims verification")
+    must(ids == set(EXPECTED_HINTS),
+         "functional region was swapped or lost")
     active = state.get("active_task")
     must(active is None or (isinstance(active, dict)
          and active.get("slice_id") in ids), "active task points outside graph")
