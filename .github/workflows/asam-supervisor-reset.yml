@@ -41,6 +41,8 @@ jobs:
               tools/asam/topology.py|\
               tools/asam/selftest_topology.py|\
               tools/asam/selftest_adversarial.py|\
+              tools/asam/verify_handoff.py|\
+              tools/asam/selftest_handoff.py|\
               tools/asam/README.md|\
               .github/workflows/asam-supervisor-reset.yml) ;;
               *) echo "Forbidden path in Supervisor prototype: $path" >&2; exit 1;;
@@ -75,6 +77,11 @@ jobs:
           python3 -I tools/asam/topology.py --root . --output asam-supervisor-out
           test -s asam-supervisor-out/work-orders.json
           test -s asam-supervisor-out/breadth-inventory.json
+          python3 -I tools/asam/verify_handoff.py --root . \
+            --resume /tmp/asam-resume.json \
+            --inventory asam-supervisor-out/breadth-inventory.json \
+            --orders asam-supervisor-out/work-orders.json
+          python3 -I tools/asam/selftest_handoff.py
           cat asam-supervisor-out/breadth-inventory.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish durable restart packet and whole-project candidate scope
