@@ -1,0 +1,880 @@
+{
+  "schema": "asam-control-state-v1",
+  "policy_id": "ASAM-MINIC-GLOBAL-20261128",
+  "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
+  "epoch": 14,
+  "global_status": "ACTIVE",
+  "mission_complete": false,
+  "project": "yituanxing/minic-toolchain",
+  "source_snapshot": {
+    "ref": "main",
+    "observed_commit": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "kind": "git-commit",
+    "verified_at_run": false
+  },
+  "schedule_mode": "BREADTH_FIRST",
+  "work_limit": "whole responsibility/functional subgraph; not a random file",
+  "slices": [
+    {
+      "id": "C01",
+      "name": "Driver and invocation target contracts",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "tools/minic/",
+        "tools/minic-cc/",
+        "tools/minic-"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Planning-level. Includes all MiniC driver, minic-cc and thin tool integration entrypoints, not only main.c. Existing proposal remains untrusted and incomplete until independently reviewed."
+    },
+    {
+      "id": "C02",
+      "name": "Frontend C/GNU C syntax, types and semantics",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/frontend/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C03",
+      "name": "AST ownership, normalization and inline specialization",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/frontend/",
+        "src/compiler/compiler.c"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C04",
+      "name": "AST to Core IR lowering and identity/lifetime",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/compiler/",
+        "src/core/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C05",
+      "name": "Core reachability, global objects and invariants",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/core/",
+        "src/compiler/compiler.c"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C06",
+      "name": "Target-common DataLayout, calling ABI and fact ownership",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/target/common/",
+        "src/target/source_policy/",
+        "src/target/data_layout.h",
+        "src/target/data_layout_source.h",
+        "src/target/target_info.h"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C07",
+      "name": "Per-ISA machine semantics and instruction selection",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/target/x86_64/",
+        "src/target/aarch64/",
+        "src/target/riscv/",
+        "src/target/riscv32/",
+        "src/target/riscv64/",
+        "src/target/loongarch64/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C08",
+      "name": "Assembly output, finalization and error transaction",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/compiler/",
+        "src/target/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C09",
+      "name": "Real software, differential oracles and verification gaps",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "tests/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Planning-level. All tests/ are inventory and verification inputs; vendor and other-tool fixtures are not MiniC production implementation."
+    },
+    {
+      "id": "C10",
+      "name": "Cross-stage common contracts and shared primitives",
+      "status": "MAPPING_PROPOSED",
+      "audit_stage": "S1_FUNCTIONAL_MAP",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/common/",
+        "include/minic/"
+      ],
+      "canonical_evidence_refs": [
+        "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
+      ],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Cross-stage src/common and public include/minic interfaces own shared type, calling convention and contract boundaries. All semantic responsibility UNVERIFIED."
+    }
+  ],
+  "active_task": null,
+  "recorded_events": [
+    {
+      "kind": "HISTORICAL_EXEMPLAR_NOT_GLOBAL_COMPLETION",
+      "source": "https://github.com/yituanxing/minic-toolchain/pull/711",
+      "evidence": "LoongArch local scalar gate consolidation; merged, does not imply C07 verified",
+      "issue_record": "refer to existing canonical MiniC issues; no new authoritative ASAM issue number"
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT",
+      "epoch": 1,
+      "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46103545658",
+      "evidence": "8 unassigned C/H files in whole-repo tracked inventory. C01 expanded to all driver translation units; C10 added for five src/common C/H interfaces. No semantic coverage or source-code edits claimed.",
+      "added": [
+        "C10"
+      ],
+      "refined": [
+        "C01"
+      ],
+      "expected_unassigned_after_refinement": 0
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C01",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c01-source-mapper-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 2,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 1,
+        "slice_id": "C01",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c01-source-mapper-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROPOSED from actual code: tools/minic/driver_cli.c:minic_driver_cli_parse constructs invocation; tools/minic-cc/main.c:main constructs invocation-local target",
+          "consumers": [
+            "tools/minic/main.c:main passes invocation to minic_driver_execute",
+            "tools/minic/driver_pipeline.c:minic_driver_execute dispatches -S to minic-cc or staged CPP/AS/LD",
+            "tools/minic-cc/main.c:main forwards invocation to minic_compile_preprocessed_file_for_target",
+            "src/compiler/compiler.c:minic_compile_preprocessed_file_for_target owns source buffer, AST Program and CoreSet"
+          ],
+          "functional_path": "PROPOSED: minic CLI -> driver_cli parse -> driver_pipeline execute (-S direct minic-cc; -c/link only catalog-qualified staged route) -> minic-cc target invocation -> Compiler AST/Core/Target. No ownership/completeness certification.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/main.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/driver_cli.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic/driver_pipeline.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tools/minic-cc/main.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c"
+          ],
+          "limitations": [
+            "This is current ChatGPT source reading, not independent challenge or verified C01 coverage.",
+            "The canonical MiniC architecture register remains the only authority for technical facts.",
+            "MiniPP MiniAS MiniLD are external projects; integration boundary only, not in-scope refactoring.",
+            "Need independent review of all CLI error exits, resource ownership, data flow and staged target capabilities.",
+            "Do not infer five-target link or runtime capability from -S support."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V2",
+      "epoch": 3,
+      "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46107725208",
+      "observed_repository_c_h": 1983,
+      "previous_scanned_c_h": 1746,
+      "new_in_scope_c_h": 153,
+      "external_c_h_excluded": 84,
+      "external_prefixes": [
+        "archiver/",
+        "assembler/",
+        "elf/",
+        "linker/",
+        "preprocessor/",
+        "third_party/"
+      ],
+      "scope_changes": {
+        "C01": [
+          "tools/minic/",
+          "tools/minic-cc/",
+          "tools/minic-"
+        ],
+        "C09": [
+          "tests/"
+        ],
+        "C10": [
+          "src/common/",
+          "include/minic/"
+        ]
+      },
+      "canonical_claim": "Candidate file inventory only. No production code modified, no LLM-mapping verified, previously submitted C01 mapping remains provisional and needs expanded boundary review.",
+      "verified_slices": 0
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C02",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c02-source-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 4,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 3,
+        "slice_id": "C02",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c02-source-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: Compiler minic_compile_preprocessed_file_for_target owns source buffer, AST Program and CoreSet; forwards same explicit source/machine target invocation into Parser minic_parse_c0_program_for_target, whose Lexer/Parser constructs Program-owned source entities.",
+          "consumers": [
+            "src/frontend/parser_function.c Parser manages TU-local source, target, lexer and private tables; dispatches top-level GNU C declarations, then resolves pending aliases and tentative arrays",
+            "src/compiler/compiler.c verifies parsed AST and FunctionBody ownership, invokes normalization, verifies normalized AST, then inline specialization and Core lowering",
+            "src/frontend/ast_verifier.c validates Program/target syntax contracts; src/frontend/cast_normalization.c owns normalized expression-ID remapping",
+            "src/frontend/parser_core.c and lexer.c implement scoped parser traversal and lexical tokenization; src/frontend/function_body.c checks source FunctionBody owner views",
+            "tests/frontend/ast_contract_test.c exercises AST traversal and mutation/ownership boundary; canonical function-contract register records FN-F01 and related exceptions"
+          ],
+          "functional_path": "PROVISIONAL C02 chain: Compiler-owned preprocessed source and invocation policy -> frontend Lexer and TU Parser -> declaration/expression/type/tag/enum/GNU attribute helpers -> Program-owned AST plus Parser-private scopes/tags/caches -> deferred aliases and tentative-array completion -> parsed AST/FunctionBody verification -> cast normalization with stable ExpressionId remapping -> normalized verifier -> Compiler inline/Core consumers. Distinguish source language policy from machine ABI/layout. No complete C02 review claimed.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_function.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_internal.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/parser_core.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/lexer.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast_verifier.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/cast_normalization.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/function_body.c"
+          ],
+          "limitations": [
+            "UNTRUSTED map only: sampled real files and canonical docs, NOT every function/callee/branch or independent semantic verification.",
+            "Independently challenge all Parser early exits/resource cleanup, shallow-copied MinicParser probes and alias/array postprocessing.",
+            "Recheck existing canonical MC-009/MC-017/MC-023 and arena pointer invalidation; do not create new defects from stale names or unproven text similarity.",
+            "C02 overlaps C03 AST ownership and C06 Target source-policy/ABI responsibilities; no module is certified covered here.",
+            "The pinned GitHub source links are provenance pointers, not proof of code behavior."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C03",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c03-ast-ownership-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 5,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 4,
+        "slice_id": "C03",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c03-ast-ownership-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL source reading: src/frontend/ast.c owns MinicC0Program arena initialization, each Program-owned CALL overflow allocation and destruction; minic_c0_program_add_expression returns stable ExpressionId after deep-copying borrowed overflow arguments before arena realloc. Compiler owns Program lifespan.",
+          "consumers": [
+            "src/frontend/cast_normalization.c:minic_c0_program_normalize_casts builds a temporary rewritten expression arena with old-to-new IDs; special CAST rewrites use LVALUE_READ, DISCARD, CONVERSION or BITCAST as type requires",
+            "src/frontend/ast_traversal.c:minic_c0_program_remap_external_expression_ids validates ALL external Statement/InlineAsm/CleanupContext/return links before mutation; the shared reader and writer child-ID paths have deliberately different write contracts",
+            "src/frontend/ast_storage.h:minic_ast_grow_array can realloc Program arrays: stable ExpressionId/FunctionId/RecordId do not give stable borrowed element addresses",
+            "src/frontend/function_body.c maintains logical FunctionBody ownership and visitor semantics across Program-wide storage; compiler validates PARSED and NORMALIZED body before lowering",
+            "src/compiler/compiler.c calls parse -> parsed AST/FunctionBody verification -> cast normalize -> normalized AST/FunctionBody verification -> inline specialization -> Core lowering; releases Program and source buffer before backend emission",
+            "tests/frontend/ast_contract_test.c tests const CALL visitor vs mutable remapper; tests/frontend/ast_traversal_test.c exercises remapping and stage verification"
+          ],
+          "functional_path": "C03 PROVISIONAL ownership subgraph: Compiler creates Program and source buffer -> Parser appends Program AST nodes via ID-based arenas, including deep-owned CALL overflow -> AST verifier and FunctionBody owner validation -> cast_normalization builds a separate expression arena and old-to-new IDs, privately copies CALL overflow, validates external expression-ID rewrites, commits new arena only if successful and frees old overflow; failure frees uncommitted scratch -> inline specialization may still change AST -> CoreSet is published -> Compiler destroys Program and source buffer before Target backend. Distinguish borrowed element pointer lifetimes, source IDs, dynamic call-site specialization facts, and physical ownership.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast_storage.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/ast_traversal.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/cast_normalization.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/function_body.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/frontend/ast_contract_test.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/frontend/ast_traversal_test.c"
+          ],
+          "limitations": [
+            "MAPPING_PROPOSED ONLY. Sampled C03 source and existing canonical design documentation; not all callers, failure paths, AST node variants, transformations or platform tests audited.",
+            "Check nested Program/Parser realloc borrow invalidation through parser_expression, GNU static_initializer and inline clone paths; historical MC-001..MC-009/MC-023/MC-030 require source-current cross-check.",
+            "Check cast normalization corner cases: prevalidation versus external Program mutation, original owned overflow and rollback on allocation/invalid edge, exact AST stage/FunctionBody contracts.",
+            "Shallow MinicParser snapshots used only for lexical probes may be legitimate; copying ownership before semantic parsing cannot be labeled unsafe without write trace and real counterexample.",
+            "FunctionBody reuse in inline clones may be intentional; do not confuse stable source ExpressionId with per-call specialization context or mark shared body as duplicate implementation."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C04",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c04-core-ingress-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 6,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 5,
+        "slice_id": "C04",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c04-core-ingress-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL source evidence: Compiler creates one C Program/TargetInvocation; src/compiler/core_function_set.c:minic_prepare_core_function_set builds a transactional per-TU CoreFunctionSet, type context/importer, one Core/status/attempted slot per source FunctionId, and the initial CoreModule identity/ASM/relocation roots.",
+          "consumers": [
+            "src/compiler/core_function_set.c:minic_core_set_lower_one creates FunctionBodyView, invokes minic_core_lower_function_with_index, snapshots C types into Core-owned type context, verifies function and takes the completed Core draft transactionally",
+            "src/compiler/c_lower/core_type_import.c converts C-local types and target-dependent layout facts into CoreTypeId; ids are meaningful only within that CoreTypeContext, not reused blindly between TUs",
+            "src/compiler/c_lower/core_ir_source.c manages temporary C source draft and a verified take_core handoff; failed drafts are destroyed without publishing executable Core",
+            "src/compiler/c_lower/core_lower.c consumes immutable FunctionBodyView and invocation DataLayout, translates source expressions/statements/locals to Core blocks/objects/SSA and target-neutral semantic effects",
+            "src/compiler/module_ir_build.c copies function/global identity, file-level ASM roots and relocs, and later materializes only live object payloads after Core reachability closure",
+            "src/compiler/core_function_set.c:minic_complete_core_function_set_reachability uses Core/Module closure, revisits deferred source bodies only when reached, then closes to fixed point; attempted and status distinguish dead/unattempted versus actual error",
+            "src/core/core_ir_verify.c and src/core/core_ir.c validate sealed type/CFG/value/ASM invariants; Compiler destroys C Program and source buffer before target emission uses sealed CoreFunctionSet and ModuleIR"
+          ],
+          "functional_path": "C04 PROVISIONAL full responsibility ingress chain: parsed and normalized C Program/FunctionBody + immutable invocation target -> per-TU CoreTypeImporter/Context and source-root ModuleIR snapshot -> FunctionId-indexed CoreFunctionSet with statuses and attempted ledger -> initial live FunctionBody lowering through one temporary C-source builder -> snapshot Core types -> verify Core function -> publish owner Core slot; Core/Module-only reachability may discover late-live deferred functions, re-entering same lowering transaction -> module materialization and seal -> Compiler frees Program/source before Target emitter reads Core/Module. Source type semantics do not become target machine physical ABI or raw C pointer dependencies.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_lower.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_lower.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_ir_source.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_type_import.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/module_ir_build.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_ir_verify.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_ir.c"
+          ],
+          "limitations": [
+            "UNTRUSTED MAPPER ONLY. Did not line-review all CoreLower helpers, FunctionBody CFG/labels, every type ingress variant or whole ModuleIR global payload.",
+            "Important semantics to independently challenge: late-live internal functions due to Core CALL, source GNU ASM symbols and label relocation roots; do not equate skipped UNSUPPORTED with failed lowering.",
+            "TypeId is owned by per-TU CoreTypeContext; target DataLayout is input to source ingress but physical target ABI plans remain backend-owned.",
+            "Need cross-function/ISA tests for error draft cleanup, reentry cache fallback, recursive type import, relocation owner-label and source/ModuleIR lifetime; do not remove these as syntactic duplication.",
+            "Historical core-type ingress design document has a dated old-baseline status; only current source and canonical architecture/issue records should authorize any change."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C05",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c05-core-closure-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 7,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 6,
+        "slice_id": "C05",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c05-core-closure-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/compiler/module_ir_build.c snapshots Program function/object/ASM/label alias identities into Core ModuleIR, while src/compiler/core_function_set.c creates Source-independent Core FunctionSet and one Core lowering result slot per FunctionId.",
+          "consumers": [
+            "src/compiler/core_reachability.c:minic_core_function_set_close_reachability computes Core/Module-only fixed-point reachability through function/global queues, canonical storage owners, aliases, relocation references, per-block Core CALL/function/global-address instructions and qualified versus opaque GNU inline ASM",
+            "src/compiler/core_function_set.c:minic_complete_core_function_set_reachability uses closure verdict to identify a previously skipped source function that became live, lowers it with the same private Core draft transaction, and recomputes until no late-live source function remains",
+            "src/compiler/module_ir_build.c:minic_core_module_materialize_live_payloads materializes only closure-live global bytes/fragments after source DataLayout admission and validates independent ModuleIR",
+            "src/core/module_ir.c verifies fragment offsets/sizes, symbol uniqueness, object storage extent, and exact correspondence between pre-closure reference edges and emitted relocation fragments",
+            "src/compiler/compiler.c performs Core closure -> Core/result validation -> target layout validation -> ModuleIR payload publication -> frees source Program before Target assembly emission"
+          ],
+          "functional_path": "C05 PROVISIONAL responsibility graph: Source AST identity is snapshotted once into ModuleIR and sealed CoreFunctionSet -> module true roots include definitions, file-scope ASM, aliases, global objects, function local-static storage owners and label relocations -> FIFO queue closure traverses live object reference edges and live Core CALL/FUNCTION_ADDRESS/GLOBAL_ADDRESS/INLINE_ASM effects; indirect branches conservatively retain possible blocks -> assign live functions/global emittable flags transactionally -> rerun source-to-Core ingress only for newly live but unattempted source functions, repeat until no new FunctionId -> materialize live global payload and verify ModuleIR before freeing C source state. Not three independent source-level prune passes.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_reachability.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_reachability.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/module_ir_build.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/symbol_identity.h"
+          ],
+          "limitations": [
+            "MAPPING_PROPOSED only; not all Core reachability branches, ASM matcher edge cases, error-injection paths or tests reviewed; no independent control root or semantic-verifier approval.",
+            "An assembler mnemonic matching a C function name is NOT necessarily a relocation. Target-qualified operand forms versus opaque ASM intentionally have different conservative handling; cannot delete without GNU behavior comparison.",
+            "An unattempted static function and a failed Core lowering are distinct statuses. Initial source emission hints are not authoritative dead-code proof when Core relocation/call/label roots can revive that body.",
+            "Global object relocation may refer to assembler spelling resolved to multiple source declarations; canonical owner label relocation retains the original source FunctionBody, not an unrelated clone.",
+            "Need exact tests for computed goto, static initializers, file ASM, alias chains, OOM error paths and same-source all-ISA runtime before making any prune simplification."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V3",
+      "epoch": 8,
+      "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+      "prior_scope": {
+        "C06": [
+          "src/target/common/"
+        ],
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "scope_changes": {
+        "C06": [
+          "src/target/common/",
+          "src/target/source_policy/",
+          "src/target/data_layout.h",
+          "src/target/data_layout_source.h",
+          "src/target/target_info.h"
+        ],
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "observed_paths": [
+        "src/target/source_policy/language_semantics.c",
+        "src/target/source_policy/data_layout_source.c",
+        "src/target/common/core_function_plan.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+      ],
+      "rationale": "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+      "verified_slices": 0
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V4",
+      "epoch": 9,
+      "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+      "prior_scope": {
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "scope_changes": {
+        "C07": [
+          "src/target/x86_64/",
+          "src/target/aarch64/",
+          "src/target/riscv/",
+          "src/target/riscv32/",
+          "src/target/riscv64/",
+          "src/target/loongarch64/"
+        ]
+      },
+      "observed_paths": [
+        "src/target/riscv/machine_core_select.c",
+        "src/target/riscv/machine_core_select.h",
+        "src/target/riscv/machine_target_state.h",
+        "src/target/riscv/machine_gnu_asm.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+      ],
+      "rationale": "Correct S0-v3 false assertion: src/target/riscv/ is a real shared RISC-V machine implementation that BOTH RV32 and RV64 consume. V3 correctly added separate ABI directories but incorrectly removed their common selector. Restore all three directories, retain the historical error and never claim review completion.",
+      "verified_slices": 0
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C06",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c06-scope-v4-source-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 10,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 9,
+        "slice_id": "C06",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c06-scope-v4-source-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/target/source_policy/source_info.h and language_semantics.c define per-invocation, copy-by-value C/GNU language type policy (plain char, wchar, source builtin eligibility) separately from immutable machine target registration; data_layout_source.c owns C-record/array/field placement using target machine DataLayout, including packed and zero-width-bitfield alignment fences.",
+          "consumers": [
+            "src/compiler/c_lower/core_type_import.c consumes the source type/layout oracle exactly at C→Core ingress to snapshot independent CoreType records, field offsets and nominal identities, rather than reconstructing C record types in Target machine code",
+            "src/target/target_info.h and data_layout.h define machine capabilities, fixed-register recognizers, pointer/float/vector storage and variadic transport distinct from language declaration acceptance and physical function ABI",
+            "src/target/common/core_function_plan.c verifies sealed Core and prepares one immutable function facts, calls index, object-storage plan, reachable blocks and value-use counts for a bounded callback lifetime",
+            "src/target/common/core_function_facts.c performs one Core instruction fact scan; core_call_index.c stores checked compact call views, with borrowed prepared index or owned standalone fallback",
+            "src/target/common/program_visit.c owns function/global visitation and destroys each temporary plan after target callback; src/target/backend.c binds only a registered backend to its canonical target",
+            "src/target/common/direct_lp64_abi.h and direct_function_emit.h encode shared A64/Loong orchestration parameterized by mandatory ISA-owned ABI policy, physical frame, machine instruction selection and preflight; src/target/common/lp64_aggregate.c classifies snapshots but is NOT a universal ABI classifier"
+          ],
+          "functional_path": "C06 PROVISIONAL responsibility chain: registered canonical machine TargetInfo + per-invocation SourceInfo options -> C nominal/object layout source-policy oracle -> CoreType/Module snapshot at compiler ingress -> sealed Core function/Module ownership -> common per-function validation, factual analysis, CALL/object/reachability plan, plan lifetime bounded by visitor -> ISA-provided ABI policy, physical frame/stack/GPR/FPR and machine selector -> typed MachineIR preflight -> target emitter. Shared LP64 orchestration is only legitimate when target-specific ABI policy and ISA callbacks remain distinct. A declaration accepted by C front-end does not imply code generation or ABI availability.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/source_info.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/language_semantics.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/data_layout_source.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/data_layout_source.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/data_layout.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/target_info.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_type_import.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_function_plan.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_function_facts.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_call_index.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_visit.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_lp64_abi.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_function_emit.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/lp64_aggregate.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/backend.c"
+          ],
+          "limitations": [
+            "UNTRUSTED C06 MAPPING_PROPOSED ONLY; more Core/Target-common source and runtime regressions are required before any ownership chain is certified.",
+            "Shared C DataLayout is a source-language oracle, not machine frame allocation, ABI argument placement, or an instruction selector; target-specific ABI remains the machine owner.",
+            "Per-invocation SourceInfo must never be shallow-copied without rebinding internal integer_model pointer; examine all actual TargetInvocation call/assignment sites before claiming a defect.",
+            "LP64 shared emitter only covers targets whose ABI policy passes checks; AArch64 homogeneous aggregates, LoongArch LP64S and float, x86 SysV/Win64 and RV32 ILP32 are distinct contracts.",
+            "Validate packed/bitfield placement vs compiler Core type ingress using independent GNU oracles; only actual counterexamples can promote defects."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C07",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c07-isa-scoped-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 11,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 10,
+        "slice_id": "C07",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c07-isa-scoped-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/target/backend.c registers five explicit Core/Module→machine emit backends. One sealed Core function and ModuleIR graph feeds target-specific physical ABI planners, frame selectors, ISA opcode selectors and GNU assembler producers; none may reconstruct mutable C AST state.",
+          "consumers": [
+            "src/target/riscv/machine_core_select.c and machine_core_select.h are a REAL shared RISC-V RV32I/RV64I Core→typed MachineIR selector. Machine plan borrows either independently finalized RV32 ILP32 ABI or RV64 LP64/LP64D ABI and physical frame; shared instruction selection is not a shared physical ABI.",
+            "src/target/riscv32/rv32_emit.c, rv32_abi_plan.h own RV32 XLEN=32-word outgoing and incoming arguments, stack-word sizes, two-word scalars, variadic register-save and ILP32 physical frame; use shared machine selector through explicit abi32 plan.",
+            "src/target/riscv64/codegen_function.c and function_abi_plan.h own RV64 LP64 vs LP64D GPR/FPR transport, sret, frame/callee-save and finalized per-call plan; use shared selector through abi64 function view with independent offsets and runtime libcall requirements.",
+            "src/target/aarch64/codegen.c owns AAPCS64 8 GP+8 FP argument registers, x8 indirect return, dedicated ABI variadic state and its own NEON / source ASM admission; uses common DirectLP64 function lifecycle but ISA-specific selector and policy.",
+            "src/target/loongarch64/codegen.c owns LP64D aggregate split/first-GPR indirect return, contiguous variadic cursor, LP64S soft-float admission and LoongArch-specific source ASM/opcode; the DirectLP64 shared emitter is parameterized by a distinct target-owned policy.",
+            "src/target/x86_64/codegen.c and abi.h own SysV vs Win64 register banks, extra callee-saved registers and x86-specific provenance/relocation semantics; x86 cannot use the A64/Loong physical ABI merely because it is a 64-bit target.",
+            "src/target/common/machine_production_preflight.h and common/direct_function_emit.h own whole-function verified MachineIR preflight before any function body text; target-specific validation and relocations remain distinct."
+          ],
+          "functional_path": "C07 PROVISIONAL five-target machine ownership graph: backend catalog picks only the registered architecture implementation -> sealed Core/Module facts arrive from common visitor -> each ISA constructs its own immutable ABI classification, stack/GPR/FPR/variadic frame, callee-save and source-ASM eligibility -> architecture selector produces complete typed MachineIR -> target ISA/opcode and GNU ASM policy verified with whole-function preflight -> machine body emission. Shared RISC-V selector resides in src/target/riscv/ and is consumed by RV32 ILP32 and RV64 LP64(D) programs from their own independent abi32/abi64 plans. AArch64 and LoongArch share DirectLP64 orchestration, not sret/aggregate/va_list policy. x86 SysV/Win64 stays separate. No ISA correctness has been certified by this mapping.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/backend.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv/machine_core_select.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv/machine_core_select.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv/machine_gnu_asm.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv/machine_target_state.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv32/rv32_emit.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv32/rv32_abi_plan.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv64/codegen_function.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/riscv64/function_abi_plan.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/x86_64/codegen.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/x86_64/abi.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/aarch64/codegen.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/loongarch64/codegen.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_function_emit.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/machine_production_preflight.h"
+          ],
+          "limitations": [
+            "UNTRUSTED C07 MAPPING_PROPOSED ONLY. Neither every machine selector branch, GNU-ASM constraint, ABI edge case nor target differential runtime test was executed in this scout pass.",
+            "S0 V3 originally mischaracterized src/target/riscv/ as nonexistent and excluded it; V4 explicitly corrected that in durable historical event order. Future agents must inspect all shared/riscv32/riscv64 real paths, not trust old hints.",
+            "Retention of independent ABI code is legitimate even when wrappers, control flow and opcode families are similar; removing a fast path requires whole function input-output and performance equivalence.",
+            "ISA/QEMU/ELF evidence has independent per-target gates. Passing -S alone, GNU assembly alone or one target runtime never proves the other four architectures.",
+            "Need independent challenge of RISC-V shared xlen paths and private ABI cursor/frames, A64 vs Loong DirectLP64 policy and x86 SysV/Win64 before any root-cause cluster is confirmed."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C08",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c08-output-transaction-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 12,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 11,
+        "slice_id": "C08",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c08-output-transaction-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: Compiler releases Program and source buffer at sealed Core/Module boundary and invokes a registered backend on immutable Core functions, ModuleIR and machine TargetInfo. The backend facade requires the expected registered target and preflight-valid module.",
+          "consumers": [
+            "src/target/common/program_emit.c:minic_program_emit_module_preflight rejects invalid finalized Module, mismatched live CoreTypeContext and function counts, without confusing an un-emitted declaration with a live definition",
+            "src/target/common/program_emit.c:minic_program_emit_write_module opens a unique .minic-XXXXXX staging file adjacent to destination, performs optional prefix, undefined ELF bindings, globals, file-scope ASM, prepared functions, trailer, fclose and optional target finalize before rename",
+            "The same writer removes the temporary on any failed stage, close, finalizer or rename; final .s output is not replaced on failure. A deliberate diagnostic/census continue_after_failure mode may still scan functions but cannot commit unsuccessful results",
+            "src/target/common/program_visit.c creates/destroys each temporary CoreFunctionPlan around the target callback, while src/target/common/machine_production_preflight.h requires entire typed MachineIR body and GNU ASM binding to be checked before emitting function bytes",
+            "src/target/common/direct_program_emit.c adapts A64/Loong direct emitters to the common transaction, but target-specific ELF directives, symbol syntax, global relocation and ISA finalizer callback remain explicit owners",
+            "tests/compiler/c0/probe-program-emit-transaction.c injects staged prefix/global/between/function/finalize failures; probe-module-emit-preflight-contract.c exercises forged module and foreign type arenas"
+          ],
+          "functional_path": "C08 PROVISIONAL output ownership chain: Compiler verifies and seals CoreFunctionSet+ModuleIR -> destroys C Program and source buffer -> target backend catalog validates architecture and a common preflight snapshot -> Target/common creates private same-directory .s staging file -> predeclare undefined weak/hidden actual references, globals/aliases, copied Module file ASM, prepared Core functions -> per-function target ABI→typed MachineIR complete preflight -> output close and optional target finalization -> atomic rename into requested path; any failure removes private file and leaves old public result intact. Output transaction is common; semantic ISA directives remain private per target.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/backend.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_emit.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_emit.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_visit.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_program_emit.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/machine_production_preflight.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-program-emit-transaction.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-module-emit-preflight-contract.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/aarch64/codegen.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/loongarch64/codegen.c"
+          ],
+          "limitations": [
+            "UNTRUSTED C08 proposal, not all five per-target file finalizers/ELF relocation paths or error injection configurations reviewed.",
+            "Provenance of .s public transaction must not be confused with real .o ELF assembler/linker or QEMU execution success.",
+            "Preserve SOURCE file ASM bytes and GNU undefined weak/visibility behavior; removing extra symbol-use checks without proofs can introduce silent link differences.",
+            "Need same-input failure-injection tests for fopen/fclose/rename, cleanup of temp files, valid old output intact, ABI/target finalizer failures and platform-specific assembler oracles.",
+            "No correctness or performance equivalence claim made; do not certify C08 as MAPPED/VERIFIED."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C09",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c09-verification-matrix-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md",
+      "epoch": 13,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 12,
+        "slice_id": "C09",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c09-verification-matrix-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-issue-register.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md",
+          "producer": "PROVISIONAL: Makefile and tests/compiler/c0/native-matrix.json define compiler configurations, source fixtures and target-selective checks; C0 runtime runners, frontend/core contract tests and GitHub target workflows contribute independent kinds of evidence. The canonical issue register distinguishes actual runtime, GNU differential, ASAN, ELF oracle, SOURCE-TRACE, ASM-only and static checks.",
+          "consumers": [
+            "tests/compiler/c0/check-minic-target-boundaries.sh is a structural source/ownership guard using file presence and grep; it can detect forbidden cross-layer dependencies but cannot prove compiler runtime correctness.",
+            "tests/compiler/mir-migration/check-production-seal.sh checks all five typed MachineIR production-wiring points and separately says complete runtime/effect coverage belongs to other tests; the default/current vs --final modes impose different removal requirements.",
+            ".github/workflows/minic-runtime-fourarch.yml runs selected four-architecture runtime profiles and has broad source-path triggers; its name and triggers do not establish five-architecture equivalence or a universal all-test matrix.",
+            "tests/compiler/c0/native-matrix.json contains per-case host compiler, target, GNU flag, native flag, positive/negative and assembly/object test claims; only the exact invocation and returned oracle decide what was verified.",
+            "tests/compiler/c0/probe-program-emit-transaction.c covers staged output failure and old-result preservation; tests/compiler/c0/probe-module-emit-preflight-contract.c rejects foreign CoreType arena, forged module and invalid function count.",
+            "tests/frontend/ast_contract_test.c and tests/core/core_type_import_test.c exercise AST physical constness and source-to-Core type snapshot on five target identities; passing these unit probes is narrower than full target ELF/QEMU runtime.",
+            "docs/architecture/minic-issue-register.md explicitly tracks older MC-011 and MC-012 verification/reporting blind spots; every future close must cite actual exact Git SHA, config, toolchain, source input and independent oracle."
+          ],
+          "functional_path": "C09 PROVISIONAL verification graph: specific source or issue -> target configuration and compiler build -> compile/sema/core test or source-only -S output -> optional external GNU assembler and ELF relocation assertions -> optional host native or target QEMU execution -> GNU reference differential and sanitizer where applicable -> exact run metadata, negative cases, architecture limits and issue status. Never flatten static grep, success to emit assembly, assembler acceptance, ELF object verification and actual execution into a single green label. Test trigger and artifact provenance require independent check against the exact candidate commit.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/Makefile",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/check-minic-target-boundaries.sh",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/mir-migration/check-production-seal.sh",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/native-matrix.json",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/run-native-matrix.sh",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-program-emit-transaction.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/compiler/c0/probe-module-emit-preflight-contract.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/frontend/ast_contract_test.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/tests/core/core_type_import_test.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/.github/workflows/minic-runtime-fourarch.yml",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-function-contract-register.md",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-issue-register.md"
+          ],
+          "limitations": [
+            "UNTRUSTED C09 map only: no runtime verification was executed for the entire MiniC in this ASAM scout pass.",
+            "Do not claim GNU-ELF-QEMU from .s string checks; do not claim all five architectures when a CI workflow covers four, or when target feature subsets differ.",
+            "Pending work: run normalized same-input baseline-vs-candidate GNU/MiniC differential tests and record stderr, exit status, emitted symbols/ELF relocations, native/QEMU output, toolchain version, commit and performance.",
+            "Use canonical MC issue evidence; historical fixed-unverified changes are not promoted to VERIFIED by green ASAM controller CI.",
+            "Verify CI path triggers do not omit changing backend dependencies, runtime libraries, Makefile or source policy; failure to trigger is independent verification debt."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    },
+    {
+      "kind": "SLICE_TRANSITION",
+      "id": "C10",
+      "from": "PLANNED",
+      "to": "MAPPING_PROPOSED",
+      "actor_id": "chatgpt-c10-cross-layer-contract-scout-20261128",
+      "source": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+      "epoch": 14,
+      "proposal": {
+        "schema": "asam-transition-v1",
+        "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+        "expected_epoch": 13,
+        "slice_id": "C10",
+        "to_status": "MAPPING_PROPOSED",
+        "actor_role": "mapper",
+        "actor_id": "chatgpt-c10-cross-layer-contract-scout-20261128",
+        "evidence": {
+          "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+          "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+          "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+          "producer": "PROVISIONAL: src/common/ owns deliberately small cross-layer identities and pure numeric helpers; include/minic/compiler.h owns public translation-unit entrypoint and diagnostic type. Those contracts are not a second owner of Frontend C semantics, Core verification or physical target ABI.",
+          "consumers": [
+            "src/common/integer_bits.h:minic_integer_mask64/minic_integer_sign_extend64 define pure bit geometry, consumed by Frontend integer/const parsing, Compiler local facts/lowering, Core Module fragment verification and Target source-policy/global serialization; callers own signed overflow and C-type width policy.",
+            "src/common/calling_convention.h defines an execution identity enum DEFAULT vs MS_X64 shared by frontend/type.h, core/core_type.h and target/target_info.h. Source C prototype legality remains Frontend; actual register-bank placement remains x86 Target, not Common.",
+            "src/common/call_frame_address.h defines return/frame builtin category used by source builtin admission, Core semantics and target support gates, without introducing a Core dependency on a concrete AST.",
+            "src/common/machine_builtin_effect.h defines sealed read/write effect identities for target machine builtins; Core CALL effects do not carry architecture-specific C builtin spellings.",
+            "include/minic/compiler.h supplies the stable public minic_compile_preprocessed_file compatibility path, explicit-target for_target entrypoint, function-sections policy and diagnostic schema. src/compiler/compiler.c implements these as one actual compiler transaction and a default-target wrapper, not duplicate compiler backends.",
+            "src/frontend/type.h and src/core/core_type.h consume Common calling-convention identity but keep independently owned C source type descriptors versus immutable per-TU Core execution types. src/target/target_info.h uses the same small shared identity without adopting frontend source representation."
+          ],
+          "functional_path": "C10 PROVISIONAL common contract graph: public compile API/Diagnostic -> driver and Compiler's one whole-TU transaction; shared enum identities in src/common give SourcePolicy, Frontend, Core and Target a stable cross-stage vocabulary, without assigning shared ownership of C syntax or physical ABI. Pure integer bit geometry flows into Frontend/Compiler/Core/Target, but target-specific storage widths, signedness, overflow traps and machine instructions remain at their owning layers. Legacy public wrappers remain semantically active for default target; do not delete as textual duplicates.",
+          "source_links": [
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/integer_bits.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/calling_convention.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/call_frame_address.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/common/machine_builtin_effect.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/include/minic/compiler.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/frontend/type.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_type.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/target_info.h",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/language_semantics.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/module_ir.c",
+            "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/local_facts.c"
+          ],
+          "limitations": [
+            "UNTRUSTED C10 proposal only. This is initial cross-layer identity sampling, not a complete dependency-graph, ABI compatibility or header audit.",
+            "A common enum or pure helper does NOT prove same physical ABI/ISA behavior; source C calling convention legality and machine register plan are deliberately distinct owners.",
+            "Stable numeric C type kinds and public default-target wrappers have existing ABI/serialized compatibility obligations; do not remove or renumber due to apparent obsolescence.",
+            "Potential duplicate arithmetic helpers require true producer/consumer policy comparison and negative tests before consolidating; no bug or dead-code claim was established.",
+            "Separately audit include/minic public API backwards compatibility, C11/C++ linkage, compile modes and header dependency boundaries."
+          ],
+          "independent_review": false,
+          "semantic_coverage_claimed": false
+        }
+      }
+    }
+  ],
+  "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
+}

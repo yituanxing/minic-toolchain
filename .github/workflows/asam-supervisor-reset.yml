@@ -1,0 +1,200 @@
+name: ASAM Supervisor mission and context-reset acceptance
+
+on:
+  push:
+    branches:
+      - experiment/asam-supervisor-reset-20261128
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-supervisor-reset.yml'
+  pull_request:
+    paths:
+      - 'tools/asam/**'
+      - '.github/workflows/asam-supervisor-reset.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  immutable-mission:
+    name: Verify permanent mission and fresh-process resume
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # PR's implicit HEAD is a GitHub-generated merge SHA, not the
+          # candidate branch source snapshot. Always inspect exact branch
+          # code; do not attribute a synthetic merge to the reviewed head.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin actual writable branch identity (never confuse PR merge commit)
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin \
+            +refs/heads/experiment/asam-supervisor-reset-20261128:refs/remotes/origin/asam-cas-readonly
+          branch_head="$(git rev-parse refs/remotes/origin/asam-cas-readonly)"
+          branch_tree="$(git rev-parse "${branch_head}^{tree}")"
+          printf 'ASAM_CHECKOUT_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'ASAM_BRANCH_HEAD=%s\n' "$branch_head"
+          printf 'ASAM_BRANCH_TREE=%s\n' "$branch_tree"
+          printf 'ASAM_BRANCH_PARENT=%s\n' "$(git rev-parse "${branch_head}^")"
+          if [ "$branch_head" != "$(git rev-parse HEAD)" ]; then
+            echo "ASAM_GIT_HEAD_MISMATCH=BLOCKED: checkout is stale or synthetic" >&2
+            exit 1
+          fi
+          printf 'ASAM_GIT_HEAD_IDENTITY=PASS exact candidate branch ref\n'
+          printf 'ASAM_REMOTE_CAS_WRITER=DISABLED_ON_THIS_UNPROTECTED_BRANCH\n'
+
+      - name: Reject production and authority-document modifications
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check origin/main...HEAD
+          git diff --name-only origin/main...HEAD > /tmp/asam-supervisor-touched.txt
+          while IFS= read -r path; do
+            case "$path" in
+              tools/asam/control/policy.json|\
+              tools/asam/control/state.json|\
+              tools/asam/experiments/c01_mapping_proposal.json|\
+              tools/asam/experiments/c02_mapping_proposal.json|\
+              tools/asam/experiments/c03_mapping_proposal.json|\
+              tools/asam/experiments/c04_mapping_proposal.json|\
+              tools/asam/experiments/c05_mapping_proposal.json|\
+              tools/asam/experiments/c06_mapping_proposal.json|\
+              tools/asam/experiments/c07_mapping_proposal.json|\
+              tools/asam/experiments/c08_mapping_proposal.json|\
+              tools/asam/experiments/c09_mapping_proposal.json|\
+              tools/asam/experiments/c10_mapping_proposal.json|\
+              tools/asam/supervisor.py|\
+              tools/asam/selftest_supervisor.py|\
+              tools/asam/topology.py|\
+              tools/asam/selftest_topology.py|\
+              tools/asam/selftest_adversarial.py|\
+              tools/asam/selftest_context_isolation.py|\
+              tools/asam/verify_handoff.py|\
+              tools/asam/selftest_handoff.py|\
+              tools/asam/remote_evidence.py|\
+              tools/asam/remote_cas_audit.py|\
+              tools/asam/trust_readiness.py|\
+              tools/asam/selftest_trust_readiness.py|\
+              tools/asam/selftest_remote_cas.py|\
+              tools/asam/git_state_chain.py|\
+              tools/asam/selftest_git_state_chain.py|\
+              tools/asam/experiments/remote_cas_probe.json|\
+              tools/asam/selftest_remote_evidence.py|\
+              tools/asam/README.md|\
+              .github/workflows/asam-supervisor-reset.yml) ;;
+              *) echo "Forbidden path in Supervisor prototype: $path" >&2; exit 1;;
+            esac
+          done < /tmp/asam-supervisor-touched.txt
+
+      - name: Verify mission locks and all ten pending domains
+        run: |
+          python3 -I tools/asam/supervisor.py --root . check
+          python3 -I tools/asam/supervisor.py --root . status
+          python3 -I tools/asam/supervisor.py --root . resume > /tmp/asam-resume.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open("/tmp/asam-resume.json"))
+          assert data["policy_id"] == "ASAM-MINIC-GLOBAL-20261128"
+          assert data["global_task_completed"] is False
+          assert data["global_status"] == "ACTIVE"
+          assert data["coverage_status"]["VERIFIED"] == 0
+          assert data["coverage_status"]["MAPPED"] == 0
+          assert sum(data["coverage_status"].values()) == 10
+          planned = data["coverage_status"]["PLANNED"]
+          proposed = data["coverage_status"]["MAPPING_PROPOSED"]
+          assert proposed + planned == 10
+          assert proposed >= 1, "existing C01 proposal lost"
+          assert len(data["breadth_frontier"]) == (planned if planned else 10)
+          expected = next((slice_ for slice_ in data["breadth_frontier"]
+                           if slice_["status"] == "PLANNED"), None)
+          if expected:
+              assert data["selected"]["id"] == expected["id"]
+          else:
+              assert data["selected"]["id"] == "C01"
+              assert data["selected"]["instruction"].startswith(
+                  "Independently challenge")
+          assert not data["temporary_context"]
+          assert data["trust_gate"]["semantic_completion_enabled"] is False
+          print(f"ASAM_MISSION_RELOAD=PASS {proposed} provisional, "
+                f"{planned} planned, next {data['selected']['id']}, "
+                "zero certified or autonomous actions")
+          PY
+
+      - name: Audit all historical task-state Git revisions independently
+        run: |
+          set -euo pipefail
+          python3 -I tools/asam/git_state_chain.py --root .
+          python3 -I tools/asam/selftest_git_state_chain.py
+
+      - name: Test independent process restoration and forbidden transitions
+        run: |
+          python3 -I tools/asam/selftest_supervisor.py
+          python3 -I tools/asam/selftest_adversarial.py
+          python3 -I tools/asam/selftest_context_isolation.py
+
+      - name: Index the full tracked compiler and export ten isolated work orders
+        run: |
+          python3 -I tools/asam/selftest_topology.py
+          python3 -I tools/asam/topology.py --root . --output asam-supervisor-out
+          test -s asam-supervisor-out/work-orders.json
+          test -s asam-supervisor-out/breadth-inventory.json
+          python3 -I tools/asam/verify_handoff.py --root . \
+            --resume /tmp/asam-resume.json \
+            --inventory asam-supervisor-out/breadth-inventory.json \
+            --orders asam-supervisor-out/work-orders.json
+          python3 -I tools/asam/selftest_handoff.py
+          cat asam-supervisor-out/breadth-inventory.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify actual completed GitHub CI metadata via read-only API
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -I tools/asam/selftest_remote_evidence.py
+          python3 -I tools/asam/remote_evidence.py \
+            --run 46106246261 \
+            --commit 9a223597ca5d44612561cf45c3a0b4f8ec0795c5 \
+            --step 'Verify mission locks and all ten pending domains' \
+            --step 'Test independent process restoration and forbidden transitions' \
+            --step 'Index the full tracked compiler and export ten isolated work orders'
+          cat asam-supervisor-out/remote-ci-metadata.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Independently audit real GitHub sibling-commit remote contention
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/asam/selftest_remote_cas.py
+          python3 -I tools/asam/remote_cas_audit.py
+          cat asam-supervisor-out/remote-cas-audit.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Observe branch protection and explicitly block autonomous trust
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 -I tools/asam/selftest_trust_readiness.py
+          python3 -I tools/asam/trust_readiness.py
+          cat asam-supervisor-out/trust-readiness.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish durable restart packet and whole-project candidate scope
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: asam-supervisor-fresh-context-packet
+          path: |
+            /tmp/asam-resume.json
+            asam-supervisor-out/breadth-inventory.json
+            asam-supervisor-out/breadth-inventory.md
+            asam-supervisor-out/work-orders.json
+            asam-supervisor-out/remote-ci-metadata.json
+            asam-supervisor-out/remote-cas-audit.json
+            asam-supervisor-out/trust-readiness.json
+          if-no-files-found: warn
+          retention-days: 14

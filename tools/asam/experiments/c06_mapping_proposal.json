@@ -1,0 +1,50 @@
+{
+  "schema": "asam-transition-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "expected_epoch": 9,
+  "slice_id": "C06",
+  "to_status": "MAPPING_PROPOSED",
+  "actor_role": "mapper",
+  "actor_id": "chatgpt-c06-scope-v4-source-scout-20261128",
+  "evidence": {
+    "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+    "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+    "producer": "PROVISIONAL: src/target/source_policy/source_info.h and language_semantics.c define per-invocation, copy-by-value C/GNU language type policy (plain char, wchar, source builtin eligibility) separately from immutable machine target registration; data_layout_source.c owns C-record/array/field placement using target machine DataLayout, including packed and zero-width-bitfield alignment fences.",
+    "consumers": [
+      "src/compiler/c_lower/core_type_import.c consumes the source type/layout oracle exactly at C→Core ingress to snapshot independent CoreType records, field offsets and nominal identities, rather than reconstructing C record types in Target machine code",
+      "src/target/target_info.h and data_layout.h define machine capabilities, fixed-register recognizers, pointer/float/vector storage and variadic transport distinct from language declaration acceptance and physical function ABI",
+      "src/target/common/core_function_plan.c verifies sealed Core and prepares one immutable function facts, calls index, object-storage plan, reachable blocks and value-use counts for a bounded callback lifetime",
+      "src/target/common/core_function_facts.c performs one Core instruction fact scan; core_call_index.c stores checked compact call views, with borrowed prepared index or owned standalone fallback",
+      "src/target/common/program_visit.c owns function/global visitation and destroys each temporary plan after target callback; src/target/backend.c binds only a registered backend to its canonical target",
+      "src/target/common/direct_lp64_abi.h and direct_function_emit.h encode shared A64/Loong orchestration parameterized by mandatory ISA-owned ABI policy, physical frame, machine instruction selection and preflight; src/target/common/lp64_aggregate.c classifies snapshots but is NOT a universal ABI classifier"
+    ],
+    "functional_path": "C06 PROVISIONAL responsibility chain: registered canonical machine TargetInfo + per-invocation SourceInfo options -> C nominal/object layout source-policy oracle -> CoreType/Module snapshot at compiler ingress -> sealed Core function/Module ownership -> common per-function validation, factual analysis, CALL/object/reachability plan, plan lifetime bounded by visitor -> ISA-provided ABI policy, physical frame/stack/GPR/FPR and machine selector -> typed MachineIR preflight -> target emitter. Shared LP64 orchestration is only legitimate when target-specific ABI policy and ISA callbacks remain distinct. A declaration accepted by C front-end does not imply code generation or ABI availability.",
+    "source_links": [
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/source_info.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/language_semantics.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/source_policy/data_layout_source.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/data_layout_source.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/data_layout.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/target_info.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_type_import.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_function_plan.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_function_facts.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/core_call_index.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/program_visit.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_lp64_abi.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/direct_function_emit.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/common/lp64_aggregate.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/target/backend.c"
+    ],
+    "limitations": [
+      "UNTRUSTED C06 MAPPING_PROPOSED ONLY; more Core/Target-common source and runtime regressions are required before any ownership chain is certified.",
+      "Shared C DataLayout is a source-language oracle, not machine frame allocation, ABI argument placement, or an instruction selector; target-specific ABI remains the machine owner.",
+      "Per-invocation SourceInfo must never be shallow-copied without rebinding internal integer_model pointer; examine all actual TargetInvocation call/assignment sites before claiming a defect.",
+      "LP64 shared emitter only covers targets whose ABI policy passes checks; AArch64 homogeneous aggregates, LoongArch LP64S and float, x86 SysV/Win64 and RV32 ILP32 are distinct contracts.",
+      "Validate packed/bitfield placement vs compiler Core type ingress using independent GNU oracles; only actual counterexamples can promote defects."
+    ],
+    "independent_review": false,
+    "semantic_coverage_claimed": false
+  }
+}

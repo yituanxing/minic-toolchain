@@ -1,0 +1,291 @@
+# ASAM — permanent mission + forgettable execution prototype
+
+**Purpose:** a fresh AI conversation or agent must resume the **same whole-compiler mission**
+without inheriting any previous conversation. This is a deterministic Supervisor
+experiment, not yet an autonomous multi-agent engine.
+
+## Sources of authority (read in this order)
+
+1. tools/asam/control/policy.json — **L0 locked mission**: whole MiniC compiler,
+   breadth-first coverage, original constraints, S0–S5 audit stages, agent roles.
+   The Supervisor pins its complete SHA-256; changes require an explicit review.
+   **This is NOT a cryptographic trust root**: the prototype code and policy
+   live on the same mutable experimental branch.
+2. Existing canonical MiniC architecture / issues / function-contract / refactor
+   records linked in policy.json. They alone own technical facts, established
+   problems and exclusions. ASAM must NOT duplicate the issue register.
+3. tools/asam/control/state.json — **scheduling and coverage cursor only**.
+   C01–C10 are planning-level functional regions. Proposals and their stage
+   transitions are individually recorded as **untrusted** events; these are
+   not independent semantic reviews. The historical S0 v2 migration occurred
+   at epoch 3, but the CURRENT epoch, statuses and next task MUST always
+   be loaded from the validated `supervisor.py resume` output.
+   NEVER use this README, a historical PR comment or an earlier model chat
+   as the live scheduling cursor.
+4. Actual versioned source, CI logs, test matrix and external runtime oracles
+   determine code correctness. An AI assertion is not runtime evidence.
+
+This portable prototype lives in a dedicated unmerged MiniC branch because
+the available GitHub connector does not support creating a separate repository.
+Do not merge it into production without independent design review.
+
+## Restart in a fresh process — no past chat required
+
+    python3 -I tools/asam/supervisor.py --root . check
+    python3 -I tools/asam/supervisor.py --root . resume
+    python3 -I tools/asam/supervisor.py --root . status
+    python3 -I tools/asam/selftest_supervisor.py
+
+The resume packet contains permanent global mission, canonical doc pointers,
+all mandatory constraints, source snapshot, progress for all regions, a breadth
+frontier and the next task. It contains **no prior model conversation or
+expanded source bodies**.
+
+## Rebuild the whole-compiler Mapper handoff (CI-verified)
+
+The S0 tracked-source inventory is **derived** and may be regenerated at
+the pinned source revision; it never becomes a second authoritative issue
+register or a declaration of semantic review completion.
+
+    python3 -I tools/asam/selftest_topology.py
+    python3 -I tools/asam/topology.py --root . --output asam-supervisor-out
+
+The output contains three artifacts: breadth-inventory.json,
+breadth-inventory.md and work-orders.json. The work-orders are **ten
+independent, bounded, read-only Mapper task specifications**, not ten actual
+running AI agents. Run the Supervisor resume command to recover the original
+mission and selected slice before consuming the work orders.
+
+At pinned MiniC main revision d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8,
+the entire repository has **1,983 tracked C/H files**. The initial scan
+missed 237 paths. The S0 v2 migration explicitly adds **153 MiniC public
+interfaces, thin driver integration entrypoints and additional test fixtures**:
+1,899 tracked C/H inputs are now in the ten candidate regions and **84
+C/H files belong to other tool implementations or third_party libraries**.
+Every out-of-scope C/H path is required to match an explicit excluded root;
+an unexplained new path fails the inventory and independent handoff checks.
+
+These are repository C/H inventory figures, NOT semantic coverage,
+NOT a complete build-script/assembler inventory, and NOT permission to
+modify vendor or external-tool sources.
+Four historical anchor names did not occur in current production C/H scans;
+their semantic replacements require S1 source review.
+
+The latest verified execution and restart artifact can be reached through
+the experiment PR #712 CI history. Do not assume the artifact persists forever.
+
+## Progress must be data-driven, not a test-code change
+
+At the first real C02 advance, older tests still asserted `epoch == 3`,
+`PLANNED == 9` and `next == C02`. That design would require editing
+the Supervisor test suite on every new mapping proposal, defeating autonomous
+breadth-first progress.
+
+The current acceptance suite derives actual pending counts, the selected
+region and the next region from the **recorded state**, while still pinning
+the immutable mission, original migrations, zero verified status and
+source provenance. The `selftest_context_isolation.py` fixture advances
+all remaining regions using **untrusted** test proposals, proving the restart
+becomes an independent-challenge instruction when no PLANNED region remains.
+The recovery and concurrency tests use the immediate event predecessor
+in throwaway fixtures when all ten have proposals, rather than locking
+the program to C02 forever.
+
+`tools/asam/experiments/c02_mapping_proposal.json` records a real source
+inspection of Compiler -> Parser -> Program/AST -> normalization/verifier
+consumers, at the pinned source revision. It is **not** a certified C02
+semantic review or proof that all frontend code has been read. No full
+source correctness or autonomous Fixer capability has been enabled.
+
+## Session protocol
+
+1. Close the old agent session and its huge expanded source context.
+2. Supervisor check must PASS; a failure blocks the task.
+3. Resume from durable records in a new process, reload the canonical
+   architecture map/issues/contracts, and then inspect live source.
+4. Breadth-map ALL unfinished functional regions before substituting isolated
+   file cleanup for the whole-project goal. Form complete root-cause clusters.
+5. Keep real ISA/ABI differences; never delete an optimization for LOC.
+6. Record bounded versioned evidence, independent challenge and required tests.
+7. End the task-local model context; retain only durable facts, evidence pointers,
+   reviewed exclusions and unfinished scope. Select the next global task.
+
+## Enforced state transitions
+
+A proposed transition has exactly these fields:
+schema, mission_id, expected_epoch, slice_id, to_status, actor_role,
+actor_id, evidence.
+
+The current executable transition gate only allows
+**PLANNED -> MAPPING_PROPOSED**, which is UNTRUSTED and must be independently
+challenged. MAPPED, INVESTIGATING, CONFIRMED, FIXED_UNVERIFIED and VERIFIED
+are ALL DISABLED pending authenticated evidence and trusted controller rights.
+
+Functional mapping requires producers, consumers and full path evidence.
+Confirmation requires a separate challenger. Fixes need exact commits.
+Verification requires a separate verifier and tested commit, real
+input/oracle matrix and negative evidence. **Terminal VERIFIED is currently
+DISABLED** until external CI evidence can be authenticated by a trusted
+integration: model-generated links/names could otherwise forge "success".
+An unverified change is NEVER marked verified.
+
+Run a reviewed transition locally with:
+
+    python3 -I tools/asam/supervisor.py --root . apply --proposal path/to.json
+
+The Supervisor updates only a **local atomic file**. Committing back to GitHub
+requires authorized access and a review. Concurrent stale epochs are refused.
+A worker cannot close the global mission, even with all regions complete.
+
+## Active forgetfulness acceptance
+
+selftest_supervisor.py uses independent Python processes with no history,
+mutates temporary queue files, starts another process, checks that the original
+global goal, source baseline and remaining scope survive, and tries forbidden
+goal replacement, false completion, fabricated verification, dropped coverage
+and policy tampering. Failure to reject any case fails CI.
+
+## Adversarial recovery acceptance (mandatory)
+
+The original global goal remains pinned, but worker statements are now split
+into **MAPPING_PROPOSED** (untrusted, may be scheduled for independent review)
+and **MAPPED** (trusted S1 completion, currently DISABLED). Similarly, all
+terminal semantic stages remain disabled until authenticated independent
+review evidence exists. A Mapper saying "producer/consumer" in a JSON field is
+not evidence that the code has actually been audited.
+
+The Supervisor uses exclusive local write locking plus state epoch/CAS.
+All transitions persist replayable event proposals. On load it reconstructs
+state from the original S0 bootstrap, validates history and checks the live
+snapshot. It refuses forced active-task priority, changes to the ten planning
+regions, altered historical evidence, altered mission instructions and
+snapshot-only synthetic progress. A crash can leave a lock file; **do not
+automatically steal or delete it** without operator review of the writer.
+
+Test in an isolated checkout on GitHub Actions:
+
+    python3 -I tools/asam/selftest_supervisor.py
+    python3 -I tools/asam/selftest_adversarial.py
+    python3 -I tools/asam/selftest_topology.py
+
+The adversarial test runs 12 actual **two-process** races; exactly one write
+may succeed in each. It also modifies and restores synthetic states to test
+fabricated work, role drift, damaged event history and scope injection.
+
+After emitting the resume, breadth inventory and Mapper orders, a separate
+validator **does not import Supervisor or Topology**:
+
+    python3 -I tools/asam/verify_handoff.py --root . \
+      --resume /tmp/asam-resume.json \
+      --inventory asam-supervisor-out/breadth-inventory.json \
+      --orders asam-supervisor-out/work-orders.json
+    python3 -I tools/asam/selftest_handoff.py
+
+The validator independently re-checks all tracked C/H file bytes, line
+counts, source-tree identity, live canonical document digests, all ten
+functional scopes, the exact selected next task and all worker permissions.
+The second test injects 36 malformed/stale/redirected work-order payloads
+and checks that code modified **after** export is also rejected.
+
+**What these tests cannot prove:** a fresh *model* instance's comprehension,
+semantic correctness, genuine independent LLM verification, and a protected
+remote trust root. Current testing uses separate programs/processes, NOT
+separate AI subagents. A malicious actor allowed to modify both this
+experiment's Supervisor code and its tests can forge the result. A model can
+still submit false provisional Mapper data. Remote GitHub writes require
+branch protection, code ownership and authenticated evidence verification
+before accepting MAPPED or VERIFIED. Keep this Draft PR unmerged until those
+permissions/trust decisions have been reviewed.
+
+## No model-to-model instruction inheritance
+
+Model-generated event fields and evidence URLs may contain malicious prompts
+even when their JSON is structurally valid. Supervisor **must not copy** a
+prior worker's raw prose into the next LLM prompt. The restart packet exports
+only fixed-schema **SHA-256 event commitments and evidence-reference hashes**.
+These commitments support provenance comparison, not semantic truth or
+authentication. Original untrusted text remains available only by deliberate
+review from the versioned event store.
+
+    python3 -I tools/asam/selftest_context_isolation.py
+
+This test writes nine adversarial proposed mappings into a temporary state,
+including deliberate hostile prior-agent instructions, then starts a clean
+Python process. Raw hostile text must not appear, and the report remains
+bounded. When all ten mappings are proposed, the next task must be independent
+counterevidence, not redoing C01 Mapper. It is **NOT** a fresh LLM instance.
+
+Proposals are size-bounded, use a strict allowlist schema, and canonical
+evidence links must exactly match this repo and source revision. Neither a
+plausible link nor a worker identifier authenticates a reviewer. The
+`trust_gate` field of every restart packet explicitly marks controller
+protection, independent LLM restoration, worker authentication, semantic
+certification and autonomous source edits **FALSE**. A successful CI on
+this experiment branch cannot turn those flags true.
+
+GitHub REST CI metadata is checked independently for repo, run, source SHA,
+branch, job steps and artifact, but it is **only metadata**: it does not
+prove semantic correctness, protected branch policy, or human reviewer
+authorization.
+
+## Real remote GitHub writer-contention experiment (non-autonomous)
+
+The local lock / epoch tests cannot certify cross-host remote writes. On this
+same **unprotected Draft experiment branch**, two real Git commit objects
+were created with the **same parent and the exact same file tree**; each
+candidate has zero source or test changes:
+
+- Base: `5b5266bc5fd88f47a510aaa48904177c2acf1831`
+- Candidate A: `32d095374ee50badef8b40908dba8b0464f16bc4`
+- Candidate B: `d57abbf807c93e3c711d14e5bfee8e49e0725d3a`
+
+Two remote `update_ref(force=false, expected_sha=base)` operations
+were submitted concurrently through the connected GitHub tool.
+A succeeded, B returned a generic GraphQL error. Independently querying the
+ref showed A as the winner; retrying the stale candidate did not overwrite
+A. A no-op update with A as expected SHA succeeded, but the same no-op
+with stale expected base failed. **The GraphQL error's exact rejection cause
+was NOT exposed**, so this is observed non-overwrite, not a mathematical
+proof of cross-host atomicity.
+
+A separate read-only REST verifier re-fetches both Git objects, their
+parents and trees, the current branch head, and GitHub comparisons. It
+accepts only a branch where A remains in ancestry and the B sibling
+remains outside it, and runs 16 negative-DAG attacks:
+
+    python3 -I tools/asam/selftest_remote_cas.py
+    GH_TOKEN=... python3 -I tools/asam/remote_cas_audit.py
+
+This probe is durable in
+`tools/asam/experiments/remote_cas_probe.json`.
+The verifier is READ-ONLY and never grants MAPPED/VERIFIED status or
+production write rights. A PR checkout can be a synthetic merge commit:
+the workflow now explicitly checks out the PR's exact head SHA and
+requires it to match GitHub's live branch ref.
+
+The GitHub REST branch listing observed `protected=false` for the
+experiment branch **and main**, and no visible repository rulesets.
+The read-only observer records this instead of guessing protection:
+
+    python3 -I tools/asam/selftest_trust_readiness.py
+    GH_TOKEN=... python3 -I tools/asam/trust_readiness.py
+
+The result must stay **BLOCKED** even if a branch is later marked
+`protected=true`, until a separate controller, verified owner review,
+restricted credentials, authenticated CI and an actual independent new
+LLM run are established. Neither GitHub CI success nor a generic
+GraphQL error can grant these authorities.
+
+## Limitations
+
+- This is not yet a full source-level functional and ownership graph.
+- Not yet an authenticated GitHub-hosted persistent scheduler.
+- No independently instantiated LLM subagents or unattended API-driven work
+  exists; ChatGPT currently serves as interactive controller / reasoner.
+- Checks of evidence links are structural, not external truth validation.
+- Tests do not certify a semantic fix or validate unrun architectures.
+- Policy is mechanically pinned, but the experiment branch is not an
+  independently protected trust anchor.
+
+The historical merged LoongArch scalar fix PR #711 is a successful **local
+subtask**, not evidence that the whole Target region or full MiniC was audited.

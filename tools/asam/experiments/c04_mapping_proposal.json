@@ -1,0 +1,46 @@
+{
+  "schema": "asam-transition-v1",
+  "mission_id": "ASAM-MINIC-GLOBAL-20261128",
+  "expected_epoch": 5,
+  "slice_id": "C04",
+  "to_status": "MAPPING_PROPOSED",
+  "actor_role": "mapper",
+  "actor_id": "chatgpt-c04-core-ingress-scout-20261128",
+  "evidence": {
+    "source_revision": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "canonical_ref": "docs/architecture/minic-global-contract-map.md",
+    "link": "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md",
+    "producer": "PROVISIONAL source evidence: Compiler creates one C Program/TargetInvocation; src/compiler/core_function_set.c:minic_prepare_core_function_set builds a transactional per-TU CoreFunctionSet, type context/importer, one Core/status/attempted slot per source FunctionId, and the initial CoreModule identity/ASM/relocation roots.",
+    "consumers": [
+      "src/compiler/core_function_set.c:minic_core_set_lower_one creates FunctionBodyView, invokes minic_core_lower_function_with_index, snapshots C types into Core-owned type context, verifies function and takes the completed Core draft transactionally",
+      "src/compiler/c_lower/core_type_import.c converts C-local types and target-dependent layout facts into CoreTypeId; ids are meaningful only within that CoreTypeContext, not reused blindly between TUs",
+      "src/compiler/c_lower/core_ir_source.c manages temporary C source draft and a verified take_core handoff; failed drafts are destroyed without publishing executable Core",
+      "src/compiler/c_lower/core_lower.c consumes immutable FunctionBodyView and invocation DataLayout, translates source expressions/statements/locals to Core blocks/objects/SSA and target-neutral semantic effects",
+      "src/compiler/module_ir_build.c copies function/global identity, file-level ASM roots and relocs, and later materializes only live object payloads after Core reachability closure",
+      "src/compiler/core_function_set.c:minic_complete_core_function_set_reachability uses Core/Module closure, revisits deferred source bodies only when reached, then closes to fixed point; attempted and status distinguish dead/unattempted versus actual error",
+      "src/core/core_ir_verify.c and src/core/core_ir.c validate sealed type/CFG/value/ASM invariants; Compiler destroys C Program and source buffer before target emission uses sealed CoreFunctionSet and ModuleIR"
+    ],
+    "functional_path": "C04 PROVISIONAL full responsibility ingress chain: parsed and normalized C Program/FunctionBody + immutable invocation target -> per-TU CoreTypeImporter/Context and source-root ModuleIR snapshot -> FunctionId-indexed CoreFunctionSet with statuses and attempted ledger -> initial live FunctionBody lowering through one temporary C-source builder -> snapshot Core types -> verify Core function -> publish owner Core slot; Core/Module-only reachability may discover late-live deferred functions, re-entering same lowering transaction -> module materialization and seal -> Compiler frees Program/source before Target emitter reads Core/Module. Source type semantics do not become target machine physical ABI or raw C pointer dependencies.",
+    "source_links": [
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/compiler.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/core_function_set.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_lower.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_lower.h",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_ir_source.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/c_lower/core_type_import.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/compiler/module_ir_build.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_ir_verify.c",
+      "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/src/core/core_ir.c"
+    ],
+    "limitations": [
+      "UNTRUSTED MAPPER ONLY. Did not line-review all CoreLower helpers, FunctionBody CFG/labels, every type ingress variant or whole ModuleIR global payload.",
+      "Important semantics to independently challenge: late-live internal functions due to Core CALL, source GNU ASM symbols and label relocation roots; do not equate skipped UNSUPPORTED with failed lowering.",
+      "TypeId is owned by per-TU CoreTypeContext; target DataLayout is input to source ingress but physical target ABI plans remain backend-owned.",
+      "Need cross-function/ISA tests for error draft cleanup, reentry cache fallback, recursive type import, relocation owner-label and source/ModuleIR lifetime; do not remove these as syntactic duplication.",
+      "Historical core-type ingress design document has a dated old-baseline status; only current source and canonical architecture/issue records should authorize any change."
+    ],
+    "independent_review": false,
+    "semantic_coverage_claimed": false
+  }
+}
