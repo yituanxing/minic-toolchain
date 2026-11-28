@@ -41,11 +41,13 @@ baseline_sha = original["source_snapshot"]["observed_commit"]
 prefix = "https://github.com/yituanxing/minic-toolchain/blob/" + baseline_sha + "/"
 for allowed in ("Makefile", ".github/workflows/minic-runtime-fourarch.yml",
                 "src/target/riscv/machine_core_select.c",
+                "include/minic/compiler.h",
                 "tests/compiler/c0/check-minic-target-boundaries.sh"):
     assert sup.SOURCE_LINK.fullmatch(prefix + allowed)
 for forbidden in ("Makefile.backup", ".github/workflows/unrelated.yml",
                   ".github/other", ".github/workflows/../../Makefile",
                   "src/../../.github/workflows/evil.yml",
+                  "include/other/foreign.h",
                   "README.md"):
     # Exact-whitelist and canonical segment semantics are also separately
     # exercised by actual sup.load() against the persisted C09/C10 data.
