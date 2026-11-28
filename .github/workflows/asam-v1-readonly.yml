@@ -51,11 +51,13 @@ jobs:
 
       - name: Prepare bounded Scout semantic evidence
         run: |
-          python3 -m py_compile tools/asam/review_packets.py tools/asam/scout_api.py tools/asam/selftest_structural.py
+          python3 -m py_compile tools/asam/review_packets.py tools/asam/scout_api.py tools/asam/selftest_structural.py tools/asam/handoff_gate.py tools/asam/selftest_gate.py
           python3 tools/asam/selftest_structural.py
           python3 tools/asam/review_packets.py --repo . --input asam-out/near-duplicates.json --output asam-out --limit 12
           python3 tools/asam/scout_api.py --input asam-out/scout-packets.json --output asam-out
           cat asam-out/scout-queue.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/asam/selftest_gate.py
+          python3 tools/asam/handoff_gate.py --repo . --packets asam-out/scout-packets.json --model asam-out/scout-model-status.json --output asam-out
 
       - name: Generate partial source-call graph evidence
         run: |
@@ -71,6 +73,8 @@ jobs:
           python3 tools/asam/near_duplicates.py --repo . --input asam-target-out/symbols.json --output asam-target-out
           python3 tools/asam/review_packets.py --repo . --input asam-target-out/near-duplicates.json --output asam-target-out --limit 12
           cat asam-target-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
+          python3 tools/asam/scout_api.py --input asam-target-out/scout-packets.json --output asam-target-out
+          python3 tools/asam/handoff_gate.py --repo . --packets asam-target-out/scout-packets.json --model asam-target-out/scout-model-status.json --output asam-target-out
 
       - name: Upload broader target-backend evidence
         if: always()
