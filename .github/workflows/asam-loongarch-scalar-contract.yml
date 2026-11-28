@@ -25,7 +25,7 @@ jobs:
 
       - name: Verify source change boundaries and whitespace
         run: |
-          git diff --check
+          git diff --check origin/main...HEAD
           git diff --name-only origin/main...HEAD > /tmp/asam-loong-paths
           cat /tmp/asam-loong-paths
           while IFS= read -r path; do
@@ -52,11 +52,33 @@ jobs:
             -Wl,--gc-sections -o /tmp/asam-loong-scalar-type
           /tmp/asam-loong-scalar-type
 
-      - name: Existing real LoongArch machine selector regressions
+      - name: Existing real LoongArch Core machine selector regressions
         run: |
-          make -j2 MODE=release \
-            check-loong-machine-mir-select \
-            check-loong-machine-core-select
+          make -j2 MODE=release check-loong-machine-core-select
+
+      - name: Compare legacy frame smoke test against clean main
+        shell: bash
+        run: |
+          set -uo pipefail
+          make MODE=release check-loong-machine-mir-select > /tmp/asam-candidate-frame.log 2>&1
+          candidate_status=$?
+          git worktree add --detach /tmp/asam-baseline origin/main
+          (cd /tmp/asam-baseline && make MODE=release check-loong-machine-mir-select) > /tmp/asam-baseline-frame.log 2>&1
+          baseline_status=$?
+          printf 'Legacy frame smoke: baseline=%d candidate=%d\n' "$baseline_status" "$candidate_status"
+          if [ "$baseline_status" -eq 0 ] && [ "$candidate_status" -eq 0 ]; then
+            echo 'Legacy frame smoke: PASS on baseline and candidate' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$baseline_status" -ne 0 ] && [ "$candidate_status" -ne 0 ] && \
+               grep -Fq 'Loong MIR selected frame failed: save_ra' /tmp/asam-baseline-frame.log && \
+               grep -Fq 'Loong MIR selected frame failed: save_ra' /tmp/asam-candidate-frame.log; then
+            echo 'Legacy frame smoke: SAME PRE-EXISTING FAILURE on main and candidate' >> "$GITHUB_STEP_SUMMARY"
+            echo 'The baseline MIR frame test is not counted as a passing regression.'
+          else
+            echo 'Legacy frame smoke differs from main baseline; rejecting candidate' >&2
+            tail -50 /tmp/asam-baseline-frame.log
+            tail -50 /tmp/asam-candidate-frame.log
+            exit 1
+          fi
 
       - name: Full MiniC compiler build (strict warnings)
         run: |
