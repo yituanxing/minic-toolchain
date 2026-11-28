@@ -80,6 +80,11 @@ def map_slices(root, policy, state, *, check_baseline=True):
         counts[bucket] += 1
         inventory.append({"path": name, "physical_lines": len(lines),
                           "sha256": hashlib.sha256(file.read_bytes()).hexdigest()})
+        # Test fixture main() functions must not inflate compiler entry
+        # anchors: inventory tests, but resolve production pipeline symbols
+        # only in the compiler/driver source roots.
+        if name.startswith(("tests/compiler/", "tests/target/")):
+            continue
         for number, line in enumerate(lines, 1):
             for word, pattern in patterns.items():
                 if pattern.search(line):
