@@ -112,6 +112,13 @@ def check(root, policy, state, resume, inventory, orders):
         })
         prefix = next(p for p in scan_roots if name.startswith(p))
         prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
+    entire = sorted(n for n in sh(root, "ls-files", "-z").split("\0")
+                    if n and n.endswith((".c", ".h")))
+    excluded_from_roots = sorted(set(entire) - set(tracked))
+    require(inventory["repository_total_tracked_c_h"] == len(entire) and
+            inventory["repository_outside_scan_roots"] == excluded_from_roots and
+            inventory["repository_outside_scan_roots_count"] == len(excluded_from_roots),
+            "whole-repository C/H blind spots omitted or manipulated")
     require(inventory["inventory_scope"] == list(scan_roots) and
             inventory["source_file_fingerprints"] == observed_files and
             inventory["tracked_c_h_files"] == len(tracked) and
