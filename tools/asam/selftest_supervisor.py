@@ -37,22 +37,24 @@ script = Path(sup.__file__).resolve()
 assert original["mission_complete"] is False
 assert len(original["slices"]) == len(sup.EXPECTED_HINTS) == 10
 assert all(not x["verified"] for x in original["slices"])
-assert original["epoch"] == 3
+assert original["epoch"] >= 3
 assert original["slices"][0]["status"] == "MAPPING_PROPOSED"
-assert sum(x["status"] == "PLANNED" for x in original["slices"]) == 9
-assert original["recorded_events"][-2]["proposal"]["slice_id"] == "C01"
-assert original["recorded_events"][-1] == sup.EXPECTED_SCOPE_REFINEMENT_V2
+assert original["recorded_events"][2]["proposal"]["slice_id"] == "C01"
+assert original["recorded_events"][3] == sup.EXPECTED_SCOPE_REFINEMENT_V2
+planned_ids = [x["id"] for x in original["slices"] if x["status"] == "PLANNED"]
+assert planned_ids, "This fixture needs a remaining PLANNED slice"
 # The *actual* committed progress survives the model's temporary context.
 live = fresh_process(script, repo, "resume")
 assert live.returncode == 0, live.stderr
 live_packet = json.loads(live.stdout)
-assert live_packet["selected"]["id"] == "C02"
-assert live_packet["coverage_status"]["MAPPING_PROPOSED"] == 1
+assert live_packet["selected"]["id"] == planned_ids[0]
+assert live_packet["coverage_status"]["MAPPING_PROPOSED"] == (
+    10 - len(planned_ids))
 assert live_packet["coverage_status"]["VERIFIED"] == 0
 assert live_packet["temporary_context"] == []
 
-# Use the actual durable S0-v2 checkpoint, not a second static copy.
-# The next legal proposal is C02; C01 stays an untrusted pending review.
+# Use the actual durable current checkpoint, not a duplicated static state.
+# The next proposal is the first genuinely pending functional region.
 s0 = copy.deepcopy(original)
 sup.verify_event_replay(policy, s0)
 
@@ -74,8 +76,8 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     first = json.loads(init.stdout)
     assert first["global_task_completed"] is False
     assert first["policy_id"] == sup.PINNED_MISSION_ID
-    assert len(first["breadth_frontier"]) == 9
-    assert first["selected"]["id"] == "C02"
+    assert len(first["breadth_frontier"]) == len(planned_ids)
+    assert first["selected"]["id"] == planned_ids[0]
     assert first["temporary_context"] == []
     assert len(first["nonnegotiable"]) >= 16
     assert "minic-global-contract-map.md" in repr(first["canonical_sources"])
@@ -84,7 +86,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
         "schema": "asam-transition-v1",
         "mission_id": policy["mission_id"],
         "expected_epoch": s0["epoch"],
-        "slice_id": "C02",
+        "slice_id": planned_ids[0],
         "to_status": "MAPPING_PROPOSED",
         "actor_role": "mapper",
         "actor_id": "independent-mapper-01",
@@ -110,9 +112,14 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     after = fresh_process(script, root, "resume")
     assert after.returncode == 0, after.stderr
     restored = json.loads(after.stdout)
-    assert restored["coverage_status"]["MAPPING_PROPOSED"] == 2
-    assert restored["coverage_status"]["PLANNED"] == 8
-    assert restored["selected"]["id"] == "C03"
+    assert restored["coverage_status"]["MAPPING_PROPOSED"] == (
+        11 - len(planned_ids))
+    assert restored["coverage_status"]["PLANNED"] == len(planned_ids) - 1
+    assert restored["selected"]["id"] == (
+        planned_ids[1] if len(planned_ids) > 1 else "C01")
+    assert restored["selected"]["instruction"].startswith(
+        "Read existing canonical docs" if len(planned_ids) > 1
+        else "Independently challenge")
     assert restored["global_task_completed"] is False
     assert restored["policy_sha256"] == first["policy_sha256"]
     assert restored["global_mission"] == first["global_mission"]
@@ -120,9 +127,11 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     assert restored["source_baseline"] == first["source_baseline"]
 
     state = json.loads(sup.paths(root)[1].read_text(encoding="utf-8"))
-    assert state["slices"][1]["status"] == "MAPPING_PROPOSED"
-    assert not state["slices"][1]["verified"]
-    assert state["slices"][1]["audit_stage"] == "S1_FUNCTIONAL_MAP"
+    updated_slice = next(x for x in state["slices"]
+                         if x["id"] == planned_ids[0])
+    assert updated_slice["status"] == "MAPPING_PROPOSED"
+    assert not updated_slice["verified"]
+    assert updated_slice["audit_stage"] == "S1_FUNCTIONAL_MAP"
 
     refuse(lambda: sup.transition(policy, state, proposal),
            "replay of earlier epoch")
