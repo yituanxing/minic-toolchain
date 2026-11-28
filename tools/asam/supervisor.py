@@ -100,6 +100,13 @@ ROLE_FOR = {
     "VERIFIED": "verifier",
 }
 SHA = re.compile(r"^[0-9a-f]{40}$")
+ACTOR_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,95}$")
+SOURCE_LINK = re.compile(
+    r"^https://github\\.com/yituanxing/minic-toolchain/blob/"
+    r"([0-9a-f]{40})/(src|tools|tests|docs)/"
+    r"[A-Za-z0-9_./-]+$"
+)
+MAX_PROPOSAL_BYTES = 16384
 
 
 class Rejected(ValueError):
@@ -212,8 +219,7 @@ def load(root, *, require_canonical=True):
         expected_stage = {
             "PLANNED": "S0_BASELINE",
             "MAPPING_PROPOSED": "S1_FUNCTIONAL_MAP",
-            "MAPPING_PROPOSED": "S1_FUNCTIONAL_MAP",
-        "MAPPED": "S1_FUNCTIONAL_MAP",
+            "MAPPED": "S1_FUNCTIONAL_MAP",
             "INVESTIGATING": "S2_BREADTH_DISCOVERY",
             "CONFIRMED": "S3_INDEPENDENT_COUNTEREVIDENCE",
             "FIXED_UNVERIFIED": "S4_ROOT_CAUSE_FIX",
@@ -342,6 +348,10 @@ def transition(policy, state, proposal):
                 "to_status", "actor_role", "actor_id", "evidence"}
     must(isinstance(proposal, dict) and set(proposal) == required,
          "transition contains unexpected or missing fields")
+    must(len(json.dumps(proposal, ensure_ascii=False,
+                        separators=(",", ":")).encode("utf-8"))
+         <= MAX_PROPOSAL_BYTES,
+         "oversized untrusted worker proposal")
     must(proposal["schema"] == "asam-transition-v1" and
          proposal["mission_id"] == policy["mission_id"],
          "transition requests a different mission")
@@ -358,21 +368,57 @@ def transition(policy, state, proposal):
     must(target == "MAPPING_PROPOSED",
          "only provisional mapping is permitted without independent trusted evidence")
     must(proposal["actor_role"] == ROLE_FOR[target], "wrong worker role")
-    must(isinstance(proposal["actor_id"], str) and len(
-         proposal["actor_id"].strip()) >= 3, "worker identity missing")
+    must(isinstance(proposal["actor_id"], str) and
+         ACTOR_ID.fullmatch(proposal["actor_id"]) is not None,
+         "worker identity missing or unbounded")
     ev = proposal["evidence"]
     must(isinstance(ev, dict), "evidence object required")
-    must(ev.get("source_revision") == state["source_snapshot"]["observed_commit"],
+    required_ev = {"source_revision", "canonical_ref", "link",
+                   "producer", "consumers", "functional_path"}
+    optional_ev = {"source_links", "limitations", "independent_review",
+                   "semantic_coverage_claimed"}
+    must(required_ev.issubset(ev) and set(ev).issubset(required_ev | optional_ev),
+         "unknown or missing untrusted evidence field")
+    baseline = state["source_snapshot"]["observed_commit"]
+    must(ev.get("source_revision") == baseline,
          "proposal built on wrong code baseline")
     must(ev.get("canonical_ref") in policy["authoritative_sources"].values(),
          "evidence must point into existing authoritative registry")
-    must(isinstance(ev.get("link"), str) and (
-         ev["link"].startswith("https://github.com/") or
-         ev["link"].startswith("docs/architecture/")),
-         "traceable evidence pointer required")
+    canonical_link = (
+        "https://github.com/yituanxing/minic-toolchain/blob/" +
+        baseline + "/" + ev["canonical_ref"]
+    )
+    must(ev.get("link") == canonical_link,
+         "untrusted or non-pinned canonical evidence link")
+    for key, maximum in (("producer", 4096), ("functional_path", 4096)):
+        must(type(ev.get(key)) is str and
+             0 < len(ev[key]) <= maximum,
+             "missing or oversized mapping string: " + key)
+    consumers = ev.get("consumers")
+    must(type(consumers) is list and
+         1 <= len(consumers) <= 24 and
+         all(type(v) is str and 0 < len(v) <= 1024 for v in consumers),
+         "invalid or oversized consumer list")
+    for key in ("source_links", "limitations"):
+        if key in ev:
+            must(type(ev[key]) is list and len(ev[key]) <= 24,
+                 "invalid evidence list: " + key)
+    if "source_links" in ev:
+        must(all(type(url) is str and len(url) <= 320 and
+                 (match := SOURCE_LINK.fullmatch(url)) is not None and
+                 match.group(1) == baseline
+                 for url in ev["source_links"]),
+             "source links must reference pinned source in original repository")
+    if "limitations" in ev:
+        must(all(type(v) is str and 0 < len(v) <= 1024
+                 for v in ev["limitations"]),
+             "unbounded limitations field")
+    must(ev.get("independent_review", False) is False and
+         ev.get("semantic_coverage_claimed", False) is False,
+         "worker attempted to claim verified mapping")
     if target == "MAPPING_PROPOSED":
-        must(bool(ev.get("producer")) and bool(ev.get("consumers")) and
-             bool(ev.get("functional_path")), "functional map proposal incomplete")
+        # Data is accepted as an UNTRUSTED proposition, never as a conclusion.
+        pass
     elif target == "CONFIRMED":
         must(ev.get("counterevidence_checked") is True and
              proposal["actor_id"] != ev.get("scout_actor"),
