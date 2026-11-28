@@ -168,6 +168,11 @@
       "review_depth": "inventory",
       "ci_touched_in": []
     },
+    "src/target/loongarch64/machine_scalar_type.h": {
+      "blob": "729d66f82b8c5a765532a2035514e814b391b6d0",
+      "review_depth": "inventory",
+      "ci_touched_in": []
+    },
     "src/target/loongarch64/machine_select.c": {
       "blob": "a979e4bb8a2be2a8d872d5e0b2233d723864d43f",
       "review_depth": "inventory",
