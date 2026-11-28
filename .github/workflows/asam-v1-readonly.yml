@@ -49,6 +49,14 @@ jobs:
             --input asam-out/symbols.json --output asam-out
           cat asam-out/near-duplicates.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Prepare bounded Scout semantic evidence
+        run: |
+          python3 -m py_compile tools/asam/review_packets.py tools/asam/scout_api.py tools/asam/selftest_structural.py
+          python3 tools/asam/selftest_structural.py
+          python3 tools/asam/review_packets.py --repo . --input asam-out/near-duplicates.json --output asam-out --limit 12
+          python3 tools/asam/scout_api.py --input asam-out/scout-packets.json --output asam-out
+          cat asam-out/scout-queue.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload scan evidence
         if: always()
         uses: actions/upload-artifact@v4
