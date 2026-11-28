@@ -44,9 +44,11 @@ assert all(not s["claimed_semantic_coverage"] for s in a["slice_candidates"])
 assert all(s["supervisor_status"] in ("PLANNED", "MAPPING_PROPOSED")
            for s in a["slice_candidates"])
 assert sum(s["supervisor_status"] == "MAPPING_PROPOSED"
-           for s in a["slice_candidates"]) == 1
+           for s in a["slice_candidates"]) == sum(
+               x["status"] == "MAPPING_PROPOSED" for x in state["slices"])
 assert sum(s["supervisor_status"] == "PLANNED"
-           for s in a["slice_candidates"]) == 9
+           for s in a["slice_candidates"]) == sum(
+               x["status"] == "PLANNED" for x in state["slices"])
 assert set(a["canonical_documents"]) == set(policy["authoritative_sources"])
 
 def hints(slice_id):
@@ -102,8 +104,10 @@ assert all(len(x["sha256"]) == 64 and x["path"].endswith((".c", ".h"))
 assert all(not x["verified"] and x["last_verified_revision"] is None
            for x in state["slices"])
 assert state["slices"][0]["canonical_evidence_refs"]
-assert all(not x["canonical_evidence_refs"] and x["status"] == "PLANNED"
-           for x in state["slices"][1:])
+assert all(not x["canonical_evidence_refs"]
+           for x in state["slices"] if x["status"] == "PLANNED")
+assert all(x["canonical_evidence_refs"]
+           for x in state["slices"] if x["status"] == "MAPPING_PROPOSED")
 
 print("ASAM_BREADTH_INVENTORY=PASS full tracked sources and ten provisional function regions")
 print("ASAM_FALSE_COVERAGE_GUARD=PASS lexical discovery never implies semantic completion")
