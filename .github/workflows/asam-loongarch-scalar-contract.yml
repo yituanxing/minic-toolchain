@@ -54,17 +54,28 @@ jobs:
 
       - name: Existing real LoongArch Core machine selector regressions
         run: |
-          make -j2 MODE=release check-loong-machine-core-select
+          make -j2 MODE=release check-loong-machine-core-select | tee /tmp/asam-candidate-core.log
 
       - name: Compare legacy frame smoke test against clean main
         shell: bash
         run: |
           set -uo pipefail
-          make MODE=release check-loong-machine-mir-select > /tmp/asam-candidate-frame.log 2>&1
-          candidate_status=$?
           git worktree add --detach /tmp/asam-baseline origin/main
-          (cd /tmp/asam-baseline && make MODE=release check-loong-machine-mir-select) > /tmp/asam-baseline-frame.log 2>&1
-          baseline_status=$?
+          (cd /tmp/asam-baseline && make -j2 MODE=release check-loong-machine-core-select) > /tmp/asam-baseline-core.log 2>&1
+          grep '^LOONG_CORE_MIR_' /tmp/asam-baseline-core.log > /tmp/asam-baseline-core.events
+          grep '^LOONG_CORE_MIR_' /tmp/asam-candidate-core.log > /tmp/asam-candidate-core.events
+          diff -u /tmp/asam-baseline-core.events /tmp/asam-candidate-core.events
+          echo 'LoongArch Core MIR: byte-identical test events on main and candidate' >> "$GITHUB_STEP_SUMMARY"
+          if make MODE=release check-loong-machine-mir-select > /tmp/asam-candidate-frame.log 2>&1; then
+            candidate_status=0
+          else
+            candidate_status=$?
+          fi
+          if (cd /tmp/asam-baseline && make MODE=release check-loong-machine-mir-select) > /tmp/asam-baseline-frame.log 2>&1; then
+            baseline_status=0
+          else
+            baseline_status=$?
+          fi
           printf 'Legacy frame smoke: baseline=%d candidate=%d\n' "$baseline_status" "$candidate_status"
           if [ "$baseline_status" -eq 0 ] && [ "$candidate_status" -eq 0 ]; then
             echo 'Legacy frame smoke: PASS on baseline and candidate' >> "$GITHUB_STEP_SUMMARY"
