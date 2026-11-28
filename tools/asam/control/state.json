@@ -1,0 +1,173 @@
+{
+  "schema": "asam-control-state-v1",
+  "policy_id": "ASAM-MINIC-GLOBAL-20261128",
+  "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
+  "epoch": 0,
+  "global_status": "ACTIVE",
+  "mission_complete": false,
+  "project": "yituanxing/minic-toolchain",
+  "source_snapshot": {
+    "ref": "main",
+    "observed_commit": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "kind": "git-commit",
+    "verified_at_run": false
+  },
+  "schedule_mode": "BREADTH_FIRST",
+  "work_limit": "whole responsibility/functional subgraph; not a random file",
+  "slices": [
+    {
+      "id": "C01",
+      "name": "Driver and invocation target contracts",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "tools/minic/main.c",
+        "tools/minic-cc/main.c"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C02",
+      "name": "Frontend C/GNU C syntax, types and semantics",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/frontend/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C03",
+      "name": "AST ownership, normalization and inline specialization",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/frontend/",
+        "src/compiler/compiler.c"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C04",
+      "name": "AST to Core IR lowering and identity/lifetime",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/compiler/",
+        "src/core/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C05",
+      "name": "Core reachability, global objects and invariants",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/core/",
+        "src/compiler/compiler.c"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C06",
+      "name": "Target-common DataLayout, calling ABI and fact ownership",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/target/common/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C07",
+      "name": "Per-ISA machine semantics and instruction selection",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/target/x86_64/",
+        "src/target/aarch64/",
+        "src/target/riscv/",
+        "src/target/loongarch64/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C08",
+      "name": "Assembly output, finalization and error transaction",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "src/compiler/",
+        "src/target/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    },
+    {
+      "id": "C09",
+      "name": "Real software, differential oracles and verification gaps",
+      "status": "PLANNED",
+      "audit_stage": "S0_BASELINE",
+      "verified": false,
+      "owner": "unassigned",
+      "scope_hint": [
+        "tests/compiler/",
+        "tests/target/"
+      ],
+      "canonical_evidence_refs": [],
+      "last_verified_revision": null,
+      "unresolved": [],
+      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+    }
+  ],
+  "active_task": null,
+  "recorded_events": [
+    {
+      "kind": "HISTORICAL_EXEMPLAR_NOT_GLOBAL_COMPLETION",
+      "source": "https://github.com/yituanxing/minic-toolchain/pull/711",
+      "evidence": "LoongArch local scalar gate consolidation; merged, does not imply C07 verified",
+      "issue_record": "refer to existing canonical MiniC issues; no new authoritative ASAM issue number"
+    }
+  ],
+  "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
+}
