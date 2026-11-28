@@ -107,7 +107,8 @@ with tempfile.TemporaryDirectory(prefix="asam-poison-") as temp_dir:
     assert POISON not in serial, "untrusted earlier model text poisoned restart!"
     assert "untrusted-agent" not in serial, "prior worker identity leaked into restart!"
     assert "blob/" not in serial, "raw unreviewed evidence link leaked into restart!"
-    assert "producer" not in serial and "functional_path" not in serial
+    assert "model text " not in serial, "historical functional-path value leaked"
+    assert "X" * 200 not in serial, "historical oversized source reasoning leaked"
     assert "recent_history_pointers_only" not in result
     assert "recent_history_commitments_only" in result
     assert len(result["recent_history_commitments_only"]) == 8
