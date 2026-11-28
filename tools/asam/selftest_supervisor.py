@@ -34,6 +34,26 @@ def fresh_process(script, root, action):
 repo = Path(__file__).resolve().parents[2]
 policy, original = sup.load(repo)
 script = Path(sup.__file__).resolve()
+# The real C09 testing evidence lives in the root Makefile and one CI YAML.
+# Allow only those exact pinned sources; never silently accept arbitrary
+# workflows, a different repository or path traversals as source authority.
+baseline_sha = original["source_snapshot"]["observed_commit"]
+prefix = "https://github.com/yituanxing/minic-toolchain/blob/" + baseline_sha + "/"
+for allowed in ("Makefile", ".github/workflows/minic-runtime-fourarch.yml",
+                "src/target/riscv/machine_core_select.c",
+                "tests/compiler/c0/check-minic-target-boundaries.sh"):
+    assert sup.SOURCE_LINK.fullmatch(prefix + allowed)
+for forbidden in ("Makefile.backup", ".github/workflows/unrelated.yml",
+                  ".github/other", ".github/workflows/../../Makefile",
+                  "src/../../.github/workflows/evil.yml",
+                  "README.md"):
+    # Exact-whitelist and canonical segment semantics are also separately
+    # exercised by actual sup.load() against the persisted C09/C10 data.
+    match = sup.SOURCE_LINK.fullmatch(prefix + forbidden)
+    segments = forbidden.split("/")
+    assert match is None or any(part in ("", ".", "..") for part in segments), forbidden
+assert sup.SOURCE_LINK.fullmatch(
+    "https://github.com/other/repo/blob/" + baseline_sha + "/Makefile") is None
 assert original["mission_complete"] is False
 assert len(original["slices"]) == len(sup.EXPECTED_HINTS) == 10
 assert all(not x["verified"] for x in original["slices"])
