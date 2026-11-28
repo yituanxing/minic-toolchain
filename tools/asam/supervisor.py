@@ -191,6 +191,7 @@ SOURCE_LINK = re.compile(
     r"^https://github\.com/yituanxing/minic-toolchain/blob/"
     r"([0-9a-f]{40})/"
     r"(?:(?:src|tools|tests|docs)/[A-Za-z0-9_./-]+"
+    r"|include/minic/[A-Za-z0-9_./-]+"
     r"|Makefile"
     r"|\.github/workflows/minic-runtime-fourarch\.yml)$"
 )
