@@ -32,8 +32,8 @@ EXPECTED_HINTS = {
             "src/target/data_layout.h", "src/target/data_layout_source.h",
             "src/target/target_info.h"],
     "C07": ["src/target/x86_64/", "src/target/aarch64/",
-            "src/target/riscv32/", "src/target/riscv64/",
-            "src/target/loongarch64/"],
+            "src/target/riscv/", "src/target/riscv32/",
+            "src/target/riscv64/", "src/target/loongarch64/"],
     "C08": ["src/compiler/", "src/target/"],
     "C09": ["tests/"],
     "C10": ["src/common/", "include/minic/"]
@@ -128,8 +128,12 @@ EXPECTED_SCOPE_REFINEMENT_V3 = {
                 "src/target/riscv/", "src/target/loongarch64/"]
     },
     "scope_changes": {
-        "C06": EXPECTED_HINTS["C06"],
-        "C07": EXPECTED_HINTS["C07"]
+        "C06": ["src/target/common/", "src/target/source_policy/",
+                "src/target/data_layout.h", "src/target/data_layout_source.h",
+                "src/target/target_info.h"],
+        "C07": ["src/target/x86_64/", "src/target/aarch64/",
+                "src/target/riscv32/", "src/target/riscv64/",
+                "src/target/loongarch64/"]
     },
     "observed_paths": [
         "src/target/source_policy/language_semantics.c",
@@ -139,6 +143,29 @@ EXPECTED_SCOPE_REFINEMENT_V3 = {
         "src/target/riscv64/codegen_function.c"
     ],
     "rationale": "C06 had omitted source-policy and language DataLayout; C07 pointed to nonexistent src/target/riscv/ instead of separate real RV32 and RV64 backends. This migrates candidate boundaries, NOT semantic review or verification.",
+    "verified_slices": 0
+}
+EXPECTED_SCOPE_REFINEMENT_V4 = {
+    "kind": "S0_SCOPE_REFINEMENT_V4",
+    "epoch": 9,
+    "source_baseline": "d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8",
+    "prior_scope": {
+        "C07": ["src/target/x86_64/", "src/target/aarch64/",
+                "src/target/riscv32/", "src/target/riscv64/",
+                "src/target/loongarch64/"]
+    },
+    "scope_changes": {
+        "C07": EXPECTED_HINTS["C07"]
+    },
+    "observed_paths": [
+        "src/target/riscv/machine_core_select.c",
+        "src/target/riscv/machine_core_select.h",
+        "src/target/riscv/machine_target_state.h",
+        "src/target/riscv/machine_gnu_asm.c",
+        "src/target/riscv32/rv32_emit.c",
+        "src/target/riscv64/codegen_function.c"
+    ],
+    "rationale": "Correct S0-v3 false assertion: src/target/riscv/ is a real shared RISC-V machine implementation that BOTH RV32 and RV64 consume. V3 correctly added separate ABI directories but incorrectly removed their common selector. Restore all three directories, retain the historical error and never claim review completion.",
     "verified_slices": 0
 }
 STATUSES = ("PLANNED", "MAPPING_PROPOSED", "MAPPED", "INVESTIGATING", "CONFIRMED",
@@ -549,6 +576,8 @@ def verify_event_replay(policy, state):
          "second S0 scope migration missing, out of order or altered")
     must(len(events) >= 9 and events[8] == EXPECTED_SCOPE_REFINEMENT_V3,
          "third S0 scope migration missing, out of order or altered")
+    must(len(events) >= 10 and events[9] == EXPECTED_SCOPE_REFINEMENT_V4,
+         "fourth S0 scope correction missing or history rewritten")
     must(state["epoch"] == len(events) - 1,
          "state epoch differs from event count")
     must(len(events) <= 2000,
@@ -574,6 +603,13 @@ def verify_event_replay(policy, state):
             must(event == EXPECTED_SCOPE_REFINEMENT_V3 and
                  replay["epoch"] == 7,
                  "unapproved or reordered C06/C07 scope boundary correction")
+            replay["epoch"] += 1
+            replay["recorded_events"].append(copy.deepcopy(event))
+            continue
+        if isinstance(event, dict) and event.get("kind") == "S0_SCOPE_REFINEMENT_V4":
+            must(event == EXPECTED_SCOPE_REFINEMENT_V4 and
+                 replay["epoch"] == 8,
+                 "unapproved or reordered shared RV32/64 selector restoration")
             replay["epoch"] += 1
             replay["recorded_events"].append(copy.deepcopy(event))
             continue
