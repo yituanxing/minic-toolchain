@@ -182,6 +182,9 @@ def main():
     dest = (root / args.output).resolve()
     if dest != root and root not in dest.parents:
         parser.error("output must remain inside repository checkout")
+    # -I deliberately removes script directories from sys.path; import only
+    # the adjacent pinned local supervisor, never arbitrary user site packages.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from supervisor import load
     policy, state = load(root)
     try:
