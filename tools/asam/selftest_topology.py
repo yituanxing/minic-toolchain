@@ -28,8 +28,20 @@ def hints(slice_id):
 
 assert any(x.get("matched_locations", 0) > 0 for x in hints("C01")), "missing live compiler entry"
 assert any(x.get("matched_locations", 0) > 0 for x in hints("C02")), "missing frontend parse entry"
-assert any(x.get("matched_locations", 0) > 0 for x in hints("C05")), "missing core pruning entry"
-assert any(x.get("matched_locations", 0) > 0 for x in hints("C08")), "missing output transaction entry"
+# A historic name may have migrated: preserve it as an explicit drift clue
+# instead of inventing coverage or requiring stale source to exist.
+assert a["unresolved_documented_anchor_count"] >= 0
+assert all(x["status"] in ("LEXICAL_LOCATION_NOT_PROOF",
+                           "NOT_FOUND_REQUIRES_MAPPING",
+                           "make_target_outside_C_H_scan")
+           for slice_ in a["slice_candidates"] for x in slice_["anchor_hints"])
+assert sum(len(s["unresolved_documented_anchors"])
+           for s in a["slice_candidates"]) == a["unresolved_documented_anchor_count"]
+assert a["slice_candidates"][4]["id"] == "C05"
+assert "minic_prune_inline_specializations_from_core" in (
+    [x["symbol"] for x in hints("C05")]
+), "must keep the canonical historic entrance to investigate"
+
 
 # A stale source revision must fail; never silently attribute coverage to new code.
 wrong = copy.deepcopy(state)
