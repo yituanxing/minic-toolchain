@@ -43,6 +43,7 @@ jobs:
               tools/asam/topology.py|\
               tools/asam/selftest_topology.py|\
               tools/asam/selftest_adversarial.py|\
+              tools/asam/selftest_context_isolation.py|\
               tools/asam/verify_handoff.py|\
               tools/asam/selftest_handoff.py|\
               tools/asam/remote_evidence.py|\
@@ -77,6 +78,7 @@ jobs:
         run: |
           python3 -I tools/asam/selftest_supervisor.py
           python3 -I tools/asam/selftest_adversarial.py
+          python3 -I tools/asam/selftest_context_isolation.py
 
       - name: Index the full tracked compiler and export ten isolated work orders
         run: |
