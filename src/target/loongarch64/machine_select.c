@@ -3692,8 +3692,8 @@ static bool loong_structured_memory_asm(LoongSelector *sel,
         const bool read = form >= LOONG_PERCPU_READ_B &&
             form <= LOONG_PERCPU_READ_D;
         if (form == LOONG_PERCPU_NONE || count != 2U || variant != 0U ||
-            !minic_loong_core_integer_operand(fn, roles[0].value, 8U,
-                read, 0) ||
+            !minic_loong_core_integer_operand(fn, roles[0].value,
+                read, 8U, 0) ||
             !minic_core_function_value_is_kind(fn, roles[1].value,
                 MINIC_CORE_TYPE_POINTER)) return false;
         for (i = 0U; i < count; ++i)
@@ -3734,12 +3734,12 @@ static bool loong_structured_memory_asm(LoongSelector *sel,
         if (form == SIZE_MAX || count != 3U ||
             variant != (uint32_t)form + 1U) return false;
         width = loong_percpu_amo_width(form);
-        if (!minic_loong_core_integer_operand(fn, roles[0].value, 8U,
-                true, -1) ||
-            !minic_loong_core_integer_operand(fn, roles[1].value, width,
-                true, -1) ||
-            !minic_loong_core_integer_operand(fn, roles[2].value, 8U,
-                false, -1)) return false;
+        if (!minic_loong_core_integer_operand(fn, roles[0].value,
+                true, 8U, -1) ||
+            !minic_loong_core_integer_operand(fn, roles[1].value,
+                true, width, -1) ||
+            !minic_loong_core_integer_operand(fn, roles[2].value,
+                false, 8U, -1)) return false;
         for (i = 0U; i < 3U; ++i)
             if (roles[i].operand_index != i ||
                 roles[i].has_fixed_register_binding ||
@@ -3791,7 +3791,7 @@ static bool loong_structured_memory_asm(LoongSelector *sel,
                     ? MINIC_CORE_STRUCTURED_INLINE_ASM_REGISTER_OUTPUT
                     : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
                 !minic_loong_core_integer_operand(fn, roles[i].value,
-                    width, i != scalar_index, 1)) return false;
+                i != scalar_index, width, 1)) return false;
         if (!loong_load_value(sel, roles[0].value, LOONG_T1, true) ||
             !loong_load_value(sel, roles[scalar_index].value,
                 LOONG_T0, width == 8U)) return false;
@@ -3844,11 +3844,14 @@ static bool loong_select_vdso_syscall(LoongSelector *sel,
             source->template_length) ||
         ins->value.structured_inline_asm.operand_count != 4U ||
         roles == NULL || fn->fixed_register_bindings == NULL ||
-        !minic_loong_core_integer_operand(fn, roles[0].value, 8U, true, 1) ||
-        !minic_loong_core_integer_operand(fn, roles[1].value, 8U, false, 1) ||
+        !minic_loong_core_integer_operand(fn, roles[0].value,
+                true, 8U, 1) ||
+        !minic_loong_core_integer_operand(fn, roles[1].value,
+                false, 8U, 1) ||
         (!minic_core_function_value_is_kind(fn, roles[2].value,
              MINIC_CORE_TYPE_POINTER) &&
-         !minic_loong_core_integer_operand(fn, roles[2].value, 4U, false, 1)) ||
+         !minic_loong_core_integer_operand(fn, roles[2].value,
+                false, 4U, 1)) ||
         !minic_core_function_value_is_kind(fn, roles[3].value,
              MINIC_CORE_TYPE_POINTER)) return false;
     for (i = 0U; i < 4U; ++i) {
@@ -3919,7 +3922,8 @@ static bool loong_select_frametrace(LoongSelector *sel,
             source->template_length) ||
         ins->value.structured_inline_asm.operand_count != 2U ||
         roles == NULL ||
-        !minic_loong_core_integer_operand(fn, roles[0].value, 8U, true, 0) ||
+        !minic_loong_core_integer_operand(fn, roles[0].value,
+                true, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, roles[1].value,
             MINIC_CORE_TYPE_POINTER)) return false;
     for (i = 0U; i < 2U; ++i)
@@ -3970,7 +3974,8 @@ static bool loong_select_irq_switch(LoongSelector *sel,
             source->template_length, true) ||
         ins->value.structured_inline_asm.operand_count != 2U ||
         roles == NULL ||
-        !minic_loong_core_integer_operand(fn, roles[0].value, 8U, false, 0) ||
+        !minic_loong_core_integer_operand(fn, roles[0].value,
+                false, 8U, 0) ||
         !minic_core_function_value_is_kind(fn, roles[1].value,
             MINIC_CORE_TYPE_POINTER)) return false;
     for (i = 0U; i < 2U; ++i)
@@ -4394,8 +4399,8 @@ static bool loong_select_structured_asm(LoongSelector *sel,
                 : MINIC_CORE_STRUCTURED_INLINE_ASM_SCALAR_INPUT) ||
             roles[i].has_fixed_register_binding ||
             roles[i].early_clobber ||
-            !minic_loong_core_integer_operand(fn, roles[i].value, 8U,
-                i == 0U, 0)) return false;
+            !minic_loong_core_integer_operand(fn, roles[i].value,
+                i == 0U, 8U, 0)) return false;
     }
     if (!loong_load_value(sel, roles[1].value, LOONG_T0, false) ||
         !loong_load_value(sel, roles[2].value, LOONG_T1, false))
