@@ -502,7 +502,9 @@ def transition(policy, state, proposal):
     if "source_links" in ev:
         must(all(type(url) is str and len(url) <= 320 and
                  (match := SOURCE_LINK.fullmatch(url)) is not None and
-                 match.group(1) == baseline
+                 match.group(1) == baseline and
+                 all(part not in ("", ".", "..") for part in
+                     url.split("/blob/" + baseline + "/", 1)[-1].split("/"))
                  for url in ev["source_links"]),
              "source links must reference pinned source in original repository")
     if "limitations" in ev:
