@@ -15,11 +15,13 @@ experiment, not yet an autonomous multi-agent engine.
    records linked in policy.json. They alone own technical facts, established
    problems and exclusions. ASAM must NOT duplicate the issue register.
 3. tools/asam/control/state.json — **scheduling and coverage cursor only**.
-   C01–C10 are planning-level functional regions. C01 and C02 have submitted
-   source-grounded **untrusted** mapping proposals, not independent reviews.
-   The S0 v2 scope migration is pinned at epoch 3. Current epoch, pending
-   counts and next task MUST always be derived from `supervisor.py resume`,
-   not frozen into a README, test assertion or AI conversation.
+   C01–C10 are planning-level functional regions. Proposals and their stage
+   transitions are individually recorded as **untrusted** events; these are
+   not independent semantic reviews. The historical S0 v2 migration occurred
+   at epoch 3, but the CURRENT epoch, statuses and next task MUST always
+   be loaded from the validated `supervisor.py resume` output.
+   NEVER use this README, a historical PR comment or an earlier model chat
+   as the live scheduling cursor.
 4. Actual versioned source, CI logs, test matrix and external runtime oracles
    determine code correctness. An AI assertion is not runtime evidence.
 
