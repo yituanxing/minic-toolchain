@@ -122,6 +122,11 @@ def check_mapping_proposal(before, after):
             event.get("to") == PERMITTED_STATUS,
             "an untrusted mapping was promoted to trusted coverage")
     ident = event.get("id")
+    original_ids = [s["id"] for s in before["slices"]]
+    modified_ids = [s["id"] for s in after["slices"]]
+    require(original_ids == modified_ids and
+            len(set(modified_ids)) == len(modified_ids),
+            "a task slice was duplicated, inserted, deleted or reordered")
     old = {s["id"]: s for s in before["slices"]}
     new = {s["id"]: s for s in after["slices"]}
     require(set(old) == set(new) and ident in old and
@@ -178,6 +183,11 @@ def check_s0_expansion(before, after):
             ["archiver/", "assembler/", "elf/", "linker/",
              "preprocessor/", "third_party/"],
             "third-party exclusion changed")
+    original_ids = [s["id"] for s in before["slices"]]
+    modified_ids = [s["id"] for s in after["slices"]]
+    require(original_ids == modified_ids and
+            len(set(modified_ids)) == len(modified_ids),
+            "S0 v2 duplicated, removed or reordered functional slice")
     before_slices = {s["id"]: s for s in before["slices"]}
     after_slices = {s["id"]: s for s in after["slices"]}
     require(set(before_slices) == set(after_slices),
