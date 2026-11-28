@@ -85,7 +85,7 @@ def check(root, policy, state, resume, inventory, orders):
     # Topology, this checker does not import its scanning functions.
     scan_roots = ("src/", "tools/minic/", "tools/minic-cc/",
                   "tests/compiler/", "tests/target/")
-    tracked = sh(root, "ls-files", "-z").split("\\0")
+    tracked = sh(root, "ls-files", "-z").split("\0")
     tracked = sorted(name for name in tracked if name and
                      name.endswith((".c", ".h")) and
                      any(name.startswith(prefix) for prefix in scan_roots))
