@@ -189,8 +189,10 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 ACTOR_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,95}$")
 SOURCE_LINK = re.compile(
     r"^https://github\.com/yituanxing/minic-toolchain/blob/"
-    r"([0-9a-f]{40})/(src|tools|tests|docs)/"
-    r"[A-Za-z0-9_./-]+$"
+    r"([0-9a-f]{40})/"
+    r"(?:(?:src|tools|tests|docs)/[A-Za-z0-9_./-]+"
+    r"|Makefile"
+    r"|\.github/workflows/minic-runtime-fourarch\.yml)$"
 )
 MAX_PROPOSAL_BYTES = 16384
 
