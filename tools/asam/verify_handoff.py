@@ -41,6 +41,14 @@ def check(root, policy, state, resume, inventory, orders):
     require(resume["global_task_completed"] is False and
             orders["global_goal_completed"] is False and
             state["mission_complete"] is False, "premature global closure")
+    require(resume["trust_gate"] == {
+        "controller_protected": False,
+        "worker_identity_authenticated": False,
+        "independent_llm_reset_tested": False,
+        "semantic_completion_enabled": False,
+        "autonomous_code_modification_allowed": False,
+        "scoped_c_h_inventory_only": True,
+    }, "unreviewed Supervisor incorrectly advertised trust or write permission")
     require(resume["nonnegotiable"] == policy["nonnegotiable"],
             "permanent invariant omitted")
     require(resume["canonical_sources"] == policy["authoritative_sources"],
