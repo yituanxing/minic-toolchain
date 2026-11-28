@@ -35,7 +35,7 @@ repo = Path(__file__).resolve().parents[2]
 policy, original = sup.load(repo)
 script = Path(sup.__file__).resolve()
 assert original["mission_complete"] is False
-assert len(original["slices"]) >= 9
+assert len(original["slices"]) == len(sup.EXPECTED_HINTS) == 10
 assert all(not x["verified"] for x in original["slices"])
 
 with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     first = json.loads(init.stdout)
     assert first["global_task_completed"] is False
     assert first["policy_id"] == sup.PINNED_MISSION_ID
-    assert len(first["breadth_frontier"]) == 9
+    assert len(first["breadth_frontier"]) == 10
     assert first["selected"]["id"] == "C01"
     assert first["temporary_context"] == []
     assert len(first["nonnegotiable"]) >= 16
@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     proposal = {
         "schema": "asam-transition-v1",
         "mission_id": policy["mission_id"],
-        "expected_epoch": 0,
+        "expected_epoch": original["epoch"],
         "slice_id": "C01",
         "to_status": "MAPPED",
         "actor_role": "mapper",
@@ -93,7 +93,7 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     assert after.returncode == 0, after.stderr
     restored = json.loads(after.stdout)
     assert restored["coverage_status"]["MAPPED"] == 1
-    assert restored["coverage_status"]["PLANNED"] == 8
+    assert restored["coverage_status"]["PLANNED"] == 9
     assert restored["selected"]["id"] == "C02"
     assert restored["global_task_completed"] is False
     assert restored["policy_sha256"] == first["policy_sha256"]
