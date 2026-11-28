@@ -46,7 +46,7 @@ jobs:
             esac
           done < /tmp/asam-supervisor-touched.txt
 
-      - name: Verify mission locks and all nine pending domains
+      - name: Verify mission locks and all ten pending domains
         run: |
           python3 -I tools/asam/supervisor.py --root . check
           python3 -I tools/asam/supervisor.py --root . status
@@ -67,7 +67,7 @@ jobs:
         run: |
           python3 -I tools/asam/selftest_supervisor.py
 
-      - name: Index the full tracked compiler and export nine isolated work orders
+      - name: Index the full tracked compiler and export ten isolated work orders
         run: |
           python3 -I tools/asam/selftest_topology.py
           python3 -I tools/asam/topology.py --root . --output asam-supervisor-out
