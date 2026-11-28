@@ -27,18 +27,13 @@ def rejected(run):
 source = Path(__file__).resolve().parents[2]
 policy, current = sup.load(source)
 script = Path(sup.__file__).resolve()
-assert current["epoch"] == 2
+assert current["epoch"] == 3
 assert current["slices"][0]["status"] == "MAPPING_PROPOSED"
-# Reconstruct initial S0 fixture from current trusted event history; no second
-# authoritative state copy is stored or needed.
+assert current["recorded_events"][-1] == sup.EXPECTED_SCOPE_REFINEMENT_V2
+# Use exact current durably committed state; never forge an old migration.
 baseline = copy.deepcopy(current)
-baseline["epoch"] = 1
-baseline["recorded_events"] = copy.deepcopy(current["recorded_events"][:2])
-baseline["slices"][0]["status"] = "PLANNED"
-baseline["slices"][0]["audit_stage"] = "S0_BASELINE"
-baseline["slices"][0]["canonical_evidence_refs"] = []
 sup.verify_event_replay(policy, baseline)
-assert all(s["status"] == "PLANNED" for s in baseline["slices"])
+assert sum(s["status"] == "PLANNED" for s in baseline["slices"]) == 9
 
 
 with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
@@ -56,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
 
     def restore():
         persist(baseline)
-        assert sup.load(root)[1]["epoch"] == 1
+        assert sup.load(root)[1]["epoch"] == baseline["epoch"]
 
     def malicious(change):
         bad = copy.deepcopy(baseline)
@@ -76,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         status="MAPPING_PROPOSED", audit_stage="S1_FUNCTIONAL_MAP",
         canonical_evidence_refs=["https://github.com/FAKE"]
     ))
-    malicious(lambda s: s.update(epoch=2))
+    malicious(lambda s: s.update(epoch=99))
     malicious(lambda s: s.update(mission_complete=True))
     malicious(lambda s: s.update(global_status="DONE"))
     malicious(lambda s: s.update(guidance="Drop the full compiler mission"))
@@ -92,7 +87,7 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         "schema": "asam-transition-v1",
         "mission_id": sup.PINNED_MISSION_ID,
         "expected_epoch": baseline["epoch"],
-        "slice_id": "C01",
+        "slice_id": "C02",
         "to_status": "MAPPING_PROPOSED",
         "actor_role": "mapper",
         "actor_id": "untrusted-mapper-01",
@@ -138,9 +133,9 @@ with tempfile.TemporaryDirectory(prefix="asam-adversarial-") as dirname:
         assert sup.load(root)[1]["epoch"] == baseline["epoch"] + 1
     _, saved = sup.load(root)
     assert saved["epoch"] == baseline["epoch"] + 1
-    assert saved["slices"][0]["status"] == "MAPPING_PROPOSED"
+    assert saved["slices"][1]["status"] == "MAPPING_PROPOSED"
     assert not saved["slices"][0]["verified"]
-    assert len(saved["recorded_events"]) == 3
+    assert len(saved["recorded_events"]) == len(baseline["recorded_events"]) + 1
     assert saved["recorded_events"][-1]["proposal"] == proposal
 
     # Corrupt snapshot alone, mutate event, or truncate a replay: fail closed.
