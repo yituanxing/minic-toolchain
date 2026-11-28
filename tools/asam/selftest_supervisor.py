@@ -116,17 +116,22 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     refuse(lambda: sup.transition(policy, state, bad_proposal(
         mission_id="ASAM-SMALL-LOCAL-CLEANUP")), "mission replacement")
     refuse(lambda: sup.transition(policy, state, bad_proposal(
-        actor_role="fixer")), "wrong role")
+        to_status="INVESTIGATING", actor_role="fixer")), "wrong role")
     refuse(lambda: sup.transition(policy, state, bad_proposal(
         slice_id="C99")), "unknown function graph node")
     refused_unsafe = bad_proposal()
     refused_unsafe["alter_global_mission"] = True
     refuse(lambda: sup.transition(policy, state, refused_unsafe),
            "smuggling extra control fields")
-    refused_no_map = bad_proposal()
+    refused_no_map = copy.deepcopy(proposal)
     refused_no_map["evidence"].pop("functional_path")
-    refuse(lambda: sup.transition(policy, state, refused_no_map),
+    refuse(lambda: sup.transition(policy, original, refused_no_map),
            "mapping without functional chain")
+    stale_revision = bad_proposal(
+        to_status="INVESTIGATING", actor_role="scout")
+    stale_revision["evidence"]["source_revision"] = "f" * 40
+    refuse(lambda: sup.transition(policy, state, stale_revision),
+           "proposed change against stale source revision")
 
     wrong = copy.deepcopy(state)
     wrong["mission_complete"] = True
@@ -137,6 +142,16 @@ with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
     wrong["slices"] = wrong["slices"][:1]
     sup.write_atomic(sup.paths(root)[1], wrong)
     refuse(lambda: sup.load(root), "silently throwing away coverage")
+
+    wrong = copy.deepcopy(state)
+    wrong["slices"][0]["canonical_evidence_refs"] = []
+    sup.write_atomic(sup.paths(root)[1], wrong)
+    refuse(lambda: sup.load(root), "mapped stage missing durable evidence")
+
+    wrong = copy.deepcopy(state)
+    wrong["slices"][0]["audit_stage"] = "S5_SAME_INPUT_VERIFICATION"
+    sup.write_atomic(sup.paths(root)[1], wrong)
+    refuse(lambda: sup.load(root), "stage/status swap or lost task role")
 
     wrong = copy.deepcopy(state)
     wrong["slices"][0]["status"] = "VERIFIED"
