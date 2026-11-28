@@ -2,7 +2,7 @@
   "schema": "asam-control-state-v1",
   "policy_id": "ASAM-MINIC-GLOBAL-20261128",
   "policy_sha256": "951d0e9cfb2b8e67b3f40426a02e441c6704f0c83938df15ef3662c23f95fd56",
-  "epoch": 2,
+  "epoch": 3,
   "global_status": "ACTIVE",
   "mission_complete": false,
   "project": "yituanxing/minic-toolchain",
@@ -24,14 +24,15 @@
       "owner": "unassigned",
       "scope_hint": [
         "tools/minic/",
-        "tools/minic-cc/"
+        "tools/minic-cc/",
+        "tools/minic-"
       ],
       "canonical_evidence_refs": [
         "https://github.com/yituanxing/minic-toolchain/blob/d3c66ce25b0c1f9e13b89e880a7b13b3804c68e8/docs/architecture/minic-global-contract-map.md"
       ],
       "last_verified_revision": null,
       "unresolved": [],
-      "note": "Planning-level. Include all driver and invocation units, not only main.c. No semantic coverage claimed."
+      "note": "Planning-level. Includes all MiniC driver, minic-cc and thin tool integration entrypoints, not only main.c. Existing proposal remains untrusted and incomplete until independently reviewed."
     },
     {
       "id": "C02",
@@ -153,13 +154,12 @@
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
-        "tests/compiler/",
-        "tests/target/"
+        "tests/"
       ],
       "canonical_evidence_refs": [],
       "last_verified_revision": null,
       "unresolved": [],
-      "note": "Scheduling only. Source semantics are owned by the canonical MiniC architecture/issue registers; PLANNED is not reviewed coverage."
+      "note": "Planning-level. All tests/ are inventory and verification inputs; vendor and other-tool fixtures are not MiniC production implementation."
     },
     {
       "id": "C10",
@@ -169,12 +169,13 @@
       "verified": false,
       "owner": "unassigned",
       "scope_hint": [
-        "src/common/"
+        "src/common/",
+        "include/minic/"
       ],
       "canonical_evidence_refs": [],
       "last_verified_revision": null,
       "unresolved": [],
-      "note": "Discovered by full tracked inventory: source_location, calling_convention, integer_bits, call_frame_address and machine builtin effect interfaces cross layer ownership. All semantic responsibility UNVERIFIED."
+      "note": "Cross-stage src/common and public include/minic interfaces own shared type, calling convention and contract boundaries. All semantic responsibility UNVERIFIED."
     }
   ],
   "active_task": null,
@@ -244,6 +245,39 @@
           "semantic_coverage_claimed": false
         }
       }
+    },
+    {
+      "kind": "S0_SCOPE_REFINEMENT_V2",
+      "epoch": 3,
+      "source": "https://github.com/yituanxing/minic-toolchain/actions/runs/46107725208",
+      "observed_repository_c_h": 1983,
+      "previous_scanned_c_h": 1746,
+      "new_in_scope_c_h": 153,
+      "external_c_h_excluded": 84,
+      "external_prefixes": [
+        "archiver/",
+        "assembler/",
+        "elf/",
+        "linker/",
+        "preprocessor/",
+        "third_party/"
+      ],
+      "scope_changes": {
+        "C01": [
+          "tools/minic/",
+          "tools/minic-cc/",
+          "tools/minic-"
+        ],
+        "C09": [
+          "tests/"
+        ],
+        "C10": [
+          "src/common/",
+          "include/minic/"
+        ]
+      },
+      "canonical_claim": "Candidate file inventory only. No production code modified, no LLM-mapping verified, previously submitted C01 mapping remains provisional and needs expanded boundary review.",
+      "verified_slices": 0
     }
   ],
   "guidance": "This file tracks scheduling and coverage only. Canonical technical facts must stay in existing MiniC registries. The state never contains whole source excerpts or conversation history."
