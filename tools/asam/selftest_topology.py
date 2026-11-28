@@ -16,6 +16,14 @@ assert a["mission_id"] == policy["mission_id"]
 assert a["semantic_reviewed"] == 0
 assert len(a["slice_candidates"]) == len(state["slices"]) == 10
 assert a["tracked_c_h_files"] >= 200
+assert a["repository_total_tracked_c_h"] >= a["tracked_c_h_files"]
+assert a["repository_outside_scan_roots_count"] == len(
+    a["repository_outside_scan_roots"]
+)
+# These two known genuine MiniC interfaces/driver tests were absent from the
+# old 1,746-file scoped tally. Stop mistaking scoped zero for whole-repo zero.
+assert "include/minic/compiler.h" in a["repository_outside_scan_roots"]
+assert "tests/driver/staged-target-forward-test.c" in a["repository_outside_scan_roots"]
 assert a["tracked_physical_lines"] > 40000
 assert a["unique_candidate_files"] <= a["tracked_c_h_files"]
 assert a["unassigned_count"] == 0, a["unassigned_files"]
