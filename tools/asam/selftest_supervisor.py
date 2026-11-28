@@ -41,21 +41,37 @@ assert original["epoch"] >= 3
 assert original["slices"][0]["status"] == "MAPPING_PROPOSED"
 assert original["recorded_events"][2]["proposal"]["slice_id"] == "C01"
 assert original["recorded_events"][3] == sup.EXPECTED_SCOPE_REFINEMENT_V2
-planned_ids = [x["id"] for x in original["slices"] if x["status"] == "PLANNED"]
-assert planned_ids, "This fixture needs a remaining PLANNED slice"
+current_planned_ids = [x["id"] for x in original["slices"]
+                       if x["status"] == "PLANNED"]
+planned_ids = current_planned_ids[:]
 # The *actual* committed progress survives the model's temporary context.
 live = fresh_process(script, repo, "resume")
 assert live.returncode == 0, live.stderr
 live_packet = json.loads(live.stdout)
-assert live_packet["selected"]["id"] == planned_ids[0]
+assert live_packet["selected"]["id"] == (
+    current_planned_ids[0] if current_planned_ids else "C01")
 assert live_packet["coverage_status"]["MAPPING_PROPOSED"] == (
-    10 - len(planned_ids))
+    10 - len(current_planned_ids))
 assert live_packet["coverage_status"]["VERIFIED"] == 0
 assert live_packet["temporary_context"] == []
 
-# Use the actual durable current checkpoint, not a duplicated static state.
-# The next proposal is the first genuinely pending functional region.
+# Use the actual durable current checkpoint. When breadth is exhausted,
+# reconstruct the immediate predecessor solely inside this test fixture so
+# repeated acceptance tests do not require hardcoded "C10" or fake progress.
 s0 = copy.deepcopy(original)
+if not planned_ids:
+    event = s0["recorded_events"][-1]
+    assert event["kind"] == "SLICE_TRANSITION"
+    assert event["from"] == "PLANNED"
+    assert event["to"] == "MAPPING_PROPOSED"
+    slice_ = next(x for x in s0["slices"] if x["id"] == event["id"])
+    assert slice_["status"] == "MAPPING_PROPOSED"
+    slice_["status"] = "PLANNED"
+    slice_["audit_stage"] = "S0_BASELINE"
+    slice_["canonical_evidence_refs"] = []
+    s0["epoch"] -= 1
+    s0["recorded_events"].pop()
+    planned_ids = [event["id"]]
 sup.verify_event_replay(policy, s0)
 
 with tempfile.TemporaryDirectory(prefix="asam-reset-") as td:
