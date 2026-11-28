@@ -1,0 +1,27 @@
+{
+  "schema": "asam-remote-sibling-contention-v1",
+  "repository": "yituanxing/minic-toolchain",
+  "branch": "experiment/asam-supervisor-reset-20261128",
+  "base_commit": "5b5266bc5fd88f47a510aaa48904177c2acf1831",
+  "tree_sha": "351a01ed87133e957e6ef855c2a3fef014d15a53",
+  "winner_commit": "32d095374ee50badef8b40908dba8b0464f16bc4",
+  "losing_candidate_commit": "d57abbf807c93e3c711d14e5bfee8e49e0725d3a",
+  "force_used": false,
+  "writes_to_main": false,
+  "observations": {
+    "sibling_a": "remote update_ref succeeded",
+    "sibling_b": "remote update_ref failed with generic GitHub GraphQL error (conflict reason not authenticated)",
+    "remote_head_after": "32d095374ee50badef8b40908dba8b0464f16bc4",
+    "retry_stale_sibling": "failed with generic GitHub GraphQL error",
+    "current_head_noop_expected_current": "succeeded",
+    "current_head_noop_expected_old": "failed with generic GitHub GraphQL error",
+    "model_api_used": false
+  },
+  "risk_boundaries": [
+    "Only one observed two-contender remote test. Not a formal concurrency proof.",
+    "A generic GraphQL error is not an authoritative conflict classification.",
+    "Non-force fast-forward prevents competing sibling histories, but needs protected writer permissions.",
+    "Separate CI and LLM-review trust root is not deployed.",
+    "No code changes in either candidate; PR branch remains Draft and unprotected."
+  ]
+}
